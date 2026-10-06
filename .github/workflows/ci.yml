@@ -286,3 +286,110 @@ jobs:
             exit 1
           fi
           echo "all checks passed"
+
+  # Tarball build. Kept in the same workflow as the gates so an artifact can
+  # never be published from a tree the tests rejected — the artifact is a
+  # *consequence* of a green run, not an independent path to a release.
+  #
+  # pnpm pack honours package.json `files`, so the payload is exactly the
+  # plugin/adapters + plugin/domain + cordis.patch.yml surface declared there.
+  # It does NOT run any lifecycle script: this package declares none, and an
+  # unexpected one appearing later must fail rather than execute.
+  package:
+    name: Build tarball
+    needs: [unit, identity, docs]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Refuse lifecycle scripts
+        run: |
+          set -euo pipefail
+          scripts="$(node -p "Object.keys(require('./package.json').scripts ?? {}).join(' ')")"
+          echo "declared scripts: ${scripts:-<none>}"
+          # pnpm pack does not run pre/post-pack, but assert it explicitly:
+          # if a future edit adds one, this job must stop rather than run it.
+          for hook in prepack prepare postpack; do
+            if node -p "Boolean(require('./package.json').scripts?.['$hook'])"; then
+              echo "::error::$hook script present; review it before packaging"
+              exit 1
+            fi
+          done
+
+      - name: Verify the package surface is self-consistent
+        run: |
+          set -euo pipefail
+          node -e "
+            const p = require('./package.json');
+            const y = require('fs').readFileSync('cordis.patch.yml','utf8');
+            const m = y.match(/^\s*name:\s*['\"]?([^'\"\n]+?)['\"]?\s*\$/m);
+            if (!m || m[1] !== p.name) {
+              console.error('::error::cordis.patch.yml name must equal package.json name');
+              process.exit(1);
+            }
+            if (p.private !== true) {
+              console.error('::error::package must remain private until an explicit publish decision');
+              process.exit(1);
+            }
+            console.log('name:', p.name, '| files:', (p.files ?? []).join(', '));
+          "
+
+      - name: Pack
+        run: pnpm pack --pack-destination "$RUNNER_TEMP"
+
+      - name: Verify payload matches the declared files
+        run: |
+          set -euo pipefail
+          tgz="$(ls "$RUNNER_TEMP"/*.tgz)"
+          echo "artifact: $(basename "$tgz")"
+          echo '--- payload top level ---'
+          tar -tzf "$tgz" | sed 's|^package/||' | cut -d/ -f1 | sort -u
+
+          # Nothing outside the declared surface may ship. A stray .npmrc or
+          # workflow inside the tarball would be published to every installer.
+          unexpected="$(tar -tzf "$tgz" | grep -vE '^package/(package\.json|LICENSE|README(\.zh)?\.md|CHANGELOG\.md|cordis\.patch\.yml|plugin/(adapters|domain)/)' || true)"
+          if [ -n "$unexpected" ]; then
+            echo "::error::unexpected files in payload:"
+            echo "$unexpected"
+            exit 1
+          fi
+          echo 'ok: payload matches declared files'
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-tool-discovery-tarball
+          path: ${{ runner.temp }}/dsh-tool-discovery-*.tgz
+          if-no-files-found: error
+          retention-days: 30
+
+  # Tag-driven GitHub Release. Deliberately separate from `package`: an
+  # artifact is produced on every green run, a release only when a human tags.
+  release:
+    name: Publish release tarball
+    needs: [package]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Pack
+        run: pnpm pack --pack-destination "$RUNNER_TEMP"
+
+      - name: Attach to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ runner.temp }}/dsh-tool-discovery-*.tgz
+          generate_release_notes: true
