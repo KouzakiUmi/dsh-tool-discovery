@@ -311,16 +311,21 @@ jobs:
       - name: Refuse lifecycle scripts
         run: |
           set -euo pipefail
-          scripts="$(node -p "Object.keys(require('./package.json').scripts ?? {}).join(' ')")"
-          echo "declared scripts: ${scripts:-<none>}"
-          # pnpm pack does not run pre/post-pack, but assert it explicitly:
-          # if a future edit adds one, this job must stop rather than run it.
-          for hook in prepack prepare postpack; do
-            if node -p "Boolean(require('./package.json').scripts?.['$hook'])"; then
-              echo "::error::$hook script present; review it before packaging"
-              exit 1
-            fi
-          done
+          node -e "
+            const p = require('./package.json');
+            const scripts = Object.keys(p.scripts ?? {});
+            console.log('declared scripts:', scripts.join(' ') || '<none>');
+            // Judge by exit code, not printed text: 'node -p \"Boolean(x)\"'
+            // writes false to stdout yet still exits 0, which a shell \`if\`
+            // would read as \"hook present\". That made this step fail on the
+            // first CI run while every hook was in fact absent.
+            for (const hook of ['prepack', 'prepare', 'postpack']) {
+              if (p.scripts?.[hook]) {
+                console.error('::error::' + hook + ' script present; review it before packaging');
+                process.exit(1);
+              }
+            }
+          "
 
       - name: Verify the package surface is self-consistent
         run: |
