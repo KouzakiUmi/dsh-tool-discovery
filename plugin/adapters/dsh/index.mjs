@@ -52,24 +52,26 @@ export function validateConfig(raw) {
   const config = raw === undefined || raw === null ? {} : requirePlainObject(raw, 'config');
   const frameworkRetained = config.frameworkRetained ?? [];
   if (!Array.isArray(frameworkRetained)) {
-    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'frameworkRetained 必须是字符串数组。');
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'frameworkRetained must be an array of strings.');
   }
   for (const name of frameworkRetained) {
     if (typeof name !== 'string' || name.length === 0) {
-      throw new DomainError('INCOMPATIBLE_COMPOSITION', 'frameworkRetained 只能是非空字符串。');
+      throw new DomainError('INCOMPATIBLE_COMPOSITION', 'frameworkRetained must contain non-empty strings.');
     }
     if (ENTRY_TOOL_NAMES.includes(name)) {
-      throw new DomainError('INCOMPATIBLE_COMPOSITION', `frameworkRetained 不得包含控制入口 "${name}"。`);
+      throw new DomainError('INCOMPATIBLE_COMPOSITION', `frameworkRetained must not contain the control entry "${name}".`);
     }
   }
   if (new Set(frameworkRetained).size !== frameworkRetained.length) {
-    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'frameworkRetained 不得重复。');
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'frameworkRetained must not contain duplicates.');
   }
+  // validateConfig 只做形状校验；本地化后的类别表在 apply 里、探测到 locale
+  // 之后才构造。此处仍需兜底，否则未部署 categoryConfig 的插件会被拒。
   const categoryConfig = config.categoryConfig ?? DEFAULT_CATEGORY_CONFIG;
   requirePlainObject(categoryConfig, 'categoryConfig');
   for (const id of Object.keys(categoryConfig)) {
     if (!CONTROLLED_CATEGORIES.includes(id)) {
-      throw new DomainError('INCOMPATIBLE_COMPOSITION', `未知受控类别: ${id}`);
+      throw new DomainError('INCOMPATIBLE_COMPOSITION', `Unknown controlled category: ${id}`);
     }
     const card = requirePlainObject(categoryConfig[id], `categoryConfig.${id}`);
     if (typeof card.title !== 'string' || typeof card.capabilitySummary !== 'string') {
@@ -80,16 +82,16 @@ export function validateConfig(raw) {
 
   // alwaysVisible：默认放行 DSH 自带工具，使过滤只作用于后装的插件/MCP 工具。
   if (config.alwaysVisible !== undefined && !Array.isArray(config.alwaysVisible)) {
-    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'alwaysVisible 必须是字符串数组。');
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'alwaysVisible must be an array of strings.');
   }
   for (const name of config.alwaysVisible ?? []) {
     if (typeof name !== 'string' || name.length === 0) {
-      throw new DomainError('INCOMPATIBLE_COMPOSITION', 'alwaysVisible 只能是非空字符串。');
+      throw new DomainError('INCOMPATIBLE_COMPOSITION', 'alwaysVisible must contain non-empty strings.');
     }
   }
 
   if (config.allowMissingSessionQuery !== undefined && typeof config.allowMissingSessionQuery !== 'boolean') {
-    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'allowMissingSessionQuery 必须是布尔值。');
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'allowMissingSessionQuery must be a boolean.');
   }
   return {
     categoryConfig,
@@ -111,7 +113,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       ? { defineTool: (await import('@deepseek-ai/dsh-tools')).defineTool }
       : deps;
     if (typeof resolved.defineTool !== 'function') {
-      throw new DomainError('INCOMPATIBLE_COMPOSITION', '缺少 defineTool 依赖。');
+      throw new DomainError('INCOMPATIBLE_COMPOSITION', 'The defineTool dependency is missing.');
     }
     const config = validateConfig(rawConfig);
     const log = (message, extra) => {
@@ -129,6 +131,13 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
     log('activate:locale', { locale });
     // 探测结果并入 config：engine 的 nextAction 与类别卡据此取文案。
     config.locale = locale;
+    // 类别卡是模型可见的导航：部署未覆盖的用 locale 文案表，部署覆盖的优先。
+    // 在此而非 validateConfig 内构造——那里还没有 text。
+    const localizedDefaults = Object.fromEntries(CONTROLLED_CATEGORIES.map((id) => {
+      const c = text.category(id);
+      return [id, c ?? DEFAULT_CATEGORY_CONFIG[id]];
+    }));
+    config.categoryConfig = { ...localizedDefaults, ...(config.categoryConfig ?? {}) };
 
     const registry = createRegistryAdapter({
       ctx,
@@ -196,7 +205,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       const resolveRuntime = (exec) => {
         const agent = exec?.agent;
         if (agent === undefined || agent.session === undefined) {
-          throw new DomainError('INCOMPATIBLE_COMPOSITION', '缺少宿主会话上下文。');
+          throw new DomainError('INCOMPATIBLE_COMPOSITION', 'The host session context is missing.');
         }
         const runtime = lifecycle.ensureRuntime(agent.session, agent);
         return { engine: runtime.engine, scope: runtime.scope };

@@ -14,7 +14,8 @@ import {
   SUPPORTED_LOCALES, DEFAULT_LOCALE, errorCodes, DomainError,
 } from '../../domain/index.mjs'
 import { validateListRequest, validateSearchRequest, validateLoadRequest } from '../../domain/protocol.mjs'
-import { DEFAULT_BUDGETS } from '../../domain/constants.mjs'
+import { DEFAULT_BUDGETS, CONTROLLED_CATEGORIES } from '../../domain/constants.mjs'
+import { validateConfig } from '../../adapters/dsh/index.mjs'
 
 test('locale 归一化：未知值回落 en，绝不猜测', () => {
   assert.equal(normalizeLocale('en'), 'en')
@@ -111,6 +112,46 @@ test('domainText 代理跟随 setDomainLocale', () => {
   setDomainLocale('zh')
   assert.ok(/[一-鿿]/.test(domainText.t(['error', 'INVALID_ARGS'])))
   setDomainLocale('en') // 复位，避免污染同文件后续用例
+})
+
+test('类别卡随 locale 切换（zh 界面不得显示英文描述）', () => {
+  // 这条曾被漏掉：locale 表里有 12 个类别翻译，但 createText().category()
+  // 从未被调用，zh 界面下类别卡仍是英文 —— 表是死代码，测试却全绿。
+  //
+  // 断言的是 capabilitySummary 而非 title：Shell / Web / GitHub 是产品名，
+  // 中文界面下保持原样是正确的，强行断言"必须含中文"会逼出错误的翻译。
+  const CJK = /[一-鿿]/
+  const KEEP_AS_IS = new Set(['shell', 'web', 'github'])
+  for (const id of CONTROLLED_CATEGORIES) {
+    const en = createText('en').category(id)
+    const zh = createText('zh').category(id)
+    assert.ok(en?.title && en?.capabilitySummary, `en 类别 ${id} 缺失`)
+    assert.ok(zh?.title && zh?.capabilitySummary, `zh 类别 ${id} 缺失`)
+    assert.ok(!CJK.test(en.capabilitySummary), `en.${id} 摘要含中文：${en.capabilitySummary}`)
+    assert.ok(CJK.test(zh.capabilitySummary), `zh.${id} 摘要未中文化：${zh.capabilitySummary}`)
+    if (KEEP_AS_IS.has(id)) {
+      assert.equal(zh.title, en.title, `${id} 是产品名，不应翻译`)
+    } else {
+      assert.ok(CJK.test(zh.title), `zh.${id}.title 未中文化：${zh.title}`)
+    }
+  }
+})
+
+test('激活期 categoryConfig 兜底未被破坏', () => {
+  // validateConfig 必须在未部署 categoryConfig 时仍通过；本地化在 apply 里
+  // 叠加。曾因把 `?? DEFAULT_CATEGORY_CONFIG` 删掉而让 35 个组合测试红。
+  assert.doesNotThrow(() => validateConfig({}))
+  assert.doesNotThrow(() => validateConfig({ alwaysVisible: ['read'] }))
+  const cfg = validateConfig({})
+  assert.ok(cfg.categoryConfig && typeof cfg.categoryConfig === 'object',
+    '未部署时必须回落到默认表，而不是 undefined')
+})
+
+test('激活期校验错误是英文（宿主日志面向操作者，不是模型）', () => {
+  assert.throws(
+    () => validateConfig({ frameworkRetained: [1] }),
+    (e) => !/[一-鿿]/.test(e.message) && /frameworkRetained/.test(e.message),
+  )
 })
 
 test('DomainError 默认 message 随 locale，且 code/recovery 不变', () => {

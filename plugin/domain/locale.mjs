@@ -91,6 +91,8 @@ const MESSAGES = Object.freeze({
   // 内部错误：只用于「未知异常收敛」，不得泄漏堆栈给模型。
   error_internal: 'Internal error in the discovery kernel.',
   ENGINE_DISPOSED: 'The discovery engine has been released.',
+  missingSessionIdentityHost: 'The host session identity is unavailable.',
+  sessionContextUnavailable: 'The current session context is unavailable.',
 
   /**
    * 逐点拒绝文案。每条都有对应的错误码，但**码不足以让模型自我纠正**：
@@ -260,6 +262,8 @@ const MESSAGES_ZH = Object.freeze({
   },
   error_internal: '发现内核内部错误。',
   ENGINE_DISPOSED: '发现引擎已释放。',
+  missingSessionIdentityHost: '缺少宿主会话身份。',
+  sessionContextUnavailable: '当前会话上下文不可用。',
 
   detail: {
     budgetNotObject: 'budgets 必须是对象。',

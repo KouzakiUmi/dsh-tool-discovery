@@ -3,7 +3,6 @@
 // 名称模式逐项**只有完整原生名称**:不附 description / summary / revision / schema / skill。
 // 游标绑定 {sessionId, view, category, eligibilityGeneration, offset, expiresAt, orderDigest}。
 import { createByteAccumulator, estimatedTokenCount } from './budgets.mjs';
-import { buildCategoryCards } from './categories.mjs';
 import { canonicalJson } from './canonical.mjs';
 import { DomainError } from './errors.mjs';
 import { isNonEmptyString, isPlainObject } from './util.mjs';

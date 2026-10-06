@@ -6,7 +6,7 @@
 //     不做检索排序、不做预算、不做 receipt 校验（全部在 domain）。
 //   * operationId 由宿主 callId 派生（`op_<callId>`），热态 pending 与
 //     journal 的 canonical call 共用同一个值，形成 F2 的绑定锚点。
-import { DomainError, errorEnvelope, createText } from '../../domain/index.mjs';
+import { DomainError, errorEnvelope, createText, domainText } from '../../domain/index.mjs';
 
 function envelopeJson(envelope) {
   return JSON.stringify(envelope);
@@ -17,7 +17,7 @@ function scopeFromExec(exec) {
   const sessionId = exec?.agent?.session?.id;
   const actorId = exec?.agent?.id;
   if (typeof sessionId !== 'string' || sessionId.length === 0) {
-    throw new DomainError('INCOMPATIBLE_COMPOSITION', '缺少宿主会话身份。');
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', domainText.t(['missingSessionIdentityHost']));
   }
   return { sessionId, actorId: String(actorId) };
 }
@@ -42,7 +42,7 @@ function definitionFor(deps, spec) {
       } catch (error) {
         const err = error instanceof DomainError
           ? error
-          : new DomainError('INCOMPATIBLE_COMPOSITION', '当前会话上下文不可用。');
+          : new DomainError('INCOMPATIBLE_COMPOSITION', domainText.t(['sessionContextUnavailable']));
         // 02 §2/§10：失败一律返回标准错误外壳（ok:false + error.code）作为结果文本，
         // 由 journal/reducer 判据（ok!==true → 不激活）把关；不得抛出——DSH 会把 execute
         // 抛错渲染成 `Error: <message>` 非 JSON 文本，破坏协议外壳契约

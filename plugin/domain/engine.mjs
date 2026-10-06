@@ -6,7 +6,7 @@
 import { resolveBudgets } from './budgets.mjs';
 import { buildCatalog, resolveByName, resolveByToolId } from './catalog.mjs';
 import { buildCategoryCards, resolveCategory } from './categories.mjs';
-import { canonicalJson, deepEqualCanonical } from './canonical.mjs';
+import { deepEqualCanonical } from './canonical.mjs';
 import { createByteAccumulator } from './budgets.mjs';
 import { createCursorStore, paginateCategories, paginateNames, projectState } from './list.mjs';
 import { createRefStore } from './candidate-refs.mjs';

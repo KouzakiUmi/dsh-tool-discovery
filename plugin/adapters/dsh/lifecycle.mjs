@@ -29,6 +29,8 @@ export function createLifecycle(deps) {
     return {
       protocolVersion: 2,
       categoryConfig: config.categoryConfig,
+      // engine 的 nextAction 与类别卡按此取文案；缺省会静默回落英文。
+      locale: config.locale,
       entryToolNames: [...registry.entryNames],
       frameworkToolNames: [...registry.frameworkRetained],
       alwaysToolNames: [...(config.alwaysVisible ?? [])],

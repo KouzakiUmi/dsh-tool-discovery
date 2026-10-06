@@ -6,7 +6,6 @@
 //
 // 纯函数约束:不读时钟、不读随机、不写文件、不发事件;所有外部事实由 ResolverContext 传入。
 import { deepEqualCanonical, digestOf } from './canonical.mjs';
-import { DomainError } from './errors.mjs';
 import { isNonEmptyString, isPlainObject } from './util.mjs';
 import { createText } from './locale.mjs';
 
