@@ -8,10 +8,11 @@
 import { ENTRY_TOOL_NAMES } from '../../domain/index.mjs';
 
 /**
- * @param {{ctx:any, lifecycle:any, frameworkRetained?:readonly string[], log?:Function}} deps
+ * @param {{ctx:any, lifecycle:any, frameworkRetained?:readonly string[], alwaysVisible?:readonly string[], locale?:string, log?:Function}} deps
  */
 export function createGuard(deps) {
   const { ctx, lifecycle } = deps;
+  const config = { locale: deps.locale };
   const frameworkRetained = new Set([...(deps.frameworkRetained ?? [])]);
   // 常驻工具与入口同权：它们每一轮都在请求里，无需 selected 凭据。
   // 漏掉这一组会让白名单工具在 tool_load 成功后仍被拒（INCOMPATIBLE_COMPOSITION）。
@@ -41,6 +42,10 @@ export function createGuard(deps) {
       // 当前 scope 是否解析得到该工具只用于诊断字段 registeredInScope，
       // 不影响对外文案（两种 visibility 走同一句 reason）。
       registeredInScope: ctx.tools.get(exec.name, agent) !== undefined,
+      // 同一响应内 load 完立刻调用：canonical 回执尚未折叠，属"即将生效"
+      // 而非"从未加载"，两者必须给出不同的码与文案。
+      pendingLoad: runtime.journal.pendingLoadNames().has(exec.name),
+      locale: config.locale,
       requestId: runtime.journal.currentRequestId(),
     });
     if (outcome.allowed) return undefined;

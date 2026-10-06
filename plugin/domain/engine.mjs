@@ -22,6 +22,7 @@ import {
   createState, evaluateCall as evalCall, invalidateTool, recordAdvertisement, reducePair,
 } from './state.mjs';
 import { clampCodePoints, createMutex, isNonEmptyString, isPlainObject } from './util.mjs';
+import { createText } from './locale.mjs';
 
 const MAX_SUMMARY_CODE_POINTS = 96;
 
@@ -60,6 +61,9 @@ export function createDiscoveryEngine(config) {
   const protectedNames = new Set([...entryNames, ...frameworkNames, ...alwaysNames]);
   /** @type {Map<string, string>} name → toolId(受保护项,如可解析) */
   const newSessionMode = config.newSessionMode === 'restoring' ? 'restoring' : 'ready';
+
+  // 面向模型的文案随界面语言变化。缺省英文（见 locale.mjs 的回落理由）。
+  const text = createText(config.locale);
 
   const clock = config.clock;
   const refStore = createRefStore({ clock, random: config.random, ttlMs: budgets.candidateTtlMs });
@@ -172,7 +176,7 @@ export function createDiscoveryEngine(config) {
           const activeEntries = Array.from(st.selected.values())
             .map((s) => resolveByToolId(catalog, s.toolId))
             .filter(Boolean);
-          return okEnvelope('tool_list', 'list', projectState(st, budgets, activeEntries), '状态视图不含隐藏目录。');
+          return okEnvelope('tool_list', 'list', projectState(st, budgets, activeEntries), text.t(['nextAction', 'stateViewNoHidden']));
         }
 
         if (req.view === 'categories') {
@@ -198,7 +202,7 @@ export function createDiscoveryEngine(config) {
             categories: page.categories,
             nextCursor: page.nextCursor,
             truncated: page.truncated,
-          }, '用 tool_search 在相关类别检索。');
+          }, text.t(['nextAction', 'searchInCategory']));
         }
 
         const category = resolveCategory(/** @type {string} */ (req.category), catalog, config.categoryConfig);
@@ -216,7 +220,7 @@ export function createDiscoveryEngine(config) {
             .sort();
           return okEnvelope('tool_list', 'list', {
             category, view: 'loaded', names, nextCursor: null, truncated: false,
-          }, 'loaded 表示有效 selected,不表示当前请求已披露。');
+          }, text.t(['nextAction', 'loadedMeansSelected']));
         }
 
         // available:只返回完整原生名称,不附描述/revision/schema/skill
@@ -253,7 +257,7 @@ export function createDiscoveryEngine(config) {
           names: page.names,
           nextCursor: page.nextCursor,
           truncated: page.truncated,
-        }, '知道用途后按精确名称调用 tool_load;不确定时调用 tool_search。');
+        }, text.t(['nextAction', 'searchAfterList']));
       } catch (e) {
         return failEnvelope('tool_list', 'list', e, scope);
       }
@@ -279,7 +283,7 @@ export function createDiscoveryEngine(config) {
             category,
             candidates: [],
             truncated: false,
-          }, '改写 query 或用 tool_list 浏览名称。');
+          }, text.t(['nextAction', 'rewriteOrBrowse']));
         }
 
         const acc = createByteAccumulator(budgets.maxSearchResultBytes);
@@ -313,7 +317,7 @@ export function createDiscoveryEngine(config) {
           category,
           candidates,
           truncated,
-        }, '选定候选后,用 ref 与 revision 调用 tool_load。');
+        }, text.t(['nextAction', 'pickCandidateThenLoad']));
       } catch (e) {
         return failEnvelope('tool_search', 'search', e, scope);
       }
@@ -464,7 +468,7 @@ export function createDiscoveryEngine(config) {
         skills: skills.filter(Boolean),
         takesEffect: 'next_request',
         schemaDelivery: 'native_tools_only',
-      }, '下一轮看到工具 schema 后,再调用原工具。');
+      }, text.t(['nextAction', 'callNextRequest']));
 
       const op = {
         operationId: ctx.operationId,
@@ -499,7 +503,7 @@ export function createDiscoveryEngine(config) {
       const response = okEnvelope('tool_load', 'unload', {
         receipt,
         takesEffect: 'next_request',
-      }, '下一轮请求将移除这些工具。');
+      }, text.t(['nextAction', 'unloadNext']));
       const op = {
         operationId: ctx.operationId,
         action: /** @type {const} */ ('unload'),
@@ -579,7 +583,7 @@ export function createDiscoveryEngine(config) {
      */
     evaluateCall(scope, call) {
       if (disposed) {
-        return { allowed: false, code: 'TOOL_NOT_LOADED', reason: '引擎已释放。', visibility: 'hidden' };
+        return { allowed: false, code: 'TOOL_NOT_LOADED', reason: text.t(['error', 'ENGINE_DISPOSED']), visibility: 'hidden' };
       }
       const st = requireState(scope);
       const isEntryOrFramework = protectedNames.has(call.name);

@@ -408,12 +408,33 @@ export function createJournal(deps) {
     return names;
   }
 
+  /**
+   * 尚在飞行中、canonical 回执尚未折叠的 tool_load 目标名。
+   *
+   * 模型在同一响应里 load 完立刻猜测调用是常见写法，而折叠要等 tool/result
+   * 才发生。没有这个查询，guard 会把这种「即将生效」误判为「从未加载」，
+   * 报出与事实相反的 TOOL_NOT_LOADED，模型据此重试或改走错误路径。
+   */
+  function pendingLoadNames() {
+    const names = new Set();
+    for (const { input } of liveCalls.values()) {
+      if (Array.isArray(input?.names)) {
+        for (const n of input.names) if (typeof n === 'string') names.add(n);
+      }
+      if (Array.isArray(input?.candidates)) {
+        for (const c of input.candidates) if (typeof c?.name === 'string') names.add(c.name);
+      }
+    }
+    return names;
+  }
+
   return {
     sessionId,
     onEvent,
     restore,
     currentRequestId,
     activeSelectedNames,
+    pendingLoadNames,
     whenRestored: () => restorePromise,
     dispose() {
       buffering = false;

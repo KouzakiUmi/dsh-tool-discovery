@@ -8,6 +8,7 @@
 import { deepEqualCanonical, digestOf } from './canonical.mjs';
 import { DomainError } from './errors.mjs';
 import { isNonEmptyString, isPlainObject } from './util.mjs';
+import { createText } from './locale.mjs';
 
 export const RECEIPT_KIND = 'tool-discovery.selection';
 export const RECEIPT_VERSION = 2;
@@ -327,19 +328,35 @@ export function recordAdvertisement(state, rec) {
  * 对外 `reason` 文案在 hidden / unknown-to-scope 之间必须一致,避免泄漏存在性。
  *
  * @param {SessionDiscoveryState} state
- * @param {{name:string, toolId?:string, requestId?:string, now:number, entryTools?:string[], registeredInScope?:boolean|null, isEntryOrFramework?:boolean}} ctx
+ * @param {{name:string, toolId?:string, requestId?:string, now:number, entryTools?:string[], registeredInScope?:boolean|null, isEntryOrFramework?:boolean, pendingLoad?:boolean}} ctx
  */
 export function evaluateCall(state, ctx) {
-  const UNIFORM_NOT_LOADED = '该工具未在当前会话中显式加载。';
-  const UNIFORM_NOT_ADVERTISED = '该工具未在当前请求中披露。';
+  // 三条拒绝文案面向模型，按 locale 取表；缺省英文。
+  const text = createText(ctx.locale);
+  const UNIFORM_NOT_LOADED = text.t(['error', 'TOOL_NOT_LOADED']);
+  const UNIFORM_NOT_ADVERTISED = text.t(['error', 'TOOL_NOT_ADVERTISED']);
+  /**
+   * 该工具的 tool_load 回执已收到、尚未折叠进 selected（模型在同一响应内
+   * load 完立刻猜测调用）。这与「从未加载」是相反的事实，必须区分：报成
+   * NOT_LOADED 会让模型以为加载失败而重试或改走错误路径。
+   */
+  const PENDING_FOLD = text.t(['guard', 'pendingFold']);
 
   if (state.mode !== 'ready') {
-    return { allowed: false, code: /** @type {const} */ ('TOOL_NOT_LOADED'), reason: '会话状态未就绪。', visibility: /** @type {const} */ ('hidden') };
+    return { allowed: false, code: /** @type {const} */ ('TOOL_NOT_LOADED'), reason: text.t(['error', 'STATE_NOT_READY']), visibility: /** @type {const} */ ('hidden') };
   }
   if (ctx.isEntryOrFramework) return { allowed: true };
 
   const selectedByName = Array.from(state.selected.values()).filter((s) => s.name === ctx.name);
   if (selectedByName.length === 0) {
+    if (ctx.pendingLoad === true) {
+      return {
+        allowed: false,
+        code: /** @type {const} */ ('TOOL_NOT_ADVERTISED'),
+        reason: PENDING_FOLD,
+        visibility: /** @type {const} */ ('pending-fold'),
+      };
+    }
     return {
       allowed: false,
       code: /** @type {const} */ ('TOOL_NOT_LOADED'),

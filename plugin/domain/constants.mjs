@@ -1,6 +1,7 @@
 // progressive-v2/domain/constants.mjs
 // 协议版本、错误码元数据、预算默认值、受控类别与受控匹配标签。
 // 宿主无关:不 import Cordis / DSH / 第三方包。
+import { createText } from './locale.mjs';
 
 /** @type {2} */
 export const PROTOCOL_VERSION = 2;
@@ -36,24 +37,36 @@ export const DEFAULT_BUDGETS = Object.freeze({
 
 /**
  * 错误码元数据。message 面向模型,保持稳定且不泄漏存在性。
+ * message 随界面语言变化,故本表按 locale 生成而非模块级常量。
+ * @param {string} [locale] 宿主界面语言；缺省英文。
+ * @returns {Readonly<Record<string,{message:string;retryable:boolean;recovery:string}>>}
+ */
+export function errorCodes (locale) {
+  const text = createText(locale);
+  return Object.freeze({
+    INVALID_ARGS: { message: text.t(['error', 'INVALID_ARGS']), retryable: false, recovery: 'fix_arguments' },
+    CATEGORY_UNAVAILABLE: { message: text.t(['error', 'CATEGORY_UNAVAILABLE']), retryable: false, recovery: 'list_categories' },
+    NO_MATCH: { message: text.t(['error', 'NO_MATCH']), retryable: true, recovery: 'rewrite_query_or_browse_names' },
+    CURSOR_UNAVAILABLE: { message: text.t(['error', 'CURSOR_UNAVAILABLE']), retryable: true, recovery: 'restart_from_first_page' },
+    TOOL_UNAVAILABLE: { message: text.t(['error', 'TOOL_UNAVAILABLE']), retryable: false, recovery: 'browse_or_search_again' },
+    CANDIDATE_UNAVAILABLE: { message: text.t(['error', 'CANDIDATE_UNAVAILABLE']), retryable: true, recovery: 'search_again' },
+    STALE_CANDIDATE: { message: text.t(['error', 'STALE_CANDIDATE']), retryable: true, recovery: 'select_again' },
+    SELECTION_CHANGED: { message: text.t(['error', 'SELECTION_CHANGED']), retryable: true, recovery: 'select_again' },
+    BUDGET_EXCEEDED: { message: text.t(['error', 'BUDGET_EXCEEDED']), retryable: false, recovery: 'reduce_or_unload' },
+    STATE_NOT_READY: { message: text.t(['error', 'STATE_NOT_READY']), retryable: true, recovery: 'retry_when_ready' },
+    TOOL_NOT_LOADED: { message: text.t(['error', 'TOOL_NOT_LOADED']), retryable: false, recovery: 'call_tool_load_first' },
+    TOOL_NOT_ADVERTISED: { message: text.t(['error', 'TOOL_NOT_ADVERTISED']), retryable: true, recovery: 'wait_for_next_request' },
+    INCOMPATIBLE_PRESENTATION: { message: text.t(['error', 'INCOMPATIBLE_PRESENTATION']), retryable: false, recovery: 'use_native_only' },
+    INCOMPATIBLE_COMPOSITION: { message: text.t(['error', 'INCOMPATIBLE_COMPOSITION']), retryable: false, recovery: 'fix_composition' },
+  });
+}
+
+/**
+ * 默认语言的错误码表（模块级便利导出，等价于 errorCodes()）。
+ * 需要按界面语言取表的调用方应改用 errorCodes(locale)。
  * @type {Readonly<Record<string,{message:string;retryable:boolean;recovery:string}>>}
  */
-export const ERROR_CODES = Object.freeze({
-  INVALID_ARGS: { message: '参数字段、数量或组合非法。', retryable: false, recovery: 'fix_arguments' },
-  CATEGORY_UNAVAILABLE: { message: '类别不存在或当前不可见。', retryable: false, recovery: 'list_categories' },
-  NO_MATCH: { message: '没有相关候选。', retryable: true, recovery: 'rewrite_query_or_browse_names' },
-  CURSOR_UNAVAILABLE: { message: '分页游标已失效,请从首页重新浏览。', retryable: true, recovery: 'restart_from_first_page' },
-  TOOL_UNAVAILABLE: { message: '该名称在当前范围内不可用。', retryable: false, recovery: 'browse_or_search_again' },
-  CANDIDATE_UNAVAILABLE: { message: '候选引用已失效,请重新检索或按名称选择。', retryable: true, recovery: 'search_again' },
-  STALE_CANDIDATE: { message: '候选定义已变化,请重新检索或显式选择当前名称。', retryable: true, recovery: 'select_again' },
-  SELECTION_CHANGED: { message: '验证期间当前定义已变更,请重新选择。', retryable: true, recovery: 'select_again' },
-  BUDGET_EXCEEDED: { message: '已超出预算上限,请缩小请求、显式卸载或由用户调整配置。', retryable: false, recovery: 'reduce_or_unload' },
-  STATE_NOT_READY: { message: '会话状态尚未就绪。', retryable: true, recovery: 'retry_when_ready' },
-  TOOL_NOT_LOADED: { message: '该工具未在当前会话中显式加载。', retryable: false, recovery: 'call_tool_load_first' },
-  TOOL_NOT_ADVERTISED: { message: '该工具未在当前请求中披露。', retryable: true, recovery: 'wait_for_next_request' },
-  INCOMPATIBLE_PRESENTATION: { message: '当前展示模式不受支持。', retryable: false, recovery: 'use_native_only' },
-  INCOMPATIBLE_COMPOSITION: { message: '当前插件组合不受支持。', retryable: false, recovery: 'fix_composition' },
-});
+export const ERROR_CODES = errorCodes();
 
 /** 受控、可解释的匹配标签(02 §5:matchReasons 必须是受控标签)。 */
 export const MATCH_REASONS = Object.freeze({

@@ -15,7 +15,7 @@
 // 边界：产品代码不含机器绝对路径；宿主模块（defineTool）由工厂注入，
 // 安装树内的默认入口按裸包名动态 import。
 import { randomBytes } from 'node:crypto';
-import { CONTROLLED_CATEGORIES, DomainError, ENTRY_TOOL_NAMES, createDiscoveryEngine } from '../../domain/index.mjs';
+import { CONTROLLED_CATEGORIES, DomainError, ENTRY_TOOL_NAMES, createDiscoveryEngine, createText, detectHostLocale } from '../../domain/index.mjs';
 import { createEntryDefinitions } from './entries.mjs';
 import { createGuard } from './guard.mjs';
 import { createLifecycle } from './lifecycle.mjs';
@@ -23,7 +23,8 @@ import { createProjection } from './projection.mjs';
 import { createRegistryAdapter } from './registry.mjs';
 import { CORE_TOOL_NAMES } from '../../domain/core-tools.mjs';
 
-/** 默认可信类别表（部署可用 Config 覆盖）。category 只影响可发现性，不授予资格。 */
+/** 默认可信类别表（部署可用 Config 覆盖）。category 只影响可发现性，不授予资格。
+ *  部署未覆盖的类别回落到 locale 表——它们是模型可见的导航文案。 */
 export const DEFAULT_CATEGORY_CONFIG = Object.freeze({
   files: { title: 'Files', capabilitySummary: 'Locate, read, search and modify workspace files.' },
   shell: { title: 'Shell', capabilitySummary: 'Run commands and manage persistent shells.' },
@@ -119,6 +120,13 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       else if (typeof ctx.logger?.debug === 'function') ctx.logger.debug(`progressive-tools: ${message}`, extra);
     };
 
+    // 面向模型的文案跟随 DSH 界面语言。探测失败回落 en（见 host-locale.mjs）。
+    const locale = detectHostLocale({ log });
+    const text = createText(locale);
+    log('activate:locale', { locale });
+    // 探测结果并入 config：engine 的 nextAction 与类别卡据此取文案。
+    config.locale = locale;
+
     const registry = createRegistryAdapter({
       ctx,
       entryNames: ENTRY_TOOL_NAMES,
@@ -192,7 +200,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       };
 
       // ---- 4. 三个 typed definition ----
-      for (const definition of createEntryDefinitions({ defineTool: resolved.defineTool, resolve: resolveRuntime })) {
+      for (const definition of createEntryDefinitions({ defineTool: resolved.defineTool, resolve: resolveRuntime, text })) {
         own(ctx.tools.register(definition));
       }
 
@@ -200,7 +208,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       own(createProjection({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, alwaysVisible: config.alwaysVisible, log }));
 
       // ---- 6. guard（只增拒绝） ----
-      own(createGuard({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, alwaysVisible: config.alwaysVisible, log }));
+      own(createGuard({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, alwaysVisible: config.alwaysVisible, locale, log }));
 
       // ---- 7. session 与 registry 事件 ----
       own(ctx.on('session/event', (session, event) => lifecycle.onSessionEvent(session, event)));
