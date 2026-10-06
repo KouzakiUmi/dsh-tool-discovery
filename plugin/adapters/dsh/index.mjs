@@ -82,6 +82,7 @@ export function validateConfig(raw) {
     categoryConfig,
     budgets: config.budgets,
     frameworkRetained: Object.freeze([...frameworkRetained]),
+    // 保留该键仅为兼容既有配置；缺失 sessionQuery 已不再拒绝激活。
     allowMissingSessionQuery: config.allowMissingSessionQuery === true,
   };
 }
@@ -121,9 +122,17 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
     // ---- 3. native-only ----
     registry.assertNative(undefined);
 
+    // sessionQuery 只用于**有历史**的会话做冷恢复（lifecycle: seq>0 才调
+    // journal.restore()）。全新会话 seq===0 直接 ready，不读盘。
+    // 因此缺失该服务时**不能拒绝激活**——那会让插件在所有会话上一律失效，
+    // 而它本来完全能服务新会话。恢复不可用时的正确降级由 journal 逐会话
+    // fail closed 承担（query===undefined → mode:'incompatible'），
+    // 而不是在此处一刀切拒绝组合。
     const query = ctx.get('sessionQuery');
-    if (query === undefined && !config.allowMissingSessionQuery) {
-      throw new DomainError('INCOMPATIBLE_COMPOSITION', '缺少 sessionQuery 服务：无恢复能力时不启用本组合。');
+    if (query === undefined) {
+      log('degraded:no-session-query', {
+        impact: '新会话正常；有历史会话的冷恢复将 fail closed（mode:incompatible）',
+      });
     }
 
     const clock = { now: () => Date.now() };

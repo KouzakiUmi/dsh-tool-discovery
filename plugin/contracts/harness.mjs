@@ -20,7 +20,7 @@ export function serviceEntries (persistenceRoot) {
     { id: 'sessions', name: '@deepseek-ai/dsh-session', config: {} },
     { id: 'session-projections', name: '@deepseek-ai/dsh-session-projection', config: {} },
     { id: 'session-persistence-jsonl', name: '@deepseek-ai/dsh-session-persistence-jsonl', config: { root: persistenceRoot } },
-    { id: 'session-query', name: '@deepseek-ai/dsh-session-query', config: {} },
+    { id: 'session-query', name: '@deepseek-ai/dsh-session-query-sqlite', config: { path: ':memory:', openAt: 'never' } },
     { id: 'approval', name: '@deepseek-ai/dsh-user-approval', config: { policy: 'ask' } },
     { id: 'llm', name: '@deepseek-ai/dsh-llm', config: {} },
     { id: 'agents', name: '@deepseek-ai/dsh-agent', config: {} },
