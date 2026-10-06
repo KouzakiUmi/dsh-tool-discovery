@@ -46,6 +46,7 @@ const MESSAGES = Object.freeze({
       query: 'Natural-language description of what you want the tool to do.',
       category: 'Restrict candidates to one capability category, or "all" for every category.',
       query: 'Natural-language description of the task (not a tool name).',
+      limit: 'Max candidates. Default 5, max 8.',
       nextAction_hit: 'Pass the chosen ref and revision to tool_load.',
       nextAction_empty: 'Rewrite the query, or browse names with tool_list.',
     },
@@ -164,6 +165,11 @@ const MESSAGES = Object.freeze({
   },
 
   // ---- nextAction 提示 ----
+  // 字段名内插：拒绝文案要指出**具体是哪个字段**，否则模型无法自我纠正。
+  // 用 {field} 占位，由 formatDetail 替换。
+  unknownField: 'Unknown field: {field}',
+  forbiddenField: 'Field not accepted: {field}',
+
   nextAction: {
     stateViewNoHidden: 'State view does not enumerate hidden tools.',
     searchInCategory: 'Search in the relevant category with tool_search.',
@@ -282,10 +288,10 @@ const MESSAGES_ZH = Object.freeze({
 
     engineConfigNotObject: 'engine config 必须是对象。',
     protocolVersionUnsupported: '协议版本不受支持。',
-    categoryConfigRequired: 'categoryConfig 必填（可信配置）。',
+    categoryConfigRequired: 'categoryConfig 必填(可信配置)。',
     clockRequired: 'clock 必填。',
     randomRequired: 'random 必填。',
-    missingSessionIdentity: '缺少会话身份（必须由宿主传入）。',
+    missingSessionIdentity: '缺少会话身份(必须由宿主传入)。',
     operationIdRequired: 'operationId 必须由宿主提供。',
     protectedNotLoadable: '入口与常驻工具不可被加载。',
     protectedNotUnloadable: '入口与常驻工具不可被卸载。',
@@ -321,6 +327,9 @@ const MESSAGES_ZH = Object.freeze({
     namesOverBatch: 'names 超过批次上限。',
     namesNotStrings: 'names 必须是字符串。',
   },
+  unknownField: '未知字段: {field}',
+  forbiddenField: '不接受字段: {field}',
+
   nextAction: {
     stateViewNoHidden: '状态视图不枚举隐藏工具。',
     searchInCategory: '用 tool_search 在相关类别检索。',
@@ -387,6 +396,18 @@ export function createText (locale) {
       }
       return typeof node === 'string' ? node : undefined;
     },
+    /**
+     * 取带占位符的文案。字段名是**不可信输入**，原样插入而不翻译；
+     * 未声明的 {x} 保持原样，以便一眼看出模板漏配。
+     * @param {string[]} path
+     * @param {Record<string,string>} vars
+     */
+    format (path, vars) {
+      const s = this.t(path);
+      if (typeof s !== 'string') return undefined;
+      return s.replace(/\{(\w+)\}/g, (m, k) =>
+        Object.prototype.hasOwnProperty.call(vars, k) ? String(vars[k]) : m);
+    },
     /** 类别卡片：部署可用可信配置覆盖，否则用受控默认表。 */
     category (id, override) {
       if (override !== undefined && override !== null) return override;
@@ -394,4 +415,32 @@ export function createText (locale) {
       return c === undefined ? undefined : { title: c.title, capabilitySummary: c.summary };
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// 激活期语言绑定。
+//
+// 纯校验函数（catalog/protocol/budgets/list/skills）不接受 locale 参数——它们
+// 到处 throw，逐层加参数会污染整条签名链。插件在一个 profile 下只激活一次、
+// 语言也随之固定，故在此绑定一次，adapter 激活时调用 setDomainLocale()。
+//
+// 这是有意的取舍，不是省事：代价是这些函数不再对 locale 无状态。测试必须
+// 在两种语言下各跑一遍（见 tests/unit/locale.test.mjs），一旦将来需要
+// per-session 语言，就必须把 text 改成显式参数。
+let currentText = createText(DEFAULT_LOCALE)
+
+/** 激活期设置语言。由 adapter 的 apply 调用一次。 */
+export function setDomainLocale (locale) {
+  currentText = createText(locale)
+}
+
+/** 供纯函数模块使用的文案取值器。 */
+export const domainText = currentTextProxy()
+
+function currentTextProxy () {
+  return {
+    get locale () { return currentText.locale },
+    t: (path) => currentText.t(path),
+    format: (path, vars) => currentText.format(path, vars),
+  }
 }

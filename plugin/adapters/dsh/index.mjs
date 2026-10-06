@@ -15,7 +15,7 @@
 // 边界：产品代码不含机器绝对路径；宿主模块（defineTool）由工厂注入，
 // 安装树内的默认入口按裸包名动态 import。
 import { randomBytes } from 'node:crypto';
-import { CONTROLLED_CATEGORIES, DomainError, ENTRY_TOOL_NAMES, createDiscoveryEngine, createText, detectHostLocale } from '../../domain/index.mjs';
+import { CONTROLLED_CATEGORIES, DomainError, ENTRY_TOOL_NAMES, createDiscoveryEngine, createText, detectHostLocale, setDomainLocale } from '../../domain/index.mjs';
 import { createEntryDefinitions } from './entries.mjs';
 import { createGuard } from './guard.mjs';
 import { createLifecycle } from './lifecycle.mjs';
@@ -123,6 +123,9 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
     // 面向模型的文案跟随 DSH 界面语言。探测失败回落 en（见 host-locale.mjs）。
     const locale = detectHostLocale({ log });
     const text = createText(locale);
+    // 纯校验函数（catalog/protocol/budgets/list/skills）不收 locale 参数，
+    // 在此一次性绑定，使它们的拒绝文案也随界面语言。详见 locale.mjs 的取舍说明。
+    setDomainLocale(locale);
     log('activate:locale', { locale });
     // 探测结果并入 config：engine 的 nextAction 与类别卡据此取文案。
     config.locale = locale;

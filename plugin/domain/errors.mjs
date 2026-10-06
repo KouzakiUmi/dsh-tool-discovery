@@ -1,6 +1,6 @@
 // progressive-v2/domain/errors.mjs
 import { errorCodes } from './constants.mjs';
-import { createText, DEFAULT_LOCALE } from './locale.mjs';
+import { createText, DEFAULT_LOCALE, domainText } from './locale.mjs';
 
 /**
  * 领域错误。code 必须存在于错误码表。
@@ -14,10 +14,13 @@ export class DomainError extends Error {
    * @param {string} code
    * @param {string} [messageOverride]
    * @param {Record<string, unknown>} [details]
-   * @param {string} [locale] 宿主界面语言
+   * @param {string} [locale] 宿主界面语言；缺省取激活期绑定的语言
    */
   constructor(code, messageOverride, details, locale) {
-    const meta = errorCodes(locale)[code];
+    // locale 缺省时必须回落到 domainText，而不是各自 createText(undefined)
+    // —— 后者会静默回英文，让中文界面下的 DomainError 变成英文。
+    const loc = locale ?? domainText.locale;
+    const meta = errorCodes(loc)[code];
     if (!meta) throw new Error(`unknown DomainError code: ${code}`);
     super(messageOverride || meta.message);
     this.name = 'DomainError';

@@ -6,6 +6,16 @@ import { deepFreeze, deepEqualCanonical, digestOf, utf8Bytes } from './canonical
 import { DomainError } from './errors.mjs';
 import { isNonEmptyString, isPlainObject, sortBy } from './util.mjs';
 
+// --- i18n shim (added by the message migration) ---------------------------
+// These validators are pure and take no locale argument. The plugin resolves
+// one locale per activation, so bind the text accessor once here rather than
+// threading it through every signature. setLocaleForDomain() is called by the
+// adapter at activation; tests call it directly to exercise both languages.
+import { domainText } from './locale.mjs';
+const text = domainText;
+const t = (path) => text.t(path);
+
+
 /**
  * @typedef {Object} CatalogBindingDTO
  * @property {string} toolId
@@ -42,21 +52,21 @@ import { isNonEmptyString, isPlainObject, sortBy } from './util.mjs';
  * @returns {CatalogBindingDTO}
  */
 export function validateBinding(b) {
-  if (!isPlainObject(b)) throw new DomainError('INCOMPATIBLE_COMPOSITION', '绑定不是对象。');
-  if (!isNonEmptyString(b.toolId)) throw new DomainError('INCOMPATIBLE_COMPOSITION', 'toolId 缺失。');
-  if (!isNonEmptyString(b.name)) throw new DomainError('INCOMPATIBLE_COMPOSITION', 'name 缺失。');
+  if (!isPlainObject(b)) throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'bindingNotObject']));
+  if (!isNonEmptyString(b.toolId)) throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'bindingMissingToolId']));
+  if (!isNonEmptyString(b.name)) throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'bindingMissingName']));
   if (typeof b.description !== 'string') {
-    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'description 必须是字符串。');
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'bindingDescriptionNotString']));
   }
-  if (!isPlainObject(b.wire)) throw new DomainError('INCOMPATIBLE_COMPOSITION', 'wire 缺失。');
+  if (!isPlainObject(b.wire)) throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'bindingMissingWire']));
   if (b.wire.name !== b.name) {
-    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'wire.name 与绑定名称不一致。');
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'bindingWireNameMismatch']));
   }
   if ('parameters' in b.wire && !isPlainObject(b.wire.parameters)) {
-    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'wire.parameters 必须是对象。');
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'bindingWireParametersNotObject']));
   }
   if ('description' in b.wire && typeof b.wire.description !== 'string') {
-    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'wire.description 必须是字符串。');
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'bindingWireDescriptionNotString']));
   }
   for (const key of ['providerNamespace', 'bindingGeneration', 'shadowOf', 'trustedCategoryOverride']) {
     if (key in b && b[key] !== null && typeof b[key] !== 'string') {
@@ -65,11 +75,11 @@ export function validateBinding(b) {
   }
   if ('skill' in b && b.skill !== null) {
     const s = b.skill;
-    if (!isPlainObject(s)) throw new DomainError('INCOMPATIBLE_COMPOSITION', 'skill 必须是对象或 null。');
-    if (!isNonEmptyString(s.skillRevision)) throw new DomainError('INCOMPATIBLE_COMPOSITION', 'skillRevision 缺失。');
-    if (!isNonEmptyString(s.usage)) throw new DomainError('INCOMPATIBLE_COMPOSITION', 'skill usage 缺失。');
+    if (!isPlainObject(s)) throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'skillNotObject']));
+    if (!isNonEmptyString(s.skillRevision)) throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'skillMissingRevision']));
+    if (!isNonEmptyString(s.usage)) throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'skillMissingUsage']));
     if (!Array.isArray(s.limitations) || s.limitations.some((x) => typeof x !== 'string')) {
-      throw new DomainError('INCOMPATIBLE_COMPOSITION', 'skill limitations 必须是字符串数组。');
+      throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'skillLimitationsNotArray']));
     }
   }
   return {
@@ -129,7 +139,7 @@ export function buildEntry(b) {
  * @returns {import('./catalog.mjs').CatalogSnapshot}
  */
 export function buildCatalog(rawBindings, opts) {
-  if (!Array.isArray(rawBindings)) throw new DomainError('INCOMPATIBLE_COMPOSITION', 'bindings 必须是数组。');
+  if (!Array.isArray(rawBindings)) throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'bindingsNotArray']));
   const seen = new Set();
   /** @type {Map<string, import('./catalog.mjs').CatalogEntry>} */
   const entries = new Map();
@@ -206,7 +216,7 @@ export function resolveByName(snapshot, name) {
   if (!arr || arr.length === 0) return null;
   if (arr.length > 1) {
     // 同名多绑定:必须由 toolId 显式消歧,不静默取第一个。
-    throw new DomainError('TOOL_UNAVAILABLE', '该名称在当前范围内存在多个绑定,需按 toolId 明确选择。', {
+    throw new DomainError('TOOL_UNAVAILABLE', t(['detail', 'ambiguousName']), {
       ambiguousToolIds: arr.map((e) => e.toolId),
     });
   }

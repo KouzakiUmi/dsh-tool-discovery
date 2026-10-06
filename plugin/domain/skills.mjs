@@ -5,6 +5,16 @@ import { utf8Bytes } from './canonical.mjs';
 import { DomainError } from './errors.mjs';
 import { isPlainObject } from './util.mjs';
 
+// --- i18n shim (added by the message migration) ---------------------------
+// These validators are pure and take no locale argument. The plugin resolves
+// one locale per activation, so bind the text accessor once here rather than
+// threading it through every signature. setLocaleForDomain() is called by the
+// adapter at activation; tests call it directly to exercise both languages.
+import { domainText } from './locale.mjs';
+const text = domainText;
+const t = (path) => text.t(path);
+
+
 const FORBIDDEN_SKILL_KEYS = Object.freeze(['parameters', 'schema', 'description', 'examples']);
 
 /**
@@ -20,7 +30,7 @@ export function validateSkill(entry) {
     }
   }
   if (s.skillRevision !== entry.skillRevision) {
-    throw new DomainError('INCOMPATIBLE_COMPOSITION', '技能版本与条目不一致。');
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'skillVersionMismatch']));
   }
 }
 
@@ -61,7 +71,7 @@ export function skillBytes(skills) {
 export function assertSkillBudget(skills, maxSkillBytes) {
   const bytes = skillBytes(skills);
   if (bytes > maxSkillBytes) {
-    throw new DomainError('BUDGET_EXCEEDED', '本次技能响应超过字节预算。', { bytes, maxSkillBytes });
+    throw new DomainError('BUDGET_EXCEEDED', t(['detail', 'skillResponseOverBudget']), { bytes, maxSkillBytes });
   }
   return bytes;
 }

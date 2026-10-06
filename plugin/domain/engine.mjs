@@ -24,6 +24,16 @@ import {
 import { clampCodePoints, createMutex, isNonEmptyString, isPlainObject } from './util.mjs';
 import { createText } from './locale.mjs';
 
+// --- i18n shim (added by the message migration) ---------------------------
+// These validators are pure and take no locale argument. The plugin resolves
+// one locale per activation, so bind the text accessor once here rather than
+// threading it through every signature. setLocaleForDomain() is called by the
+// adapter at activation; tests call it directly to exercise both languages.
+import { domainText } from './locale.mjs';
+const text = domainText;
+const t = (path) => text.t(path);
+
+
 const MAX_SUMMARY_CODE_POINTS = 96;
 
 /**
@@ -31,21 +41,21 @@ const MAX_SUMMARY_CODE_POINTS = 96;
  * @returns {import('./index.mjs').DiscoveryEngine}
  */
 export function createDiscoveryEngine(config) {
-  if (!isPlainObject(config)) throw new DomainError('INCOMPATIBLE_COMPOSITION', 'engine config 必须是对象。');
+  if (!isPlainObject(config)) throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'engineConfigNotObject']));
   if ((config.protocolVersion ?? PROTOCOL_VERSION) !== PROTOCOL_VERSION) {
-    throw new DomainError('INCOMPATIBLE_COMPOSITION', '协议版本不受支持。');
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'protocolVersionUnsupported']));
   }
   if (config.capabilityKind && config.capabilityKind !== 'native') {
     throw new DomainError('INCOMPATIBLE_PRESENTATION');
   }
   if (!isPlainObject(config.categoryConfig)) {
-    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'categoryConfig 必填(可信配置)。');
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'categoryConfigRequired']));
   }
   if (!isPlainObject(config.clock) || typeof config.clock.now !== 'function') {
-    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'clock 必填。');
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'clockRequired']));
   }
   if (!isPlainObject(config.random) || typeof config.random.bytes !== 'function') {
-    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'random 必填。');
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'randomRequired']));
   }
 
   const budgets = resolveBudgets(config.budgets);
@@ -91,7 +101,7 @@ export function createDiscoveryEngine(config) {
    */
   function requireState(scope) {
     if (!isPlainObject(scope) || !isNonEmptyString(scope.sessionId)) {
-      throw new DomainError('INCOMPATIBLE_COMPOSITION', '缺少会话身份(必须由宿主传入)。');
+      throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'missingSessionIdentity']));
     }
     let st = sessions.get(scope.sessionId);
     if (!st) {
@@ -310,7 +320,7 @@ export function createDiscoveryEngine(config) {
           candidates.push(card);
         }
         if (candidates.length === 0) {
-          throw new DomainError('BUDGET_EXCEEDED', '单个候选卡片超过结果字节预算。');
+          throw new DomainError('BUDGET_EXCEEDED', t(['detail', 'candidateCardOverByteBudget']));
         }
         return okEnvelope('tool_search', 'search', {
           catalogGeneration: catalog.generation,
@@ -352,7 +362,7 @@ export function createDiscoveryEngine(config) {
       }
       if (!isPlainObject(ctx) || !isNonEmptyString(ctx.operationId)) {
         return {
-          response: errorEnvelope('tool_load', requestedAction, new DomainError('INCOMPATIBLE_COMPOSITION', 'operationId 必须由宿主提供。')),
+          response: errorEnvelope('tool_load', requestedAction, new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'operationIdRequired']))),
           operation: null,
         };
       }
@@ -387,10 +397,10 @@ export function createDiscoveryEngine(config) {
         if (entry.revision !== item.revision) throw new DomainError('STALE_CANDIDATE');
         // D1:候选路径与 names 路径对称 —— 入口/框架保留项一律不可 load。
         if (protectedNames.has(entry.name)) {
-          throw new DomainError('INVALID_ARGS', '入口与框架保留项不可被加载。');
+          throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotLoadable']));
         }
         if (byToolId.has(entry.toolId) && byToolId.get(entry.toolId) !== item.revision) {
-          throw new DomainError('INVALID_ARGS', '同一工具的候选 revision 冲突。');
+          throw new DomainError('INVALID_ARGS', t(['detail', 'candidateRevisionConflict']));
         }
         if (byToolId.has(entry.toolId)) continue;
         byToolId.set(entry.toolId, item.revision);
@@ -400,7 +410,7 @@ export function createDiscoveryEngine(config) {
       for (const name of /** @type {string[]} */ (req.names ?? [])) {
         namesPath.push(name);
         if (protectedNames.has(name)) {
-          throw new DomainError('INVALID_ARGS', '入口与框架保留项不可被加载。');
+          throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotLoadable']));
         }
         const entry = resolveByName(catalog, name);
         if (!entry) throw new DomainError('TOOL_UNAVAILABLE');
@@ -409,7 +419,7 @@ export function createDiscoveryEngine(config) {
         resolved.push({ entry, source: 'name' });
       }
 
-      if (resolved.length === 0) throw new DomainError('INVALID_ARGS', '没有可加载的项。');
+      if (resolved.length === 0) throw new DomainError('INVALID_ARGS', t(['detail', 'nothingToLoad']));
 
       // 锁定本次验证快照(含资格代次)
       const genAtStart = eligibilityGeneration;
@@ -488,7 +498,7 @@ export function createDiscoveryEngine(config) {
       const toolIds = /** @type {string[]} */ (req.toolIds);
       for (const id of toolIds) {
         if (protectedToolIdsNow().has(id) || protectedNames.has(resolveByToolId(catalog, id)?.name ?? '')) {
-          throw new DomainError('INVALID_ARGS', '入口与框架保留项不可被卸载。');
+          throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotUnloadable']));
         }
       }
       // 未激活 ID 幂等 no-op;不推断其它 scope 是否存在

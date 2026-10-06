@@ -7,6 +7,16 @@ import { utf8Bytes } from './canonical.mjs';
 import { DomainError } from './errors.mjs';
 import { isPlainObject } from './util.mjs';
 
+// --- i18n shim (added by the message migration) ---------------------------
+// These validators are pure and take no locale argument. The plugin resolves
+// one locale per activation, so bind the text accessor once here rather than
+// threading it through every signature. setLocaleForDomain() is called by the
+// adapter at activation; tests call it directly to exercise both languages.
+import { domainText } from './locale.mjs';
+const text = domainText;
+const t = (path) => text.t(path);
+
+
 const NUMERIC_KEYS = Object.keys(DEFAULT_BUDGETS);
 
 /**
@@ -16,7 +26,7 @@ const NUMERIC_KEYS = Object.keys(DEFAULT_BUDGETS);
  */
 export function resolveBudgets(partial) {
   if (partial === undefined || partial === null) return Object.freeze({ ...DEFAULT_BUDGETS });
-  if (!isPlainObject(partial)) throw new DomainError('INCOMPATIBLE_COMPOSITION', 'budgets 必须是对象。');
+  if (!isPlainObject(partial)) throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'budgetNotObject']));
   /** @type {Record<string, number>} */
   const out = { ...DEFAULT_BUDGETS };
   for (const k of Object.keys(partial)) {
@@ -108,14 +118,14 @@ export function activeSchemaBytes(selections) {
 export function assertActiveBudget(newSelections, alreadyActive, budgets) {
   const activeCount = alreadyActive.length + newSelections.length;
   if (activeCount > budgets.maxActiveTools) {
-    throw new DomainError('BUDGET_EXCEEDED', '活跃工具数量超出上限。', {
+    throw new DomainError('BUDGET_EXCEEDED', t(['detail', 'activeToolCount']), {
       activeCount,
       maxActiveTools: budgets.maxActiveTools,
     });
   }
   const totalBytes = activeSchemaBytes([...alreadyActive, ...newSelections]);
   if (totalBytes > budgets.maxActiveSchemaBytes) {
-    throw new DomainError('BUDGET_EXCEEDED', '活跃 schema 总字节超出上限。', {
+    throw new DomainError('BUDGET_EXCEEDED', t(['detail', 'activeSchemaBytes']), {
       totalBytes,
       maxActiveSchemaBytes: budgets.maxActiveSchemaBytes,
     });

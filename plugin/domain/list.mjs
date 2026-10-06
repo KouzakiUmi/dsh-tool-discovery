@@ -8,6 +8,16 @@ import { canonicalJson } from './canonical.mjs';
 import { DomainError } from './errors.mjs';
 import { isNonEmptyString, isPlainObject } from './util.mjs';
 
+// --- i18n shim (added by the message migration) ---------------------------
+// These validators are pure and take no locale argument. The plugin resolves
+// one locale per activation, so bind the text accessor once here rather than
+// threading it through every signature. setLocaleForDomain() is called by the
+// adapter at activation; tests call it directly to exercise both languages.
+import { domainText } from './locale.mjs';
+const text = domainText;
+const t = (path) => text.t(path);
+
+
 /**
  * @param {{ clock:{now():number}, random:{bytes(n:number):Uint8Array}, ttlMs?:number }} deps
  */
@@ -87,7 +97,7 @@ export function paginateNames(args) {
     if (!acc.tryAdd(JSON.stringify(name))) {
       // 一个完整项都放不下 → 明确失败
       if (names.length === 0) {
-        throw new DomainError('BUDGET_EXCEEDED', '单个完整名称已超过结果字节预算。', {
+        throw new DomainError('BUDGET_EXCEEDED', t(['detail', 'nameOverByteBudget']), {
           maxBytes: budgets.maxListResultBytes,
         });
       }
@@ -141,7 +151,7 @@ export function paginateCategories(args) {
   for (; idx < allCards.length; idx++) {
     const card = allCards[idx];
     if (!acc.tryAdd(JSON.stringify(card))) {
-      if (cards.length === 0) throw new DomainError('BUDGET_EXCEEDED', '单个类别卡片超过结果字节预算。');
+      if (cards.length === 0) throw new DomainError('BUDGET_EXCEEDED', t(['detail', 'categoryCardOverByteBudget']));
       truncated = true;
       break;
     }
