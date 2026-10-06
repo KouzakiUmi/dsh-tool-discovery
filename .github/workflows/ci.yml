@@ -286,115 +286,189 @@ jobs:
             exit 1
           fi
           echo "all checks passed"
-
-  # Tarball build. Kept in the same workflow as the gates so an artifact can
-  # never be published from a tree the tests rejected — the artifact is a
-  # *consequence* of a green run, not an independent path to a release.
+  # Verified release asset, produced by every green main run.
   #
-  # pnpm pack honours package.json `files`, so the payload is exactly the
-  # plugin/adapters + plugin/domain + cordis.patch.yml surface declared there.
-  # It does NOT run any lifecycle script: this package declares none, and an
-  # unexpected one appearing later must fail rather than execute.
-  package:
-    name: Build tarball
+  # This mirrors the convention already used across your other plugin repos
+  # (dsh-subusage / dsh-guard): the asset is built once here, uploaded, and
+  # then consumed by the publish job. Building it in two places would let the
+  # published tarball drift from the tested tree.
+  #
+  # `--ignore-scripts` is mandatory, not defensive: `npm pack` would otherwise
+  # execute any lifecycle script a future edit might add, on a runner, before
+  # anyone has read it.
+  build-asset:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    name: Build release asset
     needs: [unit, identity, docs]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: 22
 
-      - name: Refuse lifecycle scripts
+      - name: Check the package surface is self-consistent
         run: |
-          set -euo pipefail
-          node -e "
-            const p = require('./package.json');
-            const scripts = Object.keys(p.scripts ?? {});
-            console.log('declared scripts:', scripts.join(' ') || '<none>');
-            // Judge by exit code, not printed text: 'node -p \"Boolean(x)\"'
-            // writes false to stdout yet still exits 0, which a shell \`if\`
-            // would read as \"hook present\". That made this step fail on the
-            // first CI run while every hook was in fact absent.
-            for (const hook of ['prepack', 'prepare', 'postpack']) {
-              if (p.scripts?.[hook]) {
-                console.error('::error::' + hook + ' script present; review it before packaging');
-                process.exit(1);
-              }
-            }
-          "
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const p = JSON.parse(readFileSync('package.json', 'utf8'));
+          const y = readFileSync('cordis.patch.yml', 'utf8');
+          const m = y.match(/^\s*name:\s*['"]?([^'"\n]+?)['"]?\s*$/m);
+          if (!m || m[1] !== p.name) {
+            throw new Error(`cordis.patch.yml name (${m?.[1]}) must equal package.json name (${p.name})`);
+          }
+          if (p.private !== true) {
+            throw new Error('package must stay private until an explicit publish decision');
+          }
+          console.log('name:', p.name, '| version:', p.version, '| files:', (p.files ?? []).join(', '));
+          NODE
 
-      - name: Verify the package surface is self-consistent
+      - name: Pack and validate release asset
         run: |
-          set -euo pipefail
-          node -e "
-            const p = require('./package.json');
-            const y = require('fs').readFileSync('cordis.patch.yml','utf8');
-            const m = y.match(/^\s*name:\s*['\"]?([^'\"\n]+?)['\"]?\s*\$/m);
-            if (!m || m[1] !== p.name) {
-              console.error('::error::cordis.patch.yml name must equal package.json name');
-              process.exit(1);
-            }
-            if (p.private !== true) {
-              console.error('::error::package must remain private until an explicit publish decision');
-              process.exit(1);
-            }
-            console.log('name:', p.name, '| files:', (p.files ?? []).join(', '));
-          "
-
-      - name: Pack
-        run: pnpm pack --pack-destination "$RUNNER_TEMP"
+          npm pack --ignore-scripts --json > pack.json
+          node --input-type=module <<'NODE'
+          import { readFileSync, renameSync } from 'node:fs';
+          const [{ filename }] = JSON.parse(readFileSync('pack.json', 'utf8'));
+          // Fixed artifact name: the publish job references it literally, and a
+          // version-stamped name would have to be discovered at publish time.
+          renameSync(filename, 'dsh-tool-discovery.tgz');
+          console.log('asset: dist/dsh-tool-discovery.tgz <-', filename);
+          NODE
 
       - name: Verify payload matches the declared files
         run: |
-          set -euo pipefail
-          tgz="$(ls "$RUNNER_TEMP"/*.tgz)"
-          echo "artifact: $(basename "$tgz")"
-          echo '--- payload top level ---'
-          tar -tzf "$tgz" | sed 's|^package/||' | cut -d/ -f1 | sort -u
+          # Nothing outside `files` may ship. A stray .npmrc or workflow inside
+          # the tarball would be handed to every installer.
+          tar -tzf dist/dsh-tool-discovery.tgz | grep -vE '^package/(package\.json|LICENSE|README(\.zh)?\.md|CHANGELOG\.md|cordis\.patch\.yml|plugin/(adapters|domain)/)' \
+            && { echo '::error::unexpected files in payload'; exit 1; } \
+            || echo 'ok: payload matches declared files'
 
-          # Nothing outside the declared surface may ship. A stray .npmrc or
-          # workflow inside the tarball would be published to every installer.
-          unexpected="$(tar -tzf "$tgz" | grep -vE '^package/(package\.json|LICENSE|README(\.zh)?\.md|CHANGELOG\.md|cordis\.patch\.yml|plugin/(adapters|domain)/)' || true)"
-          if [ -n "$unexpected" ]; then
-            echo "::error::unexpected files in payload:"
-            echo "$unexpected"
-            exit 1
-          fi
-          echo 'ok: payload matches declared files'
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: dsh-tool-discovery-tarball
-          path: ${{ runner.temp }}/dsh-tool-discovery-*.tgz
+          name: release-package
+          path: dist/dsh-tool-discovery.tgz
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7
 
-  # Tag-driven GitHub Release. Deliberately separate from `package`: an
-  # artifact is produced on every green run, a release only when a human tags.
-  release:
-    name: Publish release tarball
-    needs: [package]
-    if: startsWith(github.ref, 'refs/tags/v')
+  # Automatic release per main commit. Same shape as your other repos: a
+  # commit-specific tag keeps every green run installable, while the
+  # newest-commit check stops a slow build from clobbering `latest`.
+  publish:
+    name: Publish build release
+    needs: [build-asset]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
+    concurrency:
+      group: automatic-release-main
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-package
+          path: dist
+
+      - name: Prepare commit-specific release
+        id: metadata
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Authenticated API so it also works for a private repo; a failed
+          # query fails the job rather than publishing from an unknown head.
+          head=$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq '.object.sha')
+          if [ "$head" != "$COMMIT_SHA" ]; then
+            echo 'current=false' >> "$GITHUB_OUTPUT"
+            echo 'A newer main commit exists; skipping outdated release.'
+            exit 0
+          fi
+          echo 'current=true' >> "$GITHUB_OUTPUT"
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
+          const sha = process.env.COMMIT_SHA.slice(0, 12);
+          appendFileSync(process.env.GITHUB_OUTPUT, `tag=build-${sha}\nname=v${version} · ${sha}\n`);
+          NODE
+
+      - name: Publish GitHub Release
+        if: steps.metadata.outputs.current == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.metadata.outputs.tag }}
+          name: ${{ steps.metadata.outputs.name }}
+          target_commitish: ${{ github.sha }}
+          files: dist/dsh-tool-discovery.tgz
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          make_latest: true
+          prerelease: false
+
+  # Semantic-version releases. Separated from `publish` on purpose: a human
+  # tags v<version>, and a mismatched tag must fail rather than publish a
+  # release whose number disagrees with the manifest.
+  release:
+    name: Release (tag)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [unit, identity, docs]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: versioned-release-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: 22
 
-      - name: Pack
-        run: pnpm pack --pack-destination "$RUNNER_TEMP"
+      - name: Check tag matches package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
+          if (process.env.RELEASE_TAG !== `v${version}`) {
+            throw new Error(`tag ${process.env.RELEASE_TAG} must equal v${version}`);
+          }
+          console.log('tag matches version:', version);
+          NODE
 
-      - name: Attach to the release
+      - name: Run tests
+        run: node --test plugin/tests/unit/*.test.mjs
+
+      - name: Pack release asset
+        run: |
+          npm pack --ignore-scripts --json > pack.json
+          node --input-type=module <<'NODE'
+          import { readFileSync, renameSync } from 'node:fs';
+          const [{ filename }] = JSON.parse(readFileSync('pack.json', 'utf8'));
+          renameSync(filename, 'dsh-tool-discovery.tgz');
+          NODE
+
+      - name: Create versioned GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ runner.temp }}/dsh-tool-discovery-*.tgz
+          files: dist/dsh-tool-discovery.tgz
+          fail_on_unmatched_files: true
           generate_release_notes: true
+          # `latest` is owned by the automatic main releases; an older tag must
+          # not move it backwards.
+          make_latest: false
