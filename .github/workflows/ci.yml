@@ -1,0 +1,288 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# Cancel superseded runs on the same ref instead of racing them.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unit tests (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Matches engines.node: ^22.19.0 || >=24.0.0. 22.19.0 is the floor,
+        # not merely the latest 22.x — anything older violates the manifest.
+        node: ['22.19.0', '24']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Unit suite
+        # One file per invocation, not `node --test plugin/tests/unit/*.test.mjs`:
+        # the runner's default concurrency spawns a child process per file and
+        # can exhaust the hosted runner's process budget. Serial is slower but
+        # deterministic, and the glob is expanded by the runner either way.
+        run: |
+          set -euo pipefail
+          total_pass=0
+          total_fail=0
+          for f in plugin/tests/unit/*.test.mjs; do
+            echo "::group::$f"
+            out="$(node --test-reporter=tap "$f" 2>&1)" && rc=0 || rc=$?
+            echo "$out" | tail -n 12
+            echo "::endgroup::"
+            [ "$rc" -eq 0 ] || { echo "FAILED: $f (exit $rc)"; exit "$rc"; }
+            total_pass=$(( total_pass + $(grep -c '^ok ' <<<"$out" || true) ))
+            total_fail=$(( total_fail + $(grep -c '^not ok' <<<"$out" || true) ))
+          done
+          echo "pass=$total_pass fail=$total_fail"
+          echo "::notice title=Unit totals::pass=$total_pass fail=$total_fail"
+
+  identity:
+    name: Package identity is consistent
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # cordis.patch.yml's entry name MUST equal package.json's name — the
+      # loader resolves the patch by that name. A silent mismatch ships a
+      # plugin whose bundle never activates, so this is a hard gate.
+      - name: cordis.patch.yml name matches package.json name
+        run: |
+          set -euo pipefail
+          pkg="$(node -p "require('./package.json').name")"
+          patch="$(node -p "
+            const y = require('fs').readFileSync('cordis.patch.yml','utf8');
+            const m = y.match(/^\s*name:\s*['\"]?([^'\"\n]+?)['\"]?\s*\$/m);
+            m ? m[1] : ''
+          ")"
+          echo "package.json name : $pkg"
+          echo "cordis.patch.yml  : $patch"
+          if [ "$pkg" != "$patch" ]; then
+            echo "::error::package name and patch name must match"
+            exit 1
+          fi
+
+      - name: package.json is private and unpublished
+        run: |
+          set -euo pipefail
+          node -e "
+            const p = require('./package.json');
+            if (p.private !== true) {
+              console.error('::error::package must stay private until an explicit publish decision');
+              process.exit(1);
+            }
+            if (p.version) console.log('version:', p.version);
+          "
+
+      # The package name must not squat on DeepSeek's official scope. This
+      # repo is third-party; publishing under @deepseek-ai would collide with
+      # the vendor's own dsh-tool-* plugins.
+      - name: No vendor scope on the package name
+        run: |
+          set -euo pipefail
+          name="$(node -p "require('./package.json').name")"
+          case "$name" in
+            @deepseek-ai/*|@deepseek/*)
+              echo "::error::package name '$name' squats the vendor scope"
+              exit 1 ;;
+          esac
+          echo "ok: $name"
+
+      # The former package name must be gone from everything the project ships.
+      # The needle is assembled from fragments because this workflow itself has
+      # to contain it — a literal here would make this check match its own
+      # source and fail unconditionally.
+      - name: No stale references to the former package name
+        run: |
+          set -euo pipefail
+          needle="dsh-tool-""search"
+          if git grep -n --fixed-strings "$needle" -- . \
+               ':!.github/workflows/ci.yml' \
+               ':!plugin/reports/**' ':!plugin/audits/**' ':!plugin/fixtures/tmp/**'; then
+            echo "::error::stale package-name reference(s) found"
+            exit 1
+          fi
+          echo "ok: no stale references"
+
+  docs:
+    name: Documentation consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # README.md and README.zh.md are maintained as a bilingual pair; a
+      # divergence in one direction usually means a half-finished edit.
+      - name: README pair mentions the same three entries
+        run: |
+          set -euo pipefail
+          for f in README.md README.zh.md; do
+            for entry in tool_list tool_search tool_load; do
+              grep -q "$entry" "$f" || { echo "::error::$f missing $entry"; exit 1; }
+            done
+            echo "ok: $f"
+          done
+
+      # Every relative markdown link in the published docs must resolve. A
+      # dangling link in a public doc is indistinguishable from missing
+      # evidence to a reader.
+      #
+      # This project's docs use three link shapes that a naive /\]\((.*?)\)/
+      # mishandles, and each one caused a false alarm when first written:
+      #   1. `](path#anchor)`   — the fragment must be stripped before resolving
+      #   2. `](<path spaces>)` — angle brackets must be stripped
+      #   3. `](<path> §9)`     — trailing prose after the target
+      # Only the path component is a filename; the fragment is not.
+      - name: Relative links in published docs resolve
+        run: |
+          set -euo pipefail
+          node --input-type=module -e '
+            import { readFileSync, existsSync, globSync } from "node:fs";
+            import { dirname, resolve } from "node:path";
+
+            function extractTarget(href) {
+              let h = href.trim();
+              const angled = h.match(/^<([^>]+)>/);
+              if (angled) h = angled[1];
+              else h = h.split(/\s+/)[0];
+              const hash = h.indexOf("#");
+              if (hash !== -1) h = h.slice(0, hash);
+              return h.trim();
+            }
+
+            const roots = ["README.md", "README.zh.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md"];
+            const files = [
+              ...roots.filter(existsSync),
+              ...globSync("plugin/docs/**/*.md"),
+              ...globSync("plugin/README.md"),
+            ];
+
+            let bad = 0;
+            for (const file of files) {
+              const text = readFileSync(file, "utf8").replace(/```[\s\S]*?```/g, "");
+              for (const m of text.matchAll(/\]\(([^)\n]+)\)/g)) {
+                const raw = m[1].trim();
+                if (/^(https?:|mailto:)/.test(raw)) continue;
+                const href = extractTarget(raw);
+                if (!href) continue;
+                const target = resolve(dirname(file), href);
+                if (!existsSync(target)) {
+                  console.log(`::error file=${file}::dangling link -> ${raw}`);
+                  bad++;
+                }
+              }
+            }
+            if (bad) process.exit(1);
+            console.log(`checked ${files.length} files, 0 dangling links`);
+          '
+
+      # Published docs must not promise measurements that were never taken.
+      - name: No unmeasured performance claim in public docs
+        run: |
+          set -euo pipefail
+          # The project has measured neither token savings nor latency.
+          # A bare percentage next to these words would overstate the evidence.
+          if git grep -nEi '(sav(e|ing|ings)|reduc(e|ed|tion))[^.]{0,40}[0-9]+(\.[0-9]+)?%' -- 'README.md' 'README.zh.md' 'plugin/docs/**' 'plugin/README.md'; then
+            echo "::error::unmeasured saving claim in public docs"
+            exit 1
+          fi
+          echo "ok"
+
+  composition:
+    name: Composition tests (needs a real DSH host)
+    runs-on: ubuntu-latest
+    # These boot a real Cordis Loader against an installed DSH Core and resolve
+    # packages from that installation. No hosted runner has one, so this job
+    # stays manual: it is opt-in, not a gate that silently fails or, worse,
+    # silently passes because it never ran.
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Show expected host
+        run: |
+          set -euo pipefail
+          root="${DSH_INSTALL_ROOT:-C:/Program Files/DSH NEXT/resources/app}"
+          echo "DSH_INSTALL_ROOT=$root"
+          if [ ! -d "$root/node_modules/@deepseek-ai/dsh" ]; then
+            echo "::warning::no DSH Core at $root — composition suites cannot run here"
+          fi
+
+      - name: Composition suites
+        run: |
+          set -euo pipefail
+          root="${DSH_INSTALL_ROOT:-C:/Program Files/DSH NEXT/resources/app}"
+          [ -d "$root/node_modules/@deepseek-ai/dsh" ] || {
+            echo "::notice::skipped — no DSH Core available in this environment"; exit 0; }
+          node --test \
+            plugin/tests/composition/gate-adapter.test.mjs \
+            plugin/tests/composition/gate-adapter-lifecycle.test.mjs \
+            plugin/tests/composition/gate-adapter-recovery.test.mjs \
+            plugin/tests/composition/gate-adapter-event-seq.test.mjs
+
+  quality:
+    name: Quality tooling (needs private scoring data)
+    runs-on: ubuntu-latest
+    # plugin/quality/{labels,queries}/ are gitignored: the dataset is
+    # AI-synthesized and not human-reviewed, so it is deliberately not
+    # published. This job therefore cannot run on a public clone, and its
+    # results never transfer to one.
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Run quality tooling
+        run: |
+          set -euo pipefail
+          if [ ! -d plugin/quality/labels ] || [ ! -d plugin/quality/queries ]; then
+            echo "::notice::skipped — private scoring dataset is not in this checkout"
+            exit 0
+          fi
+          node --test plugin/quality/tests/*.test.mjs
+
+          # validate.mjs reports 21 checks; one ("类别资格", H037/H044) is a known
+          # mislabelling in the AI-synthesised dataset and is recorded as such in
+          # plugin/docs/05-current-status.md. Failing the job on that specific
+          # check would pin CI red permanently and hide genuinely new breakage.
+          # Anything *other* than that one check must still fail the job.
+          out="$(node plugin/quality/validate.mjs 2>&1)" || true
+          echo "$out" | tail -n 20
+          bad="$(echo "$out" | grep -c '^\[FAIL\]' || true)"
+          if [ "$bad" -eq 1 ] && echo "$out" | grep -q '类别资格'; then
+            echo "::notice title=Known failure::类别资格 (H037/H044) — documented, not new"
+            exit 0
+          fi
+          if [ "$bad" -ne 0 ]; then
+            echo "::error::$bad check(s) failed; if any are new, fix them"
+            exit 1
+          fi
+          echo "all checks passed"

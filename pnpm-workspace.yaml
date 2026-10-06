@@ -1,0 +1,9 @@
+# 本仓库是单包仓库（根包即插件包），没有 workspace 成员。
+#
+# 历史遗留：此处曾列有一组 @deepseek-ai/*@0.0.1-rc.2 的
+# minimumReleaseAgeExclude 豁免。那是旧 rc 阶段的安装树版本，与当前目标安装
+# （@deepseek-ai/dsh@0.2.1-alpha.1）无关，且本仓库不安装任何依赖——
+# 组合测试经 plugin/contracts/install-resolver.mjs 直接从消费安装解析包。
+# 保留旧豁免会让读者误以为仓库依赖那些 rc 包，故随基线一并清除。
+packages:
+  - .

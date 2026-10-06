@@ -1,0 +1,3 @@
+- insert:
+    - id: tool-search
+      name: 'dsh-tool-discovery'

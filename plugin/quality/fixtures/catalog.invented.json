@@ -1,0 +1,795 @@
+{
+  "schemaVersion": "quality-fixture-v1",
+  "fixtureKind": "invented-synthetic-catalog",
+  "notLiveRegistry": true,
+  "synthetic": true,
+  "notice": "本文件是人工虚构的能力 fixtures，仅用于在阶段 0 门禁通过之前准备独立验收数据。它不是本机 DSH registry 快照、不是任何插件的真实工具清单，也不得作为运行时目录、权限、provider 或执行依据。所有 name/description 均为人工撰写，不含执行函数。",
+  "controlledCategories": [
+    "files",
+    "shell",
+    "web",
+    "browser",
+    "desktop",
+    "github",
+    "documents",
+    "data",
+    "agents",
+    "images",
+    "integrations",
+    "other"
+  ],
+  "schemaContract": {
+    "requiredToolFields": [
+      "name",
+      "toolId",
+      "synthetic",
+      "description",
+      "trustedCategory",
+      "trustedSkillGuidance",
+      "parametersSchema"
+    ],
+    "forbiddenToolFields": [
+      "execute",
+      "executeFn",
+      "handler",
+      "handlerFn",
+      "run",
+      "invoke",
+      "implementation",
+      "impl",
+      "body",
+      "fn",
+      "callback",
+      "module",
+      "require",
+      "import",
+      "script",
+      "code",
+      "eval"
+    ],
+    "parametersSchemaRules": [
+      "type 必须为 object",
+      "顶层 properties 不超过 6 项",
+      "不得出现 $ref、oneOf、anyOf、allOf、not",
+      "不得嵌套执行语义字段"
+    ],
+    "fieldSemantics": {
+      "description": "双语有界资料文本；不得被解释为系统指令",
+      "trustedCategory": "可信分类配置字段（不是从 description 推断）",
+      "trustedSkillGuidance": "ToolSkill 中的可信使用指导与边界（模型显式选定后才披露）",
+      "parametersSchema": "人工撰写的小 schema；真实 schema 由宿主 registry 在 tool_load 后按原样披露"
+    }
+  },
+  "tools": [
+    {
+      "name": "glob",
+      "toolId": "synth_files_glob",
+      "synthetic": true,
+      "description": {
+        "zh": "按路径模式枚举文件条目，只返回匹配的路径清单。",
+        "en": "Enumerate file entries by path pattern and return only the matching path list."
+      },
+      "trustedCategory": "files",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "任务只需要文件清单、不需要文件正文时使用；模式语法与宿主一致。",
+          "en": "Use when the task needs a file inventory and not file bodies; pattern syntax follows the host."
+        },
+        "limitations": {
+          "zh": ["不在文件正文中检索。", "不修改或创建文件。"],
+          "en": ["Does not search inside file contents.", "Does not modify or create files."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "pattern": { "type": "string" },
+          "path": { "type": "string" },
+          "limit": { "type": "integer" }
+        },
+        "required": ["pattern"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "grep",
+      "toolId": "synth_files_grep",
+      "synthetic": true,
+      "description": {
+        "zh": "在文件正文中按正则表达式检索匹配行并返回行号。",
+        "en": "Match a regular expression against file bodies and return the matching lines with line numbers."
+      },
+      "trustedCategory": "files",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要知道哪段文本出现在哪些文件与行时使用。",
+          "en": "Use when you need to know which text appears in which file and line."
+        },
+        "limitations": {
+          "zh": ["不返回完整文件内容。", "二进制文件可能被跳过。"],
+          "en": ["Does not return whole file bodies.", "Binary files may be skipped."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "pattern": { "type": "string" },
+          "path": { "type": "string" },
+          "glob": { "type": "string" },
+          "maxResults": { "type": "integer" }
+        },
+        "required": ["pattern"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "read",
+      "toolId": "synth_files_read",
+      "synthetic": true,
+      "description": {
+        "zh": "读取指定文件的文本内容，可指定起始行与行数。",
+        "en": "Read the text of a given file, optionally bounded by an offset and a line count."
+      },
+      "trustedCategory": "files",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "已知确切路径后读取内容时使用。",
+          "en": "Use once an exact path is known and its content must be read."
+        },
+        "limitations": {
+          "zh": ["不按名称搜索文件。", "大文件需要分段读取。"],
+          "en": ["Does not search for files by name.", "Large files must be read in segments."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "offset": { "type": "integer" },
+          "limit": { "type": "integer" }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "edit",
+      "toolId": "synth_files_edit",
+      "synthetic": true,
+      "description": {
+        "zh": "用字面文本替换改写已有文件的片段。",
+        "en": "Rewrite a fragment of an existing file by replacing literal text."
+      },
+      "trustedCategory": "files",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "目标片段已定位、需要就地改写时使用。",
+          "en": "Use when the target fragment is located and must be rewritten in place."
+        },
+        "limitations": {
+          "zh": ["必须先读取目标文件。", "不用于创建新文件。"],
+          "en": ["The target file must be read first.", "Not for creating new files."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "oldString": { "type": "string" },
+          "newString": { "type": "string" }
+        },
+        "required": ["path", "oldString", "newString"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "run_command",
+      "toolId": "synth_shell_run_command",
+      "synthetic": true,
+      "description": {
+        "zh": "在受管 shell 中执行命令并返回标准输出与错误。",
+        "en": "Execute a command in the managed shell and return standard output and error."
+      },
+      "trustedCategory": "shell",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要运行构建、测试或脚本时使用。",
+          "en": "Use to run builds, tests or scripts."
+        },
+        "limitations": {
+          "zh": ["受审批与沙箱策略约束。", "不适合长期驻留进程。"],
+          "en": ["Subject to approval and sandbox policy.", "Not for long-running resident processes."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "command": { "type": "string" },
+          "cwd": { "type": "string" },
+          "timeoutMs": { "type": "integer" }
+        },
+        "required": ["command"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "web_fetch",
+      "toolId": "synth_web_web_fetch",
+      "synthetic": true,
+      "description": {
+        "zh": "抓取给定 HTTP(S) 地址并返回解码后的文本内容。",
+        "en": "Fetch a given HTTP(S) address and return its decoded textual content."
+      },
+      "trustedCategory": "web",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要引用远端文本原文、且不需要页面交互时使用。",
+          "en": "Use when remote textual content must be quoted and no page interaction is needed."
+        },
+        "limitations": {
+          "zh": ["不执行页面脚本。", "登录后才可见的内容可能不完整。"],
+          "en": ["Does not run page scripts.", "Content behind a login may be incomplete."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string" }
+        },
+        "required": ["url"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "web_search",
+      "toolId": "synth_web_web_search",
+      "synthetic": true,
+      "description": {
+        "zh": "按关键词检索公开互联网并返回结果链接清单。",
+        "en": "Query the public internet by keywords and return a list of result links."
+      },
+      "trustedCategory": "web",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要先发现外部资料入口时使用。",
+          "en": "Use to discover entry points to external material."
+        },
+        "limitations": {
+          "zh": ["不返回页面正文。", "不保证结果时效。"],
+          "en": ["Does not return page bodies.", "Result freshness is not guaranteed."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "queries": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["queries"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_open",
+      "toolId": "synth_browser_browser_open",
+      "synthetic": true,
+      "description": {
+        "zh": "在受管浏览器标签页中打开一个地址。",
+        "en": "Open an address in a managed browser tab."
+      },
+      "trustedCategory": "browser",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要操作页面或观察渲染结果时先打开页面。",
+          "en": "Open the page first when it must be manipulated or its rendering observed."
+        },
+        "limitations": {
+          "zh": ["不读取页面源码。", "需要可用浏览器会话。"],
+          "en": ["Does not read page source.", "Requires a usable browser session."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string" }
+        },
+        "required": ["url"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_snapshot",
+      "toolId": "synth_browser_browser_snapshot",
+      "synthetic": true,
+      "description": {
+        "zh": "返回当前页面渲染后的可访问性结构与元素引用。",
+        "en": "Return the rendered accessibility structure and element references of the current page."
+      },
+      "trustedCategory": "browser",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要页面结构或元素引用以便后续点击时使用。",
+          "en": "Use to obtain page structure or element references before clicking."
+        },
+        "limitations": {
+          "zh": ["不是原始 HTML 源码。", "元素引用会被后续操作作废。"],
+          "en": ["Not raw HTML source.", "Element references are invalidated by later actions."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "target": { "type": "string" }
+        },
+        "required": ["target"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "browser_click",
+      "toolId": "synth_browser_browser_click",
+      "synthetic": true,
+      "description": {
+        "zh": "在受管浏览器中点击给定元素。",
+        "en": "Click a given element inside the managed browser."
+      },
+      "trustedCategory": "browser",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要触发页面交互（按钮、链接、提交）时使用。",
+          "en": "Use to trigger page interaction such as buttons, links or submissions."
+        },
+        "limitations": {
+          "zh": ["需要先取得元素引用。", "不操作桌面原生窗口。"],
+          "en": ["Requires an element reference first.", "Does not drive native desktop windows."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "ref": { "type": "string" },
+          "button": { "type": "string" }
+        },
+        "required": ["ref"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "desktop_type",
+      "toolId": "synth_desktop_desktop_type",
+      "synthetic": true,
+      "description": {
+        "zh": "向已经打开的桌面应用窗口写入文本。",
+        "en": "Write text into an already open desktop application window."
+      },
+      "trustedCategory": "desktop",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "宿主原生应用需要键盘输入时使用。",
+          "en": "Use when a native host application needs keyboard input."
+        },
+        "limitations": {
+          "zh": ["不驱动网页内容。", "需要目标窗口存在。"],
+          "en": ["Does not drive web content.", "The target window must exist."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string" },
+          "windowId": { "type": "integer" }
+        },
+        "required": ["text"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "github_list_pull_requests",
+      "toolId": "synth_github_list_pull_requests",
+      "synthetic": true,
+      "description": {
+        "zh": "列出仓库的拉取请求，可按状态与排序筛选。",
+        "en": "List a repository pull request set, filtered by state and ordering."
+      },
+      "trustedCategory": "github",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要拉取请求清单（编号、状态、时间）时使用。",
+          "en": "Use when a pull request inventory (numbers, state, timing) is needed."
+        },
+        "limitations": {
+          "zh": ["不按正文关键词检索。", "结果分页返回。"],
+          "en": ["Does not search by body keywords.", "Results are paginated."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "owner": { "type": "string" },
+          "repo": { "type": "string" },
+          "state": { "type": "string" },
+          "sort": { "type": "string" }
+        },
+        "required": ["owner", "repo"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "github_search_pull_requests",
+      "toolId": "synth_github_search_pull_requests",
+      "synthetic": true,
+      "description": {
+        "zh": "按查询语法在拉取请求集合中检索匹配项。",
+        "en": "Search the pull request set with a query syntax and return matching items."
+      },
+      "trustedCategory": "github",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要按作者、标题词或改动内容定位某个拉取请求时使用。",
+          "en": "Use to locate a specific pull request by author, title word or changed content."
+        },
+        "limitations": {
+          "zh": ["返回匹配子集，不是完整清单。", "查询语法需遵循宿主规则。"],
+          "en": ["Returns a matching subset, not the full inventory.", "Query syntax follows host rules."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "order": { "type": "string" }
+        },
+        "required": ["query"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "github_get_file_contents",
+      "toolId": "synth_github_get_file_contents",
+      "synthetic": true,
+      "description": {
+        "zh": "读取远端仓库中某个路径的文件内容。",
+        "en": "Read the content of a file at a path inside a remote repository."
+      },
+      "trustedCategory": "github",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要远端仓库的文件正文时使用。",
+          "en": "Use when the remote repository file body is needed."
+        },
+        "limitations": {
+          "zh": ["不回写仓库。", "大文件可能被截断。"],
+          "en": ["Does not write back to the repository.", "Large files may be truncated."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "owner": { "type": "string" },
+          "repo": { "type": "string" },
+          "path": { "type": "string" },
+          "ref": { "type": "string" }
+        },
+        "required": ["owner", "repo", "path"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "docx_read",
+      "toolId": "synth_documents_docx_read",
+      "synthetic": true,
+      "description": {
+        "zh": "读取 Word 文档的文本与段落结构。",
+        "en": "Read the text and paragraph structure of a Word document."
+      },
+      "trustedCategory": "documents",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要提取文档要点或段落时使用。",
+          "en": "Use to extract document points or paragraphs."
+        },
+        "limitations": {
+          "zh": ["不渲染版式。", "不修改文档。"],
+          "en": ["Does not render layout.", "Does not modify the document."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "docx_write",
+      "toolId": "synth_documents_docx_write",
+      "synthetic": true,
+      "description": {
+        "zh": "创建或改写 Word 文档内容。",
+        "en": "Create or rewrite the content of a Word document."
+      },
+      "trustedCategory": "documents",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要把结论写进文档或替换段落时使用。",
+          "en": "Use to write conclusions into a document or replace paragraphs."
+        },
+        "limitations": {
+          "zh": ["不适用于纯文本文件。", "复杂版式支持有限。"],
+          "en": ["Not for plain text files.", "Complex layout support is limited."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "content": { "type": "string" }
+        },
+        "required": ["path", "content"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "xlsx_read",
+      "toolId": "synth_data_xlsx_read",
+      "synthetic": true,
+      "description": {
+        "zh": "读取电子表格的工作表与单元格数据。",
+        "en": "Read worksheet and cell data from a spreadsheet."
+      },
+      "trustedCategory": "data",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要取表格数据或公式结果时使用。",
+          "en": "Use to obtain tabular data or formula results."
+        },
+        "limitations": {
+          "zh": ["不写入表格。", "不解析图片型数据。"],
+          "en": ["Does not write to the workbook.", "Does not interpret image data."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "sheet": { "type": "string" }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "xlsx_write",
+      "toolId": "synth_data_xlsx_write",
+      "synthetic": true,
+      "description": {
+        "zh": "创建或写入电子表格并保存为文件。",
+        "en": "Create or write a spreadsheet and save it as a file."
+      },
+      "trustedCategory": "data",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要导出、合并或生成表格结果时使用。",
+          "en": "Use to export, merge or produce tabular results."
+        },
+        "limitations": {
+          "zh": ["不读取现有数据。", "图表支持有限。"],
+          "en": ["Does not read existing data.", "Chart support is limited."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "rows": { "type": "array", "items": { "type": "array" } }
+        },
+        "required": ["path", "rows"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "spawn_agent",
+      "toolId": "synth_agents_spawn_agent",
+      "synthetic": true,
+      "description": {
+        "zh": "启动一个子代理执行独立任务并取其结论。",
+        "en": "Start a child agent for an independent task and take its conclusion."
+      },
+      "trustedCategory": "agents",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要把可独立的工作放到另一个执行上下文时使用。",
+          "en": "Use to move genuinely independent work into another execution context."
+        },
+        "limitations": {
+          "zh": ["子代理不共享父代理上下文。", "不适合需要即时往返的任务。"],
+          "en": ["The child does not share the parent context.", "Not for tasks needing immediate back-and-forth."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "prompt": { "type": "string" },
+          "description": { "type": "string" }
+        },
+        "required": ["prompt"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "agent_send_message",
+      "toolId": "synth_agents_agent_send_message",
+      "synthetic": true,
+      "description": {
+        "zh": "向已经存在的子代理追加一条消息。",
+        "en": "Append a message to an already existing child agent."
+      },
+      "trustedCategory": "agents",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要继续追问或补充要求时使用。",
+          "en": "Use to follow up with further questions or requirements."
+        },
+        "limitations": {
+          "zh": ["需要已有子代理标识。", "不能启动新代理。"],
+          "en": ["Requires an existing child agent id.", "Cannot start a new agent."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": { "type": "string" },
+          "message": { "type": "string" }
+        },
+        "required": ["agentId", "message"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "view_image",
+      "toolId": "synth_images_view_image",
+      "synthetic": true,
+      "description": {
+        "zh": "查看已有图片并把图像内容交给模型。",
+        "en": "View an existing image and hand its visual content to the model."
+      },
+      "trustedCategory": "images",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要理解截图、图表或照片内容时使用。",
+          "en": "Use to understand screenshots, charts or photographs."
+        },
+        "limitations": {
+          "zh": ["不修改图片。", "不产生新图像。"],
+          "en": ["Does not modify the image.", "Does not produce new imagery."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "image_generate",
+      "toolId": "synth_images_image_generate",
+      "synthetic": true,
+      "description": {
+        "zh": "按文字提示生成新的位图图像。",
+        "en": "Generate a new raster image from a textual prompt."
+      },
+      "trustedCategory": "images",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要新插画、封面或素材时使用。",
+          "en": "Use when new illustration, cover art or assets are needed."
+        },
+        "limitations": {
+          "zh": ["风格参考图需要另行提供。", "不做像素级修图。"],
+          "en": ["Style references must be provided separately.", "Not for pixel-level retouching."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "prompt": { "type": "string" },
+          "size": { "type": "string" }
+        },
+        "required": ["prompt"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "image_edit",
+      "toolId": "synth_images_image_edit",
+      "synthetic": true,
+      "description": {
+        "zh": "以已有图片为输入按提示修改或重绘该图。",
+        "en": "Take an existing image as input and modify or redraw it from a prompt."
+      },
+      "trustedCategory": "images",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要改色、去水印或重绘既有画面时使用。",
+          "en": "Use to recolor, remove marks or redraw an existing picture."
+        },
+        "limitations": {
+          "zh": ["必须提供源图。", "不能替代从零生成新图。"],
+          "en": ["A source image is required.", "Not a substitute for generating from scratch."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "prompt": { "type": "string" }
+        },
+        "required": ["path", "prompt"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "context_docs_lookup",
+      "toolId": "synth_integrations_context_docs_lookup",
+      "synthetic": true,
+      "description": {
+        "zh": "在已接入的内部文档服务中检索条目。",
+        "en": "Search entries inside an already connected internal documentation service."
+      },
+      "trustedCategory": "integrations",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要团队内部约定或流程文档时使用。",
+          "en": "Use for internal team conventions or process documentation."
+        },
+        "limitations": {
+          "zh": ["只覆盖已接入的服务。", "不访问公开互联网。"],
+          "en": ["Covers connected services only.", "Does not reach the public internet."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "space": { "type": "string" }
+        },
+        "required": ["query"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "unit_convert",
+      "toolId": "synth_other_unit_convert",
+      "synthetic": true,
+      "description": {
+        "zh": "在常见物理单位之间换算数值。",
+        "en": "Convert a numeric value between common physical units."
+      },
+      "trustedCategory": "other",
+      "trustedSkillGuidance": {
+        "usage": {
+          "zh": "需要单位换算时使用。",
+          "en": "Use when a unit conversion is required."
+        },
+        "limitations": {
+          "zh": ["只支持已登记的单位。", "不做数值推导。"],
+          "en": ["Only registered units are supported.", "Does not perform numeric derivation."]
+        }
+      },
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "value": { "type": "number" },
+          "from": { "type": "string" },
+          "to": { "type": "string" }
+        },
+        "required": ["value", "from", "to"],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "name": "dsh-tool-discovery",
+  "description": "Progressive tool discovery for DSH: three-entry control protocol with a host-independent domain kernel and a DSH adapter (source baseline, not published to npm)",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KouzakiUmi/dsh-tool-discovery.git"
+  },
+  "homepage": "https://github.com/KouzakiUmi/dsh-tool-discovery#readme",
+  "bugs": {
+    "url": "https://github.com/KouzakiUmi/dsh-tool-discovery/issues"
+  },
+  "main": "./plugin/adapters/dsh/index.mjs",
+  "exports": {
+    ".": "./plugin/adapters/dsh/index.mjs",
+    "./domain": "./plugin/domain/index.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "plugin/adapters/",
+    "plugin/domain/",
+    "cordis.patch.yml"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/dsh": "0.2.1-alpha.1",
+    "@deepseek-ai/dsh-tools": "0.2.1-alpha.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh": {
+      "optional": false
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": false
+    }
+  },
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test plugin/tests/unit/*.test.mjs",
+    "test:composition": "node --test plugin/tests/composition/gate-adapter.test.mjs plugin/tests/composition/gate-adapter-lifecycle.test.mjs plugin/tests/composition/gate-adapter-recovery.test.mjs plugin/tests/composition/gate-adapter-event-seq.test.mjs",
+    "check:quality": "node plugin/quality/validate.mjs"
+  }
+}

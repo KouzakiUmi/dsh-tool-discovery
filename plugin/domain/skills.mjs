@@ -1,0 +1,70 @@
+// progressive-v2/domain/skills.mjs
+// 可信工具技能:只补使用指导与边界,不重复 schema。
+// 技能载荷若复述 schema(parameters/schema/description/examples)即拒绝,避免双份累积。
+import { utf8Bytes } from './canonical.mjs';
+import { DomainError } from './errors.mjs';
+import { isPlainObject } from './util.mjs';
+
+const FORBIDDEN_SKILL_KEYS = Object.freeze(['parameters', 'schema', 'description', 'examples']);
+
+/**
+ * 校验技能载荷:不得复述 schema,字段须与条目版本对齐。
+ * @param {import('./catalog.mjs').CatalogEntry} entry
+ */
+export function validateSkill(entry) {
+  const s = entry.skill;
+  if (!s) return;
+  for (const k of Object.keys(s)) {
+    if (FORBIDDEN_SKILL_KEYS.includes(k)) {
+      throw new DomainError('INCOMPATIBLE_COMPOSITION', `技能载荷包含禁止字段: ${k}`);
+    }
+  }
+  if (s.skillRevision !== entry.skillRevision) {
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', '技能版本与条目不一致。');
+  }
+}
+
+/**
+ * 投影可序列化的技能卡片(不含 schema / nativeSchema)。
+ * @param {import('./catalog.mjs').CatalogEntry} entry
+ * @returns {{toolId:string, skillRevision:string, usage:string, limitations:string[]}|null}
+ */
+export function projectSkill(entry) {
+  validateSkill(entry);
+  if (!entry.skill) return null;
+  return {
+    toolId: entry.toolId,
+    skillRevision: entry.skill.skillRevision,
+    usage: entry.skill.usage,
+    limitations: entry.skill.limitations.slice(),
+  };
+}
+
+/**
+ * 一次 load 的技能总字节。
+ * @param {Array<{toolId:string, skillRevision:string, usage:string, limitations:string[]}|null>} skills
+ */
+export function skillBytes(skills) {
+  let total = 0;
+  for (const s of skills) {
+    if (!s) continue;
+    total += utf8Bytes(JSON.stringify(s));
+  }
+  return total;
+}
+
+/**
+ * 校验一次 load 的技能总字节预算(超限 → BUDGET_EXCEEDED,不截断技能正文)。
+ * @param {Array<object|null>} skills
+ * @param {number} maxSkillBytes
+ */
+export function assertSkillBudget(skills, maxSkillBytes) {
+  const bytes = skillBytes(skills);
+  if (bytes > maxSkillBytes) {
+    throw new DomainError('BUDGET_EXCEEDED', '本次技能响应超过字节预算。', { bytes, maxSkillBytes });
+  }
+  return bytes;
+}
+
+/** 供测试:技能载荷是否为 plain object。 */
+export { isPlainObject };

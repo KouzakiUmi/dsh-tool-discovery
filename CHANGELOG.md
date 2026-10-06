@@ -1,0 +1,181 @@
+# Changelog
+
+All notable changes to this project are recorded here.
+
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## Reading this changelog
+
+The source baseline is published on `main` as its single initial-publish commit. This repository
+was rebuilt on 2026-10-06: the earlier history — including the `2a1f9c0` and `257ddc0` commits,
+which are quoted in older entries below — was rewritten away and **no longer resolves**. Nothing
+here has been tagged or released on GitHub, **not** published to npm, **not** installed into a DSH
+profile or DSH GUI, and has never been loaded by a running DSH. Publishing a source commit,
+releasing a package, and accepting a product are three different events, and none of them
+substitutes for another.
+
+Nothing in this file is a product-acceptance statement. For the authoritative per-item status —
+what is verified, what is unverified, and what this version refuses to support — see
+[`plugin/docs/05-current-status.md`](plugin/docs/05-current-status.md).
+
+## [Unreleased]
+
+Direction branch `fix/lifecycle-recovery-coverage`. **Not merged.** The implementation and the code
+review ran on the **same model in different sessions**, and the documentation alignment and this
+round's review likewise. Both chains therefore carry a **correlated error from the shared model
+source** and are **not equivalent to independent cross-model evidence**. The primary evidence in
+this round is **machine-reproducible assertions and command exit codes**; the pull request is left to
+maintainer review and is **not auto-merged**. None of this is product acceptance, and none of it puts
+the branch on `main`.
+
+### Added
+
+- `plugin/tests/composition/gate-adapter-event-seq.test.mjs` — 8 composition cases covering the
+  event-`seq` gate and the sealed state: a malformed canonical `result` fails closed, a repeat valid
+  `result` does not revive a sealed state, a restore after sealing does not return to ready,
+  non-canonical tools and ordinary events are not sealed, the own-only boundary is not widened, and
+  the outbound request after sealing carries only the three entries. Malformed `seq` values are
+  injected synthetically, since the host does not naturally produce them.
+- `plugin/tests/composition/gate-adapter-recovery.test.mjs` — 13 composition cases, 8 of them
+  against a real Cordis Loader and a real host fork, covering fail-closed recovery on a missing
+  session query and on a failed `readSession`, real fork isolation, unload and candidate load
+  across a cold restart, registry churn, and recovery intersected with current eligibility.
+- `plugin/tests/composition/fixtures/registry-churn.mjs` — fixture that triggers a real
+  `tools/change` generation bump.
+
+### Fixed
+
+- **A malformed canonical event `seq` did not stop execution.** When a canonical `tool`/`result`
+  pair carried an `undefined`, `NaN`, non-integer, negative, unsafe-integer, `null`, or missing
+  `seq`, the undo was dropped while the pair was still counted as allowed. A valid `seq` is now
+  required to be a non-negative safe integer, and events are classified by whether they affect
+  state. An uncertain pending state call is sealed conservatively: the calls buffer is cleared and
+  gates are placed before and after restore, `activeSelectedNames` returns `[]` while not ready so
+  the outbound **mock provider** recording's final `GenerateOptions.tools` carries only the three
+  entries, and a repeat of a pending event does not revive the sealed state. This is an
+  availability-for-safety trade, not a universal claim: a malformed `seq` with a pending state call
+  seals, a valid `seq` does not pass through this gate, and a valid-`seq` damaged load is
+  unauthorised because it cannot be paired. Scope is `journal.mjs` only — projection, kernel, and
+  guard are unchanged. On the real bus, `session.append` validates against its own `SessionSeq`
+  before emitting, so a malformed or forged `seq` never reaches the journal; the defence is
+  therefore exercised by driving `journal.onEvent` directly, and a real malformed bus is **not**
+  covered.
+
+- **A cold-recovery case that passed vacuously.** The previous `L01` case disposed its composition,
+  which deleted the session `jsonl`, and read state through a `ctx.expose` handle that was always
+  `undefined`, so the assertion block was skipped entirely. The harness is fixed and the case now
+  asserts strictly.
+- **Fork parent events entered the child session's restore fold.** *Proven:* a parent session's
+  `tool_load` canonical pairs did reach the child's restore folding, where the kernel rejected them
+  on `revision-mismatch`. *Not proven, and not claimed:* that a parent tool was ever activated,
+  disclosed, or executed in the child — the child's first request carried only the three entries
+  and a guessed parent tool never executed. Fork `reset` therefore held only because `revision`
+  happened to differ between parent and child, with no ownership semantics behind it.
+- **Own-only `seq` boundary in `plugin/adapters/dsh/journal.mjs`.** Only canonical pairs at
+  `seq >= inheritedEventCount` are folded. The boundary is cross-checked between the public
+  `query.readSession()` result and the live session; filtering works on `seq` values rather than a
+  blind array slice; the merged stream must be contiguous from 0. Restore folding, the
+  recovery-window buffer, and the live event path all apply the same boundary, so the inherited
+  prefix is never folded, never observed, and never buffered. A missing, malformed, conflicting,
+  or out-of-range boundary, or a gap in the `seq` stream, fails closed.
+
+### Not claimed by this work
+
+- The `readSession`-failure case is driven by **fault injection**; it does not represent a natural
+  host fault.
+- Cases `L03b1`–`L03b4` are **synthetic counterexamples**: they establish the boundary's semantics
+  without claiming the host naturally produces malformed or same-`revision` event streams. The
+  malformed `seq` values in the event-`seq` suite are likewise synthetic.
+- **The `seq` gate and the event-`seq` suite have been independently reviewed and passed, within a
+  scope limited to this round's three code files.** That is a code-level review result, not product
+  acceptance, and it does not cover any source outside those three files.
+- The author's assertion that host `seq` values are well-formed holds **only within the contract
+  actually read**; this does not claim corruption is impossible. The end-to-end value of a
+  corrupted persisted log is still unverified, and long fork sessions remain unverified at the
+  product level.
+- Compaction, the crash/fsync window, HMR, the receipt meta channel, and multi-scope concurrent
+  registry churn remain uncovered. Coverage is not upgraded for them.
+- The frozen quality result (21 checks, 20 PASS / 1 FAIL) and the public test prerequisites are
+  unchanged by this branch.
+
+## [0.1.0] — prepared 2026-10-06, not published
+
+> **Outcome, added after the fact:** this tree became the initial publish commit on `main`.
+> The history was later rebuilt, so the commit IDs named in older entries no longer resolve; the
+> entry below is kept as it was written at freeze time.
+> No tag, no GitHub release, no npm publish, and no profile install accompanied it.
+
+The first source baseline. This entry records what the tree contains; it does **not** describe a
+publication event. As of this writing nothing has been pushed or released: no tag, no GitHub
+release, no npm publish, no installation into any profile. The date is the day the tree was
+frozen, not a release date.
+
+### Added
+
+- `plugin/domain/` — host-independent kernel: catalog, paginated list, natural-language search,
+  candidate refs, canonical receipts, session state machine, budgets, error codes. Imports only
+  `node:crypto` and its own relative modules.
+- `plugin/adapters/dsh/` — DSH adapter: entry definitions, registry adapter, journal,
+  system-prompt projection, execution guard, session and registry-change lifecycle, and a
+  whole-group rollback path.
+- Three-entry control protocol — `tool_list` / `tool_search` / `tool_load` — replacing a
+  single-entry approach with a host-independent kernel behind it.
+- `plugin/contracts/` — host seam probes that check the adapter's assumptions against a real
+  Cordis Loader (`gate-runtime-contract.mjs`, `smoke-loader.mjs`, `install-resolver.mjs`).
+- `plugin/tests/` — 8 kernel unit files (160 cases) and two real-Loader composition suites
+  (14 + 7 gates).
+- `plugin/quality/` — offline quality validator and freeze tooling.
+- `plugin/docs/` — requirements and architecture, frozen protocol and data model, implementation
+  and acceptance matrix, runtime evidence, and current status.
+- `plugin/audits/`, `plugin/reports/` — internal review and implementation evidence. **Not
+  published**; see the root README.
+- Root documentation: bilingual README, `CONTRIBUTING.md`, `SECURITY.md`, and a pull request
+  template.
+
+### Fixed
+
+- **D1** — the `load` candidate path did not check entry and framework-retained tool protection,
+  so a `search → load(candidates) → fold` sequence could place a framework tool into the selected
+  set.
+- **D2** — the protection set was snapshotted once at engine construction and did not follow
+  catalog refreshes.
+- **D-1** — when `journal.restore()`'s `readSession` failed and the event buffer held no tool
+  events, the state was set to ready through the "new session" branch, violating fail-closed
+  semantics.
+- An experimental `ok:false` → throw mapping on the entry error shell was reverted by cross-review;
+  the three entries return the standard error envelope, and activation is enforced by the two-part
+  `isError` / `ok` check on the fold side.
+
+### Changed
+
+- Layout migrated from the phase-codename `progressive-v2/` to the responsibility-named `plugin/`.
+  Same-volume subtree rename; internal relative paths unchanged. Recorded in the internal
+  migration report.
+- Root `package.json` repointed at `plugin/adapters/dsh/index.mjs` and `plugin/domain/index.mjs`,
+  with `@deepseek-ai/dsh` and `@deepseek-ai/dsh-tools` at `0.2.1-alpha.1` declared as peer
+  dependencies (host-provided; the adapter imports `defineTool` by bare package name when no
+  injection is supplied).
+- Stale `0.0.1-rc.2` `minimumReleaseAgeExclude` entries removed from `pnpm-workspace.yaml`.
+- `.gitignore` anchored to the new layout; the root `docs/` pattern is now `/docs/` so it no
+  longer swallows `plugin/docs/`, and the private evidence directories are ignored by their new
+  paths.
+
+### Known issues
+
+- The quality validator reports **20 PASS / 1 FAIL** and exits 1. The failure is a category
+  eligibility defect in the frozen dataset: three held-out samples (`H037` ×2, `H044` ×1) expect
+  answers whose `trustedCategory` differs from the queried category, so they are unreachable by
+  construction.
+- `check:quality` cannot run on a fresh clone, because the frozen scoring dataset is not
+  published. This is a consequence of that dataset being AI-synthesized and not human-reviewed,
+  not a broken script.
+- Token reduction, TTFT, and real-provider wire behaviour are unmeasured. No performance claim is
+  made anywhere in this repository.
+- Two review-signature debts remain open: the author of the entries rollback fix was also the
+  cross-reviewer, and the D-1 fix author is unattributed. Both are awaiting a fresh independent
+  review, per the "authors do not sign their own security boundaries" rule.
+
+<!-- No version-link references are defined below: no tag or release exists to link to. Add
+     them at the same time as the actual release, not before. -->
+
