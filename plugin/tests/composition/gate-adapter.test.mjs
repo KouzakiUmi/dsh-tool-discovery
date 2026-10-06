@@ -319,6 +319,35 @@ gate('COMP', '他者重加全量 schema：不能只报"局部过滤成功"，必
   assert.match(resultTextOf(result), /INCOMPATIBLE_COMPOSITION/, 'rejection cites the incompatible composition')
 })
 
+// WL1 runs on its own boot rather than the shared sequence: the whitelist
+// contract is about which names survive projection, and reusing the drive-A
+// request log would make it depend on that scenario's load history.
+test('WL1: alwaysVisible 白名单项免 load 常驻，名单外的后装工具仍被折叠', async () => {
+  const boot = await bootAdapterComposition({
+    fixtures: ['mock-provider', 'inherited-tools', 'scope-tools'],
+    adapter: { alwaysVisible: ['fixture_hidden_inherited'] }
+  })
+  cleanup.push(() => boot.dispose())
+  assert.deepEqual(boot.activationErrors(), [], 'no activation errors')
+
+  const { store, queueResponse } = await storeOf()
+  store.reset()
+  queueResponse({ text: 'wl done' })
+  const handle = await drive(boot.ctx, boot.tmpRoot, { sessionId: 'adapter-wl-1' })
+  await userTurn(handle, 'Check the whitelist.')
+
+  const names = (store.requests[0].tools ?? []).map((t) => t.name).sort()
+  assert.ok(names.includes('fixture_hidden_inherited'),
+    `whitelisted tool must be visible without load: ${names.join(', ')}`)
+  for (const entry of ['tool_list', 'tool_search', 'tool_load']) {
+    assert.ok(names.includes(entry), `${entry} stays visible`)
+  }
+  for (const collapsed of ['fixture_hidden_scope', 'fixture_mutating']) {
+    assert.equal(names.includes(collapsed), false,
+      `${collapsed} is later-installed and must stay collapsed`)
+  }
+})
+
 after(async () => {
   for (const handle of handles) {
     try {

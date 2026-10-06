@@ -11,11 +11,13 @@
 import { DomainError, ENTRY_TOOL_NAMES } from '../../domain/index.mjs';
 
 /**
- * @param {{ctx:any, lifecycle:any, frameworkRetained?:readonly string[], log?:Function}} deps
+ * @param {{ctx:any, lifecycle:any, frameworkRetained?:readonly string[], alwaysVisible?:readonly string[], log?:Function}} deps
  */
 export function createProjection(deps) {
   const { ctx, lifecycle } = deps;
   const frameworkRetained = new Set([...(deps.frameworkRetained ?? [])]);
+  // DSH 自带工具常驻可见；过滤只针对后装的插件/MCP 工具。
+  const alwaysVisible = new Set([...(deps.alwaysVisible ?? [])]);
   const log = deps.log ?? (() => {});
 
   return ctx.on('system-prompt/assemble', async (assembly, context, next) => {
@@ -33,6 +35,7 @@ export function createProjection(deps) {
     const runtime = lifecycle.runtimeFor(agent.session, scope);
     const allowed = new Set(ENTRY_TOOL_NAMES);
     for (const name of frameworkRetained) allowed.add(name);
+    for (const name of alwaysVisible) allowed.add(name);
     if (runtime.compositionBypass === null) {
       for (const name of runtime.journal.activeSelectedNames()) allowed.add(name);
     }

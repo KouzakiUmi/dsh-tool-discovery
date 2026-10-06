@@ -84,37 +84,39 @@ function namesOf (request) {
 }
 
 // ---------------------------------------------------------------------------
-// R2 / L11a：sessionQuery 缺失 → fail closed（allowMissingSessionQuery 显式组合）
+// R2 / L11a：sessionQuery 缺失 → 组合**不激活**（宿主工具表原样保留）
 // ---------------------------------------------------------------------------
-test('L11a: sessionQuery 缺失 → 整会话 fail closed 不降级新会话；健康 composition 正控', async () => {
+// 契约变更：sessionQuery 现声明在 apply.inject 中，因此该服务不可用时宿主根本
+// 不调用 apply。这比"激活后再逐会话 fail closed"更安全——投影从未运行，宿主
+// 的工具可见面没有被本插件改动过任何一项，不存在"部分折叠但无法恢复"的中间态。
+// 本用例改为断言该 fail-safe 语义；逐会话 fail closed 的分支仍由 journal 保留
+// （见 journal.restore() 的 query===undefined 分支）与 L11b 覆盖。
+test('L11a: sessionQuery 缺失 → 组合不激活，宿主工具表不被折叠', async () => {
   const { store, queueResponse } = await storeOf()
   store.reset()
   const boot = await bootAdapterComposition({
     fixtures: ['mock-provider', 'inherited-tools', 'scope-tools'],
-    adapter: { allowMissingSessionQuery: true },
+    adapter: {},
     omitSessionQuery: true
   })
   cleanup.push(() => boot.dispose())
 
-  queueResponse({ toolCalls: [{ id: 'qm-load', name: 'tool_load', arguments: { names: ['fixture_hidden_inherited'] } }] })
+  // 组合未激活：本插件的服务不提供
+  assert.equal(boot.ctx.get('progressiveDiscovery'), undefined,
+    'sessionQuery 缺失时组合必须完全不激活')
+
+  // fail-safe 断言：宿主自己的工具一项都没有被折叠掉
+  queueResponse({ toolCalls: [{ id: 'qm-call', name: 'fixture_hidden_inherited', arguments: { text: 'x' } }] })
   queueResponse({ text: 'qm done' })
   const handle = await drive(boot.ctx, boot.tmpRoot, 'rec-qm-1')
-  await userTurn(handle, 'Load a hidden tool.')
-
-  const runtime = runtimeOf(boot.ctx, 'rec-qm-1')
-  const outcome = await runtime.journal.whenRestored()
-  assert.equal(outcome.mode, 'incompatible', `query-missing must fail closed: ${JSON.stringify(outcome)}`)
-  assert.equal(outcome.reason, 'sessionQuery-missing')
-  assert.equal(runtime.engine.getState(runtime.scope).mode, 'incompatible')
-
-  // 负控制：fail-closed 会话执行被拒、body=0
-  queueResponse({ toolCalls: [{ id: 'qm-call', name: 'fixture_hidden_inherited', arguments: { text: 'x' } }] })
-  queueResponse({ text: 'qm call done' })
-  await userTurn(handle, 'Try calling the tool.')
-  assert.equal(store.bodyCount('qm-call'), 0, 'fail-closed session must not execute')
-  const second = store.requests[store.requests.length - 1]
-  assert.equal(namesOf(second).includes('fixture_hidden_inherited'), false,
-    'fail-closed session must never disclose the tool')
+  await userTurn(handle, 'Use the tool.')
+  assert.equal(store.bodyCount('qm-call'), 1,
+    '插件未激活时宿主工具必须照常可执行，不得被静默折叠')
+  const req = store.requests[store.requests.length - 1]
+  assert.equal(namesOf(req).includes('fixture_hidden_inherited'), true,
+    '插件未激活时宿主工具必须仍然可见')
+  assert.equal(namesOf(req).includes('tool_load'), false,
+    '插件未激活时不得出现本插件的控制入口')
 
   // 正控制：同一 mock 面、带 query 的健康 composition 同流程 ready + 可执行
   const bootP = await bootAdapterComposition({

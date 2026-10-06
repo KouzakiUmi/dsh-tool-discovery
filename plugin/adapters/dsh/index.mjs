@@ -21,6 +21,7 @@ import { createGuard } from './guard.mjs';
 import { createLifecycle } from './lifecycle.mjs';
 import { createProjection } from './projection.mjs';
 import { createRegistryAdapter } from './registry.mjs';
+import { CORE_TOOL_NAMES } from '../../domain/core-tools.mjs';
 
 /** 默认可信类别表（部署可用 Config 覆盖）。category 只影响可发现性，不授予资格。 */
 export const DEFAULT_CATEGORY_CONFIG = Object.freeze({
@@ -75,6 +76,17 @@ export function validateConfig(raw) {
     }
   }
   if (config.budgets !== undefined) requirePlainObject(config.budgets, 'budgets');
+
+  // alwaysVisible：默认放行 DSH 自带工具，使过滤只作用于后装的插件/MCP 工具。
+  if (config.alwaysVisible !== undefined && !Array.isArray(config.alwaysVisible)) {
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'alwaysVisible 必须是字符串数组。');
+  }
+  for (const name of config.alwaysVisible ?? []) {
+    if (typeof name !== 'string' || name.length === 0) {
+      throw new DomainError('INCOMPATIBLE_COMPOSITION', 'alwaysVisible 只能是非空字符串。');
+    }
+  }
+
   if (config.allowMissingSessionQuery !== undefined && typeof config.allowMissingSessionQuery !== 'boolean') {
     throw new DomainError('INCOMPATIBLE_COMPOSITION', 'allowMissingSessionQuery 必须是布尔值。');
   }
@@ -82,6 +94,7 @@ export function validateConfig(raw) {
     categoryConfig,
     budgets: config.budgets,
     frameworkRetained: Object.freeze([...frameworkRetained]),
+    alwaysVisible: Object.freeze([...new Set([...CORE_TOOL_NAMES, ...(config.alwaysVisible ?? [])])]),
     // 保留该键仅为兼容既有配置；缺失 sessionQuery 已不再拒绝激活。
     allowMissingSessionQuery: config.allowMissingSessionQuery === true,
   };
@@ -101,7 +114,9 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
     }
     const config = validateConfig(rawConfig);
     const log = (message, extra) => {
-      if (typeof ctx.logger?.debug === 'function') ctx.logger.debug(`progressive-tools: ${message}`, extra);
+      // 诊断走 info：debug 级别默认不落盘，重启后无法据此判断激活状态。
+      if (typeof ctx.logger?.info === 'function') ctx.logger.info(`progressive-tools: ${message}`, extra);
+      else if (typeof ctx.logger?.debug === 'function') ctx.logger.debug(`progressive-tools: ${message}`, extra);
     };
 
     const registry = createRegistryAdapter({
@@ -129,6 +144,13 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
     // fail closed 承担（query===undefined → mode:'incompatible'），
     // 而不是在此处一刀切拒绝组合。
     const query = ctx.get('sessionQuery');
+    log('activate:deps', {
+      sessionQuery: query !== undefined,
+      sessions: ctx.get('sessions') !== undefined,
+      sessionPersistence: ctx.get('sessionPersistence') !== undefined,
+      agents: ctx.get('agents') !== undefined,
+      nativeOnly: true,
+    });
     if (query === undefined) {
       log('degraded:no-session-query', {
         impact: '新会话正常；有历史会话的冷恢复将 fail closed（mode:incompatible）',
@@ -175,7 +197,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       }
 
       // ---- 5. 投影 ----
-      own(createProjection({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, log }));
+      own(createProjection({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, alwaysVisible: config.alwaysVisible, log }));
 
       // ---- 6. guard（只增拒绝） ----
       own(createGuard({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, log }));
@@ -213,8 +235,15 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       throw error;
     }
   };
-  // 只声明真正必需的服务；sessionQuery/agents 是可选依赖（缺失即 fail closed）。
-  apply.inject = ['tools', 'systemPrompt'];
+  // inject 决定宿主**何时**调用 apply。只声明 tools/systemPrompt 时，apply 会在
+  // 其后就绪的瞬间执行，而 sessionQuery（inject: ['sessions'] 的间接依赖）此时
+  // 未必已激活——那正是 ctx.get('sessionQuery') 返回 undefined 的原因：服务在
+  // 组合树里存在（--dump-config 可见），只是晚于本插件一步。
+  //
+  // 把它加入 inject 后：若该服务最终不可用，宿主不会调用 apply，插件保持未激活，
+  // 宿主工具表不受影响——这是良性失败；若可用，则 apply 一定在它就绪之后运行，
+  // 恢复路径拿到的就是真实服务。
+  apply.inject = ['tools', 'systemPrompt', 'sessionQuery'];
   return apply;
 }
 
