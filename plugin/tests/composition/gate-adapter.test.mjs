@@ -346,6 +346,47 @@ test('WL1: alwaysVisible 白名单项免 load 常驻，名单外的后装工具�
     assert.equal(names.includes(collapsed), false,
       `${collapsed} is later-installed and must stay collapsed`)
   }
+
+  // 可见不等于可执行。guard 必须同样放行白名单项，否则 tool_load 成功后
+  // 仍会以 INCOMPATIBLE_COMPOSITION 被拒——这正是白名单上线时漏掉的一处。
+  queueResponse({ toolCalls: [{ id: 'wl-exec', name: 'fixture_hidden_inherited', arguments: { text: 'ok' } }] })
+  queueResponse({ text: 'wl exec done' })
+  await userTurn(handle, 'Call the whitelisted tool.')
+  assert.equal(store.bodyCount('wl-exec'), 1,
+    'whitelisted tool must actually execute, not merely appear in the request')
+})
+
+// WL2: 白名单项在 tool_search 中必须报告 loaded:true（无需 load 即已激活）。
+test('WL2: 白名单工具在 tool_search 结果中报告 loaded:true', async () => {
+  const boot = await bootAdapterComposition({
+    fixtures: ['mock-provider', 'inherited-tools', 'scope-tools'],
+    adapter: { alwaysVisible: ['fixture_hidden_inherited'] }
+  })
+  cleanup.push(() => boot.dispose())
+
+  const { store, queueResponse } = await storeOf()
+  store.reset()
+  queueResponse({
+    toolCalls: [{ id: 'wl-search', name: 'tool_search', arguments: { category: 'all', query: 'fixture hidden inherited' } }]
+  })
+  queueResponse({ text: 'wl search done' })
+  const sessionId = 'adapter-wl-2'
+  const handle = await drive(boot.ctx, boot.tmpRoot, { sessionId })
+  await userTurn(handle, 'Search for the tool.')
+
+  // 结果事件从 session 读回；宿主用 sourceEventSeqs 关联 call 与 result。
+  const { events } = await boot.ctx.sessionQuery.readSession(sessionId)
+  const call = events.find((e) => e.type === 'tool/call' && e.data?.callId === 'wl-search')
+  assert.ok(call, 'tool_search call event must exist')
+  const resultEvent = events.find((e) => e.type === 'tool/result'
+    && Array.isArray(e.sourceEventSeqs) && e.sourceEventSeqs.includes(call.seq))
+  assert.ok(resultEvent, 'tool_search result event must exist')
+  const payload = JSON.parse((resultEvent.data?.message?.content ?? [])
+    .map((b) => b?.text ?? '').join(''))
+  const hit = payload.data?.candidates?.find((c) => c.name === 'fixture_hidden_inherited')
+  assert.ok(hit, 'whitelisted tool must be discoverable')
+  assert.equal(hit.loaded, true,
+    'whitelisted tool must report loaded:true without an explicit load')
 })
 
 after(async () => {

@@ -13,6 +13,9 @@ import { ENTRY_TOOL_NAMES } from '../../domain/index.mjs';
 export function createGuard(deps) {
   const { ctx, lifecycle } = deps;
   const frameworkRetained = new Set([...(deps.frameworkRetained ?? [])]);
+  // 常驻工具与入口同权：它们每一轮都在请求里，无需 selected 凭据。
+  // 漏掉这一组会让白名单工具在 tool_load 成功后仍被拒（INCOMPATIBLE_COMPOSITION）。
+  const alwaysVisible = new Set([...(deps.alwaysVisible ?? [])]);
   const entryNames = new Set(ENTRY_TOOL_NAMES);
   const log = deps.log ?? (() => {});
 
@@ -25,7 +28,7 @@ export function createGuard(deps) {
       return `tool "${exec.name}" is not admitted: INCOMPATIBLE_PRESENTATION (tools mode is not native)`;
     }
     const runtime = lifecycle.runtimeFor(agent.session, agent);
-    if (entryNames.has(exec.name) || frameworkRetained.has(exec.name)) {
+    if (entryNames.has(exec.name) || frameworkRetained.has(exec.name) || alwaysVisible.has(exec.name)) {
       return undefined;
     }
     // 有 listener 在我们的投影之后重加了未披露工具 → 整会话 fail closed

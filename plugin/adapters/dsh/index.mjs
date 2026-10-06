@@ -200,7 +200,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       own(createProjection({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, alwaysVisible: config.alwaysVisible, log }));
 
       // ---- 6. guard（只增拒绝） ----
-      own(createGuard({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, log }));
+      own(createGuard({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, alwaysVisible: config.alwaysVisible, log }));
 
       // ---- 7. session 与 registry 事件 ----
       own(ctx.on('session/event', (session, event) => lifecycle.onSessionEvent(session, event)));
@@ -213,6 +213,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
         categoryConfig: config.categoryConfig,
         entryToolNames: [...registry.entryNames],
         frameworkToolNames: [...registry.frameworkRetained],
+        alwaysToolNames: [...config.alwaysVisible],
         budgets: config.budgets,
         newSessionMode: 'restoring',
         bindings: [],

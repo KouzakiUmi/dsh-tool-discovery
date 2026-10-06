@@ -50,8 +50,14 @@ export function createDiscoveryEngine(config) {
   const budgets = resolveBudgets(config.budgets);
   const entryNames = new Set([...ENTRY_TOOL_NAMES, ...(config.entryToolNames || [])]);
   const frameworkNames = new Set(config.frameworkToolNames || []);
+  /**
+   * 常驻工具（alwaysVisible）：DSH 自带工具等。它们无需 load 即视为已激活，
+   * 因此既不可被 unload，也不需要经 canonical 回执进入 selected —— 它们本来
+   * 就在每一轮请求里。过滤只针对名单之外的后装工具。
+   */
+  const alwaysNames = new Set(config.alwaysToolNames || []);
   /** 入口与框架保留项不可 load/unload —— 来自可信配置,不按名称猜。 */
-  const protectedNames = new Set([...entryNames, ...frameworkNames]);
+  const protectedNames = new Set([...entryNames, ...frameworkNames, ...alwaysNames]);
   /** @type {Map<string, string>} name → toolId(受保护项,如可解析) */
   const newSessionMode = config.newSessionMode === 'restoring' ? 'restoring' : 'ready';
 
@@ -291,7 +297,7 @@ export function createDiscoveryEngine(config) {
             categories: hit.entry.categories,
             summary: clampCodePoints(hit.entry.summary, MAX_SUMMARY_CODE_POINTS),
             matchReasons: hit.reasons,
-            loaded: Boolean(sel && sel.revision === hit.entry.revision),
+            loaded: alwaysNames.has(hit.entry.name) || Boolean(sel && sel.revision === hit.entry.revision),
           };
           if (!acc.tryAdd(JSON.stringify(card))) {
             truncated = true;

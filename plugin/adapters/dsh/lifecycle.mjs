@@ -31,6 +31,7 @@ export function createLifecycle(deps) {
       categoryConfig: config.categoryConfig,
       entryToolNames: [...registry.entryNames],
       frameworkToolNames: [...registry.frameworkRetained],
+      alwaysToolNames: [...(config.alwaysVisible ?? [])],
       budgets: config.budgets,
       newSessionMode: 'restoring',
       bindings,
