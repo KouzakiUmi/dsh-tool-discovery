@@ -333,12 +333,17 @@ jobs:
         run: |
           npm pack --ignore-scripts --json > pack.json
           node --input-type=module <<'NODE'
-          import { readFileSync, renameSync } from 'node:fs';
+          import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs';
           const [{ filename }] = JSON.parse(readFileSync('pack.json', 'utf8'));
-          // Fixed artifact name: the publish job references it literally, and a
-          // version-stamped name would have to be discovered at publish time.
-          renameSync(filename, 'dsh-tool-discovery.tgz');
-          console.log('asset: dist/dsh-tool-discovery.tgz <-', filename);
+          // Both the *name* and the *directory* need fixing. renameSync only
+          // renames in place, so the tarball stayed in the repo root while the
+          // upload step looked in dist/ — the asset silently went missing.
+          mkdirSync('dist', { recursive: true });
+          const dest = 'dist/dsh-tool-discovery.tgz';
+          if (existsSync(dest)) throw new Error(`${dest} already exists; refusing to overwrite`);
+          renameSync(filename, dest);
+          if (!existsSync(dest)) throw new Error(`pack did not produce ${dest}`);
+          console.log('asset:', dest, '<-', filename);
           NODE
 
       - name: Verify payload matches the declared files
@@ -458,9 +463,14 @@ jobs:
         run: |
           npm pack --ignore-scripts --json > pack.json
           node --input-type=module <<'NODE'
-          import { readFileSync, renameSync } from 'node:fs';
+          import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs';
           const [{ filename }] = JSON.parse(readFileSync('pack.json', 'utf8'));
-          renameSync(filename, 'dsh-tool-discovery.tgz');
+          // Move as well as rename — see the note in build-asset.
+          mkdirSync('dist', { recursive: true });
+          renameSync(filename, 'dist/dsh-tool-discovery.tgz');
+          if (!existsSync('dist/dsh-tool-discovery.tgz')) {
+            throw new Error('pack did not produce dist/dsh-tool-discovery.tgz');
+          }
           NODE
 
       - name: Create versioned GitHub Release
