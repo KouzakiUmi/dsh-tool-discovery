@@ -166,6 +166,10 @@ export function createJournal(deps) {
   const sessionId = scope.sessionId;
   const entryNames = new Set(deps.entryNames ?? ['tool_list', 'tool_search', 'tool_load']);
   const frameworkRetained = new Set(deps.frameworkRetained ?? []);
+  // 常驻工具同样出现在真实出站 header 里，必须计入 allowed。
+  // 漏掉这一组会把白名单工具判成"别的 listener 泄漏"，进而把整会话标为
+  // compositionBypass，此后所有非白名单工具一律 INCOMPATIBLE_COMPOSITION。
+  const alwaysVisible = new Set(deps.alwaysVisible ?? []);
   const reportBypass = deps.reportBypass ?? (() => {});
 
   /** live 路径的 canonical call 缓存：callSeq → {callId, input}（只存 tool_load）。 */
@@ -210,7 +214,7 @@ export function createJournal(deps) {
     // 披露集合的**权威**观测点：真实出站 request/header。
     // 若这里出现三入口 / 可信框架保留 / 有效 selected 之外的工具，
     // 说明有别的 listener 在我们投影之后又重加了 schema → 整会话 fail closed。
-    const allowed = new Set([...entryNames, ...frameworkRetained, ...activeSelectedNames()]);
+    const allowed = new Set([...entryNames, ...frameworkRetained, ...alwaysVisible, ...activeSelectedNames()]);
     const leaked = headerTools.map((tool) => tool?.name).filter((name) => !allowed.has(name));
     if (leaked.length > 0) {
       reportBypass({ sessionId, names: [...new Set(leaked)] });

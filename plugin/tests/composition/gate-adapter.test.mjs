@@ -354,6 +354,45 @@ test('WL1: alwaysVisible 白名单项免 load 常驻，名单外的后装工具�
   await userTurn(handle, 'Call the whitelisted tool.')
   assert.equal(store.bodyCount('wl-exec'), 1,
     'whitelisted tool must actually execute, not merely appear in the request')
+
+  // 白名单项必须同时计入 journal 的 allowed 集合。若漏计，白名单工具会被判成
+  // "别的 listener 泄漏"，把整会话标为 compositionBypass，此后所有非白名单
+  // 工具一律 INCOMPATIBLE_COMPOSITION —— 即"其它插件全部调用失败"。
+  // 这里直接断言 bypass 未被置位，而不是间接观察拒绝文案。
+  const runtime = boot.ctx.get('progressiveDiscovery').sessions.get('adapter-wl-1')
+  assert.equal(runtime.compositionBypass, null,
+    `whitelisted tool must not trigger compositionBypass: ${JSON.stringify(runtime.compositionBypass)}`)
+})
+
+// WL3: 白名单不得阻断后装工具的加载与执行（bypass 回归防护）。
+test('WL3: 白名单在场时，非白名单工具仍可 load 后正常执行', async () => {
+  const boot = await bootAdapterComposition({
+    fixtures: ['mock-provider', 'inherited-tools', 'scope-tools'],
+    adapter: { alwaysVisible: ['fixture_hidden_inherited'] }
+  })
+  cleanup.push(() => boot.dispose())
+
+  const { store, queueResponse } = await storeOf()
+  store.reset()
+  queueResponse({ toolCalls: [{ id: 'wl3-load', name: 'tool_load', arguments: { names: ['fixture_hidden_scope'] } }] })
+  queueResponse({ text: 'wl3 loaded' })
+  const handle = await drive(boot.ctx, boot.tmpRoot, { sessionId: 'adapter-wl-3' })
+  await userTurn(handle, 'Load a non-whitelisted tool.')
+
+  const runtime = boot.ctx.get('progressiveDiscovery').sessions.get('adapter-wl-3')
+  assert.equal(runtime.compositionBypass, null,
+    `non-whitelisted flow must not trip bypass: ${JSON.stringify(runtime.compositionBypass)}`)
+  // load 必须真的把该工具带进下一次请求，否则后面的执行无从谈起。
+  const afterLoad = (store.requests[store.requests.length - 1].tools ?? []).map((t) => t.name)
+  assert.ok(afterLoad.includes('fixture_hidden_scope'),
+    `loaded tool must appear in the next request: ${afterLoad.join(', ')}`)
+
+  // 披露在下一轮才可执行：另起一轮调用它。
+  queueResponse({ toolCalls: [{ id: 'wl3-exec', name: 'fixture_hidden_scope', arguments: { text: 'ok' } }] })
+  queueResponse({ text: 'wl3 done' })
+  await userTurn(handle, 'Now call it.')
+  assert.equal(store.bodyCount('wl3-exec'), 1,
+    'a loaded non-whitelisted tool must execute on the following turn')
 })
 
 // WL2: 白名单项在 tool_search 中必须报告 loaded:true（无需 load 即已激活）。

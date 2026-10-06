@@ -64,6 +64,7 @@ export function createLifecycle(deps) {
       log,
       entryNames: registry.entryNames,
       frameworkRetained: registry.frameworkRetained,
+      alwaysVisible: config.alwaysVisible ?? [],
       reportBypass: (details) => {
         runtime.compositionBypass = details;
         log('lifecycle:composition-bypass', details);
