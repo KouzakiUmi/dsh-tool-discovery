@@ -234,8 +234,8 @@ null、summary 多于一条或缺失、`sourceEventSeq` 与 summary 不对应，
 
 ### 5.1 独立复审结论（非作者，2026-10-07）
 
-审查者与产出方不同源，全程只读，报告见
-[`plugin/audits/trusted-epoch-fix-review-20261007.md`](<../../audits/trusted-epoch-fix-review-20261007.md>)。
+审查者与产出方不同源，全程只读；报告见内部证据 `plugin/audits/trusted-epoch-fix-review-20261007.md`
+（**不随本文档集公开**，按 [README §2.1](<README.md>) 的约定此处只以代码字体写出路径、不建链接）。
 
 **判定：三处修复全部「通过」。** 审查者用内存 harness 直驱真实 `createLifecycle` /
 `createProjection` / `createGuard` 做了独立实证，其中最有分量的两条：
@@ -262,8 +262,8 @@ null、summary 多于一条或缺失、`sourceEventSeq` 与 summary 不对应，
 
 | 范围 | 命令 | 结果 |
 |---|---|---|
-| 单元 | `npm test` | **283 pass / 0 fail / 0 skipped**，退出码 **0**（`.probe/final-unit3.log`） |
-| 组合（12 份门禁） | `npm run test:composition` | **101 pass / 0 fail / 0 skipped**，退出码 **0**（`.probe/final-composition3.log`） |
+| 单元 | `npm test` | **283 pass / 0 fail / 0 skipped**，退出码 **0**（`.probe/final4-unit.log`） |
+| 组合（13 份门禁） | `npm run test:composition` | **103 pass / 0 fail / 0 skipped**，退出码 **0**（`.probe/final4-comp.log`） |
 | 质量验证器 | `node plugin/quality/validate.mjs` | **20 PASS / 1 FAIL**，退出码 **1**（冻结数据的既有类别资格项，**与本项无关、未改动**） |
 
 **仍未完成、不得上抬的部分**：
