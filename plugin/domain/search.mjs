@@ -1,5 +1,5 @@
 // progressive-v2/domain/search.mjs
-// 双语 tokenizer、倒排与可解释排序。
+// 双语 tokenizer、token 集合与可解释排序。
 // 约束:
 // - 自然无关查询返回 [] ,不凑 K(01 §5.3 / F06);
 // - category 是查询约束,不是授权条件;
@@ -7,6 +7,7 @@
 // - description / skill 文本只作低权重资料,不影响分类与权限;
 // - 索引按 searchDocumentId 共享内容,资格域由调用方的 catalog 决定。
 import { MATCH_REASONS, SIGNAL_WEIGHTS, SYNONYM_INDEX } from './constants.mjs';
+import { SUPPORTED_LOCALES, createText } from './locale.mjs';
 
 const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]/u;
 const LATIN_TOKEN = /[a-z0-9]+/gu;
@@ -174,6 +175,44 @@ function fieldScore(reason, matched, total) {
 }
 
 /**
+ * 类别的双语检索词表,按受控类别 id 记忆化。
+ *
+ * 为什么要本地化:条目的 category 只有英文受控 id(files/shell/web…),
+ * summary 又是宿主的英文工具描述,所以中文查询唯一的桥是同义词表——
+ * 查询短语不在受控表里就零命中。locale.mjs 已经备好了每个类别的
+ * 本地化标题与能力摘要(zh/en 都有),只是原先只给 tool_list 的类别卡片用。
+ *
+ * 为什么按 locale 全量并入、而不是"按界面语言取一份":索引在 catalog 刷新时
+ * 建一次且不带语言参数,而检索框本身是双语的;索引是语言中立的集合,
+ * 而不是"某一个语言下的快照"。
+ *
+ * 成本:12 个受控类别 × SUPPORTED_LOCALES 条短文本,模块级建一次并缓存,
+ * 每次 catalog 刷新只做 Set 合并。
+ * @type {Map<string, string[]>}
+ */
+const CATEGORY_VOCABULARY = new Map();
+
+/**
+ * 取某个受控类别的本地化检索词(标题 + 能力摘要,所有支持语言)。
+ * @param {string} id 受控类别 id
+ * @returns {string[]}
+ */
+function categoryVocabulary(id) {
+  const cached = CATEGORY_VOCABULARY.get(id);
+  if (cached !== undefined) return cached;
+  /** @type {string[]} */
+  const out = [];
+  for (const locale of SUPPORTED_LOCALES) {
+    const card = createText(locale).category(id);
+    if (card === undefined) continue; // 未登记的类别不猜,只留英文 id 的分词
+    for (const t of tokenize(card.title)) out.push(t);
+    for (const t of tokenize(card.capabilitySummary)) out.push(t);
+  }
+  CATEGORY_VOCABULARY.set(id, out);
+  return out;
+}
+
+/**
  * 为条目构建检索文档的 token 集合。
  * @param {import('./catalog.mjs').CatalogEntry} entry
  */
@@ -182,7 +221,11 @@ export function documentTokens(entry) {
   const nameTokens = new Set(tokenize(entry.name));
   /** @type {Set<string>} */
   const categoryTokens = new Set();
-  for (const c of entry.categories) for (const t of tokenize(c)) categoryTokens.add(t);
+  for (const c of entry.categories) {
+    for (const t of tokenize(c)) categoryTokens.add(t);
+    // 本地化标题与能力摘要:让中文查询不必命中英文类别 id 也能落到同一类别。
+    for (const t of categoryVocabulary(c)) categoryTokens.add(t);
+  }
   /** @type {Set<string>} */
   const summaryTokens = new Set(tokenize(entry.summary));
   /** @type {Set<string>} */
@@ -191,7 +234,7 @@ export function documentTokens(entry) {
     for (const t of tokenize(entry.skill.usage)) skillTokens.add(t);
     for (const lim of entry.skill.limitations) for (const t of tokenize(lim)) skillTokens.add(t);
   }
-  // 条目自身触发哪些受控概念(与查询侧同法:对文档全文做受控短语子串匹配)
+  // 条目自身触发哪些受控概念(与查询侧同一个 synonymConcepts:对文档全文做同法匹配)
   const docText = [entry.name, entry.summary, entry.skill ? entry.skill.usage : '', entry.skill ? entry.skill.limitations.join(' ') : ''].join(' ');
   const entryConcepts = synonymConcepts(docText);
   return { nameTokens, categoryTokens, summaryTokens, skillTokens, entryConcepts };
@@ -218,6 +261,22 @@ export function buildSearchIndex(entries) {
  * @property {number} score
  * @property {string[]} reasons
  */
+
+/**
+ * 同义词命中在**文档名没有任何有效词命中**时减半计分。
+ *
+ * 理由:name-token 是按覆盖率缩放的(12 × 命中/总词数),一个名字里真有两
+ * 个查询词的文档对 3 词查询只能拿 8 分,再低可到 4 分;而 synonym 是**固定**
+ * 8 分、不缩放,于是"命中一个受控概念 + 两条资料字段"会压过"名字就是用户
+ * 要的那个工具"的文档——精确查询因此把模型引到错的工具上。
+ *
+ * 规则一句话:**直接证据(名字)优先,受控同义词只是回退信号**,名字为空时
+ * 同义词最多只能拿到 name-token 满覆盖的同量级分数,不能反超。
+ * 减半只在"名字零命中"时生效:名字已经命中的文档不受影响,原有排序不变。
+ */
+function synonymWeight(nameHits) {
+  return nameHits > 0 ? SIGNAL_WEIGHTS[MATCH_REASONS.SYNONYM] : SIGNAL_WEIGHTS[MATCH_REASONS.SYNONYM] / 2;
+}
 
 /**
  * 有界检索。返回 score>0 的命中,按稳定顺序取前 limit。
@@ -260,11 +319,12 @@ export function search(index, args) {
     }
 
     // 3) 同义词概念(受控词表,命中即为完整概念信号,不按覆盖率缩放;
-    //    没有有效词时不得凭停用词子串碰巧命中同义词)
+    //    没有有效词时不得凭停用词子串碰巧命中同义词;
+    //    名字零命中时减半,让直接名字证据优先——见 synonymWeight)
     if (hasEffectiveTerm && qConcepts.size > 0) {
       for (const c of qConcepts) {
         if (doc.entryConcepts.has(c)) {
-          score += SIGNAL_WEIGHTS[MATCH_REASONS.SYNONYM];
+          score += synonymWeight(nameHits);
           reasons.add(MATCH_REASONS.SYNONYM);
           break;
         }

@@ -41,7 +41,7 @@ interface ToolSearchRequest {
 }
 interface CandidateRef {
   ref: string
-  revision: string
+  revision?: string // 可选：缺省/null/空串均视为未给出，由 ref 绑定的版本推导
 }
 interface ToolLoadRequest {
   action?: 'load' | 'unload' // 默认 load
@@ -56,6 +56,8 @@ interface ToolLoadRequest {
 - `list` `view=state`：只允许 `view`；返回本会话 `selected` / `advertised` / `invalidated` 与预算，不枚举未加载目录。
 - `search` 没有 action 字段；`query` 超过 `maxQueryCodePoints`（512）直接拒绝。
 - `load`：`candidates` 与 `names` **必须且只能提供一项**；数组非空，上限 4。
+- 候选的 `revision` 可选：缺省、`null` 与空串都表示“未给出”，由 `ref` 绑定的版本推导；数字、对象、数组、布尔仍是参数错误。
+- **版本权威始终是 `ref`**：它绑定签发当时的 revision，因此工具此后变化仍以 `STALE_CANDIDATE` 拒绝，不会因为省略 `revision` 就被加载成新定义。
 - `unload`：必须有非空 `toolIds`，不接受 `candidates` / `names`；上限为活跃工具上限。
 - **未知字段一律 `INVALID_ARGS`**；非法组合、重复 ref 的冲突 revision 同样 `INVALID_ARGS`。
 - `limit` 越界直接报错，不做静默收紧。
@@ -222,7 +224,7 @@ documents, data, agents, images, integrations, other
     ],
     "truncated": false
   },
-  "nextAction": "选定候选后，用 ref 与 revision 调用 tool_load。"
+  "nextAction": "选定候选后，用 ref 调用 tool_load；revision 可选，缺省由 ref 绑定的版本推导。"
 }
 ```
 
@@ -263,7 +265,7 @@ documents, data, agents, images, integrations, other
 { "names": ["glob"] }
 ```
 
-两条路径共享相同的版本、权限、预算与 canonical 提交过程。区别：候选路径要求与此前披露的 revision 一致；名称路径表示模型**本次显式选择当前 scope 中该精确名称的当前定义**，不声称之前已验证过它。
+两条路径共享相同的版本、权限、预算与 canonical 提交过程。区别：候选路径要求与 `ref` 绑定的 revision 一致——`revision` 可省略（省略即取 `ref` 绑定的那个值），显式给出时只是把它回写一遍；工具在该 `ref` 签发后变化仍以 `STALE_CANDIDATE` 拒绝。名称路径表示模型**本次显式选择当前 scope 中该精确名称的当前定义**，不声称之前已验证过它。
 
 名称路径先解析当前绑定并锁定本次验证快照，计算 `schemaDigest` / `skillRevision`；提交前重新检查资格与版本，期间变化则整批失败，不得解析到另一 scope 或悄悄改选。此前 `invalidated` 的同名工具可通过新的显式 `load` 选定当前版本，不自动继承旧选择。
 

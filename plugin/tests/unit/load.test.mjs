@@ -101,7 +101,9 @@ test('目录代次变化后旧 ref 失效', async () => {
   const { engine } = await makeEngine();
   const r = searchOnce(engine, SCOPE_A);
   const c = r.data.candidates[0];
-  engine.refreshCatalog(sampleBindings());
+  // 目录**真的**变了(后装一个新工具)才升代次。传入与当前目录逐字相同的绑定集
+  // 现在走 refreshCatalog 的快路径,不再作废 ref —— 那正是本次修复要保住的行为。
+  engine.refreshCatalog([...sampleBindings(), binding({ name: 'new_tool', toolId: 't_new_tool', namespace: 'files' })]);
   const res = await engine.handleLoad({ candidates: [{ ref: c.ref, revision: c.revision }] }, SCOPE_A, { operationId: nextOpId() });
   assert.equal(res.response.error.code, 'CANDIDATE_UNAVAILABLE');
 });

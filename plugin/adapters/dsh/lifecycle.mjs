@@ -327,6 +327,12 @@ export function createLifecycle(deps) {
       // 完全没有 own 出站事实的会话（新会话或 own-only fork）：仍然**先查同 identity
       // 的 durable 记录** —— 冷崩重放（记录已 durable、首 header 未发出就崩）时，
       // 此刻的配置可能已经改过，权威必须来自已落盘的那一份。
+      //
+      // 本分支**不读快照**，journal 的恢复缓冲因此没有任何读者，必须在此显式收口：
+      // 漏掉它，每个新会话都会把整条 session/event（含 payload 为完整出站 tools 数组的
+      // request/header）一路累积到会话结束。上面那层 buffers 由 MAX_BUFFERED_EVENTS
+      // 封顶，它封不到 runtime 建立**之后**的这份缓冲。
+      journal.stopBuffering();
       runtime.baselinePromise = resolveBootstrapBaseline(runtime);
     } else {
       runtime.baselinePromise = journal.restore().then((outcome) => {

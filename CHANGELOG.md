@@ -19,6 +19,114 @@ Nothing in this file is a product-acceptance statement. For the authoritative pe
 what is verified, what is unverified, and what this version refuses to support — see
 [`plugin/docs/05-current-status.md`](plugin/docs/05-current-status.md).
 
+## [Unreleased] — runtime stability and retrieval quality
+
+Source version stays `0.2.0-functional.6` (**not bumped**). **The package is not published to npm**,
+and this round performs no install, GUI reload or application restart. This entry makes **no**
+product-acceptance claim: see [`plugin/docs/05-current-status.md`](plugin/docs/05-current-status.md)
+for the authoritative per-item status.
+
+### Fixed — functional
+
+- **The restore buffer is never released for a new session.** `journal.mjs` buffered every
+  `session/event` — including each `request/header`, whose payload carries the full outbound tools
+  array — and the buffer is bounded **by time, not by size**. It was only closed on the `restore()`
+  success path or on `dispose()`, but `ensureRuntime` takes the bootstrap branch for **every**
+  session with `seq === 0`, and that branch never reads a snapshot. The result was unbounded growth
+  for the whole session lifetime, into an array nothing ever reads again. `stopBuffering()` is now
+  explicit and idempotent on the bootstrap branch, on fail-closed and on dispose, and the file-header
+  comment no longer implies a size cap. `MAX_BUFFERED_EVENTS` bounds a *different* buffer (the
+  pre-runtime one) and never bounded this one.
+- **Any unrelated tool registration invalidated every live candidate ref and list cursor.** The host
+  broadcasts `tools/change` for a register / dispose / restrict in **any** scope, and
+  `refreshCatalog` ran for every live session on every broadcast with an unconditional
+  `eligibilityGeneration += 1` plus `dropForEligibility` — so one unrelated plugin registering a tool
+  forced the model to redo its search. `refreshCatalog` is now **content-aware**: an order-sensitive
+  identity fingerprint over exactly the fields `buildEntry` derives identity from is compared first,
+  and an unchanged catalog returns without rebuilding, without bumping the generation and without
+  dropping refs. Real changes keep the original path. The fingerprint includes the **derived
+  categories** and the **skill text**, because those decide `orderDigestByView` and
+  `searchDocumentId`. `orderDigestByView` also gained the missing **`available:all`** entry — without
+  it, the most-used browsing view bound a constant cursor digest that no catalog change could kill.
+  `engine.handleList`'s available view now reuses `catalog.orderedNamesFor`, so the paged order and
+  the cursor digest cannot diverge.
+- **`engine.cancelOperation` had no production caller**, so a `tool_load` whose turn never produced a
+  canonical `tool/result` held its budget reservation for the rest of the session. It is now called
+  from `abandonLiveCalls()` on the terminal discard paths. `settleCompactionEnd` deliberately does not
+  call it: the following `resetCacheEpoch` already drops that session's pending entries.
+- **Chinese search mostly returned nothing.** Entry documents were tokenised from the English
+  controlled category ids plus (in practice) English summaries, so a Chinese query only ever matched
+  through the controlled synonym table — a measured `读取文件内容` returned **0** candidates. Each
+  entry's category field now also carries the category title and capability summary in **every**
+  supported locale, so one language-neutral index serves both query languages.
+- **Synonym evidence outranked direct name evidence**, so `read file contents` ranked `grep` above
+  `read_file`. Synonym credit is now halved **only** when a document's name matched zero query terms;
+  documents whose name already matched keep the previous weight, so no existing ordering moved.
+- **A candidate dropped by the result byte budget still left its ref in the store.** Refs are now
+  minted after the budget decision, with an equal-length placeholder so byte accounting and truncation
+  boundaries are unchanged.
+- **`tool_load` candidate `revision` is now genuinely optional end to end.** The behaviour already
+  existed in `engine` / `state`; the model-visible description, the JSDoc types, `docs/01 §5.4` and
+  `docs/02` were still describing it as required, and the wire contract accepted "absent" only as an
+  **absent key** — `null` and `""`, which models routinely emit for optional fields, were rejected.
+  All three spellings now mean "take the version the ref is bound to", while numbers, objects, arrays
+  and booleans stay `INVALID_ARGS`. The key is **dropped** rather than passed through, because the
+  engine reads `item.revision ?? rec.revision` and `??` does not catch `""`.
+- **Two wrong-text defects**: `ENGINE_DISPOSED` was looked up under `error` although the key is
+  top-level, so every post-`dispose()` guard rejection carried `reason: undefined`; and
+  `toDomainError` fell back to English while the `DomainError` constructor fell back to the bound
+  interface language, so one failure could mix languages.
+
+### Changed — two pre-existing tests
+
+`load.test.mjs` ("目录代次变化后旧 ref 失效") and `review-fixes.test.mjs` (R04) each triggered their
+subject by refreshing with a byte-identical binding set, relying on the unconditional generation bump.
+They now trigger it with a genuinely different catalog (an added tool; a changed wire). Each new
+expectation matches its test name more closely than the old one did; the R04 invariant it protected
+(monotonic counter, no wall clock, distinct generations under a frozen clock) is unchanged.
+
+### Verification boundary
+
+Commands run on this branch, with the numbers from those runs:
+
+- `node --test plugin/tests/unit/*.test.mjs` → **349 pass / 0 fail / 0 skipped**, exit 0 (was 308
+  before this round; +41 from four new files).
+- `npm run test:composition` → **108 pass / 0 fail / 0 skipped**, exit 0, across **14** host
+  composition files against the real DSH Core `0.2.1-alpha.1` composition on the default install root.
+- `node plugin/quality/validate.mjs` → **20 PASS / 1 FAIL**, exit 1 — the **pre-existing** category
+  eligibility failure (held-out H037 ×2, H044 ×1), unchanged by this round and not whitened.
+- Document relative links: 16 files, 0 dangling.
+
+### Not fixed, and why
+
+- **A `tool_load` cancelled mid-turn still holds its reservation.** A cancelled turn produces no
+  canonical `tool/result`, so the journal never observes that call again. The only abort-adjacent event
+  with evidence in-repo is `turn/end`, and `plugin/contracts/gate-runtime-contract.mjs` shows only that
+  it is recorded on a **normal** completion — it does not establish that it cannot race a late
+  `tool/result`. Cancelling there risks discarding a legitimate late fold (leaving the tool stuck at
+  `TOOL_NOT_ADVERTISED`), which is worse than the leak, so this was left alone rather than guessed.
+  What is needed: a host-verified statement of the `turn/end` → `tool/result` ordering on the abort
+  path. The fix is then one `turn/end` branch calling `abandonLiveCalls()`.
+- **The skill capability is still not wired.** `registry.mjs` passes `skill: null` unconditionally, so
+  every `tool_load` returns `skills: []`, `skillRevision` is always `none`, and `skills.mjs` is dead
+  code in the only shipped adapter — while `docs/01 §1.2` lists it as one of six product capabilities.
+  That is a product decision (wire it, or take it out of the capability list), not a bug fix.
+- **`tool_list` with no arguments still fails.** `view` defaults to `available`, and available /
+  loaded require a `category`, so the model's most natural first call lands on `INVALID_ARGS`.
+- `STALE_CANDIDATE` is largely unreachable (a definition change bumps the generation and kills the ref
+  first, yielding `CANDIDATE_UNAVAILABLE`); pre-existing semantics, not introduced here.
+- Not touched: dead exports, the uncleaned `registry` generation / last-seen / binding-state maps,
+  the double locale accessors in `engine.mjs`, and `docs/01 §1.3`'s claim of an inverted index that
+  does not exist.
+
+### Review required
+
+This round changes the eligibility-generation invalidation surface and the load / unload state machine
+in `plugin/domain/`, so by the rule in [`CONTRIBUTING.md`](CONTRIBUTING.md) it **cannot be signed off
+by its author**. A non-author review should concentrate on two judgements: whether the identity
+fingerprint's field set matches exactly what downstream consumers read, and whether skipping session
+invalidation on the fast path is always safe.
+
 ## [0.2.0-functional.6] — release preparation: restore settlement, TE-R strengthening, and the pending-settlement gates
 
 Source version `0.2.0-functional.6`. **The package is not published to npm**, and this round performs
