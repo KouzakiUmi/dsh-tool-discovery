@@ -52,17 +52,35 @@
      `ledger.load()` 会自增 revision 让迁移变成 superseded，并把尚未落盘的新 epoch 读成
      `MISSING` → 一次**真实成功的用户 `/compact`** 被判成 legacy，永久 0 请求。
 - 本节**不改变**上文任何一行结论：header 授权缺陷**既未宣称已修，也不因此降级既有已验证项**；
-  `07` 的结论同样保持不变。本包**未发布到 npm**，本轮源码版本为 `0.2.0-functional.5`
-  （`0.2.0-functional.2` 已由 `build-c4a111c` 占用，不可复用）。
-- **2026-10-07 追加一轮（分支 `feat/trusted-epoch-isolated-bad-record`）**：修 `08 §2.4c`
+  `07` 的结论同样保持不变。本包**未发布到 npm**，合并后本分支源码版本为 `0.2.0-functional.5`
+  （`0.2.0-functional.2` 已由 `build-c4a111c` 占用，不可复用；`0.2.0-functional.4` 是并入 `main`
+  的 TE-R 轮）。
+- **2026-10-07 追加一轮（分支 `feat/tool-load-receipt-authorization`）**：复核审查 9 项未覆盖里
+  优先级最高的 **TE-R**（canonical `tool_load` 回执链作为**正向**授权源），结论是**该性质本来就
+  成立，缺的是覆盖**，故新增门禁 `TER0` / `TER1` / `TER2`（置空常驻基线 + 真重启冷恢复 +
+  从未 load 的同族工具反空过对照），并用变异短接 `applyCanonicalPair` 证明门禁有真实分辨力。
+  **该轮产品源码一行未动**，不宣称修过任何缺陷；复跑 unit 283/0、composition 105/0。
+  TE-R 门禁由该轮产出方本人所写，**按「作者不自签」仍需独立复审**，详见
+  [08 §5.4](<08-trusted-epoch-baselines.md>)。
+- **2026-10-07 再追加一轮（分支 `feat/trusted-epoch-isolated-bad-record`）**：修 `08 §2.4c`
   末段此前如实记录为「未修」的**连坐**副作用 —— 存量里一条记录读不出来会让
   `facility.open(spec)` 对**整个域**抛错，于是**所有**会话（含记录完好、与那条坏行毫无
   关系的）一起停摆。修法是把 SDK 那层 schema 降为**传输层**（`z.unknown()`），判据全部
-  移回本模块已有的逐会话校验器；**介质一行未动**，「不删 / 不 quarantine / 不覆盖」三条
-  原则全部保持。受影响会话**仍**是 `INVALID` + 0 出站请求，无辜会话照常 ready 且出站。
-  新增判据 `BR4`（先 RED 后 GREEN），并用变异把传输层改回 `strictObject` 证明门禁有分辨力。
-  **本轮改了产品源码**，复跑 unit 283/0、composition 104/0；按「作者不自签」**仍需独立复审**。
-  详见 [08 §5.3](<08-trusted-epoch-baselines.md>)。
+  移回本模块已有的逐会话校验器；对那条坏记录**不删、不覆盖、不 quarantine**（其它可信记录的正常
+  `put` 照旧），三条原则全部保持。受影响会话**仍**是 `INVALID` + 0 出站请求，无辜会话照常 ready
+  且出站。新增判据 `BR4`（先 RED 后 GREEN），并用变异把传输层改回 `strictObject` 证明门禁有分辨力。
+  **本轮改了产品源码**，作者复跑 unit 283/0、composition 104/0；**已获非作者限定范围复核「通过」**
+  （仅限本修复与冲突合并，**不替 TE-R 专项补签、不是全 feature 验收**）。详见
+  [08 §5.3](<08-trusted-epoch-baselines.md>)。
+- **两轮合并到同一棵树之后的复跑（2026-10-07，本工作区）**：`npm test` → **283 pass / 0 fail**
+  （exit **0**）、`npm run test:composition` → **106 pass / 0 fail / 0 skipped**（exit **0**），
+  即 103 基线 + `BR4` + `TER0` + `TER1/TER2`；日志见 `.probe/pr5-merge-unit.log` 与
+  `.probe/pr5-merge-comp.log`。复核方独立复跑得到同一组数字（283/0、106/0/0 skip），文档交叉
+  引用与章节编号复核无断链，并在**私有副本**把传输层恢复旧 `strictObject` 后复现 **BR4b 转红**
+  （bystander 会话 `incompatible` 而非 `ready`，exit **1**，日志 `.probe/pr5-parent-mutation-red.log`），
+  **产品源码未动**。
+- **验收口径不变**：TE-R 专项门禁**仍未补签**，`08 §2.2a` 契约级缺口与其余未覆盖项仍未修，
+  `03 §11` 阶段 3 全未完成；整体仍为 **WIP / 未验收**，任何一条判据都**不得**写成「已通过」。
 
 ## 1. 状态速览
 
@@ -76,7 +94,7 @@
 | 安装 / 发布 | **部分完成** | 源码基线已随 `main` 发布；**未安装、未启用、未构建产物、未上 npm** |
 | 文档与路径口径整理 | **已完成** | 本文件集已按迁移后布局订正；**不升级以上任何一行** |
 | 基线独立门禁（当前 `main`） | **已通过（限 §0 范围）** | unit 160/0、composition 42/0（含 `S03c`、recovery、event-seq）、质量工装 14/0/1 skip、validate 20PASS/1FAIL |
-| 可信周期基线（见 §0.1） | **已初步实现 / WIP，验收未完成** | 契约、判据与门禁见 [08](<08-trusted-epoch-baselines.md>)；三处修复已获**非作者独立复审「通过」**；另新增 2 份门禁（failclosed / badrecord）并接入 `package.json` 与 CI，unit 283/0、composition 101/0（均 exit 0）；**`08 §2.4c` 的「坏记录连坐」副作用已于 2026-10-07 修复**（composition 104/0，变异验证过，**未经独立复审**）；**复审其余未覆盖项 + 一条 MEDIUM 契约级缺口未修**，**无验收结论** |
+| 可信周期基线（见 §0.1） | **已初步实现 / WIP，验收未完成** | 契约、判据与门禁见 [08](<08-trusted-epoch-baselines.md>)；三处修复已获**非作者独立复审「通过」**；另新增 2 份门禁（failclosed / badrecord）并接入 `package.json` 与 CI，unit 283/0、composition 101/0（均 exit 0）；**复审 9 项中优先级最高的 TE-R 已于 2026-10-07 补齐门禁**（TE-R 轮 composition 105/0），**`08 §2.4c` 的「坏记录连坐」已于同日修复**（坏记录轮 composition 104/0，变异验证过）——**坏记录修复已获非作者限定范围复核「通过」，TE-R 门禁仍未补签**；**其余未覆盖项 + 一条 MEDIUM 契约级缺口（`08 §2.2a`）未修**；合并后本机复跑 unit 283/0、composition 106/0（均 exit 0），**整体仍 WIP、无验收结论、不表示缺陷已全部修复** |
 | 恢复覆盖增强（内容已并入基线） | 已合并；源码曾经独立复审（限 3 个 code 文件） | composition 42（14 + 7 + recovery 13 + event-seq 8）；**不等于产品验收**；见 [07](<07-lifecycle-recovery-coverage.md>) |
 
 ## 2. 已验证

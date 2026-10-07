@@ -285,6 +285,45 @@ to the plugin manager.
   result (21 checks, 20 PASS / 1 FAIL) is unchanged by this branch and the scoring data is still
   not publishable.
 
+## [0.2.0-functional.4] — TE-R coverage for the canonical tool_load receipt chain
+
+Branch `feat/tool-load-receipt-authorization`. **This round changes tests and documentation only; no
+product source file is modified.** The package is **not published to npm**, and no profile
+installation, GUI reload or application restart is part of this delivery. Nothing here is a
+product-acceptance statement.
+
+`version` moves to `0.2.0-functional.4` because `0.2.0-functional.3` is already taken by the released
+`build-3c2ed533706e` asset; reusing it would make two different source states indistinguishable to the
+plugin manager.
+
+### Added
+
+- **The canonical `tool_load` receipt chain is now gated as a positive authorisation source (TE-R).**
+  The previous round's independent review listed TE-R among nine uncovered items, and it is the one
+  that matters most for this feature: the durable epoch record is the authority for a session's
+  **resident** names, but an **on-demand** tool must still be authorised by the canonical
+  `tool/call`→`tool/result` chain. Nothing had proven that the record had not quietly replaced that
+  chain as the authorisation source.
+  The new gates make the two authorisation surfaces **separately** observable:
+  - **TER0** — with the resident baseline explicitly empty, a real `tool_load` fold must produce the
+    tool's selection, and the name must appear in **neither** `alwaysNameSet` nor the trusted record's
+    `names`. Without both negatives the rest of the group would be a vacuous pass.
+  - **TER1** — across a **real restart** (all services genuinely closed, the loader reopened on the
+    same root, session resumed), the selection must be rebuilt by replaying the receipt chain from the
+    persisted log, and a direct execution must reach the tool body (`isError:false`, body count 1).
+    The baseline is empty for the whole sequence, so there is no other authorisation surface to borrow.
+  - **TER2** — in that same restored session, a sibling hidden tool that was **never** loaded must
+    still be refused with a zero body count. This is the anti-vacuity control: TER1 must not be
+    obtainable by allowing everything after a restore.
+- The gates resolve the selection through the **same** path the product uses
+  (`plugin/domain/state.mjs:429` filters `selected.values()` by `.name`), because `selected` is a map
+  keyed by canonical tool id (`global::…`), not by bare tool name.
+
+### Fixed
+
+- Nothing. No behavioural defect was found in this round: TE-R's property already held, and the gap
+  was coverage. This entry therefore records **no** product change and claims no fix.
+
 ## [0.2.0-functional.5] — one bad stored record no longer stops every session
 
 Branch `feat/trusted-epoch-isolated-bad-record`. This entry describes **source** delivered by pull
@@ -293,8 +332,8 @@ application restart is part of this delivery. Nothing here is a product-acceptan
 contract is [`plugin/docs/08-trusted-epoch-baselines.md`](plugin/docs/08-trusted-epoch-baselines.md).
 
 `version` moves to `0.2.0-functional.5` because `0.2.0-functional.3` is already taken by the
-released `build-3c2ed533706e` asset, and `0.2.0-functional.4` is carried by the separate
-TE-R coverage branch.
+released `build-3c2ed533706e` asset, and `0.2.0-functional.4` is carried by the separate TE-R
+coverage branch, which has since merged into `main` and whose entry is recorded above.
 
 ### Fixed
 
@@ -325,23 +364,41 @@ TE-R coverage branch.
 
 ### Verification boundary
 
-- Local runs, commands and exit codes: `npm test` → **283 pass / 0 fail**, exit **0**;
-  `npm run test:composition` → **104 pass / 0 fail / 0 skipped**, exit **0** (was 103; +1 from this
-  round), against the real DSH Core `0.2.1-alpha.1` composition.
-- The new criterion was written **before** the fix and went red first: with the schema strict, the
-  bystander session received `incompatible` instead of `ready`. It covers four things — the affected
-  session still ends `INVALID` with zero outbound requests (**not** relaxed by this fix), the
-  innocent session in the same domain is `ready` **and** emits requests, the bad record is still on
-  disk unmodified, and the injection provably touched only the one row.
-- Discriminating power was mutation-checked: restoring a `strictObject` transport schema turns the
-  new criterion red. The mutation was reverted.
-- **This round changes product source and has not been independently reviewed.** Per the
-  contract's discipline these runs were performed by the author of this round and do **not** upgrade
-  any criterion to "passed".
-- **Still open, unchanged by this round:** the bootstrap-path contract gap
-  (`08 §2.2a`, deliberately deferred), the remaining uncovered review items, the residual sign-off
-  debt in `05 §5`, and all of `03 §11` stage 3: real provider wire, token reduction, TTFT / retrieval
-  experiments, npm publication and installation. The feature is still **not** product-accepted.
+The two entries above are **separate rounds**; their workspace numbers are recorded per round and are
+**not** additive claims.
+
+- `0.2.0-functional.4` round (TE-R, author-run): `npm test` → **283 pass / 0 fail**, exit **0**;
+  `npm run test:composition` → **105 pass / 0 fail / 0 skipped**, exit **0** (was 103; +2), against
+  the real DSH Core `0.2.1-alpha.1` composition on that machine. The gates were mutation-checked:
+  short-circuiting `engine.applyCanonicalPair` in `plugin/adapters/dsh/journal.mjs` turns TER0 and
+  TER1 **red**, together with the pre-existing TE0 and TE1c; the mutation was reverted and
+  `journal.mjs` is byte-identical to `main`.
+- `0.2.0-functional.5` round (bad-record isolation, author-run): `npm test` → **283 pass / 0 fail**,
+  exit **0**; `npm run test:composition` → **104 pass / 0 fail / 0 skipped**, exit **0** (was 103;
+  +1), against the real DSH Core `0.2.1-alpha.1` composition. The new criterion was written
+  **before** the fix and went red first: with the schema strict, the bystander session received
+  `incompatible` instead of `ready`. It covers four things — the affected session still ends
+  `INVALID` with zero outbound requests (**not** relaxed by this fix), the innocent session in the
+  same domain is `ready` **and** emits requests, the bad record is still on disk unmodified, and the
+  injection provably touched only the one row. Discriminating power was mutation-checked: restoring
+  a `strictObject` transport schema turns the new criterion red. The mutation was reverted.
+- **Both rounds merged into one tree, re-run in this workspace (2026-10-07, exit codes as recorded):
+  `npm test` → 283 pass / 0 fail, `npm run test:composition` → 106 pass / 0 fail / 0 skipped**
+  (103 baseline + BR4 + TER0 + TER1/TER2), logs in `.probe/pr5-merge-unit.log` and
+  `.probe/pr5-merge-comp.log`. This is a third author-side run; it merges the two suites and claims
+  no new criterion.
+- **Non-author review, limited scope (2026-10-07, PR5): pass.** The reviewer is not the author of
+  that round. Scope is **only** the bad-record isolation fix and the conflict merge — it is **not**
+  feature-wide acceptance and it does **not** sign off the TE-R work. Independent re-runs:
+  `npm test` → **283 pass / 0 fail**, `npm run test:composition` → **106 pass / 0 fail / 0 skipped**;
+  documentation cross-references and section numbering check out with no broken links. Discriminating
+  power was reproduced independently on a **private copy**: restoring the old `strictObject`
+  transport turns **BR4b red** (bystander session `incompatible` instead of `ready`, exit **1**, log
+  `.probe/pr5-parent-mutation-red.log`). **Product source was not touched**; the mutation exists only
+  in that private copy. The author-side records above are kept as written and are not rewritten.
+- **What is still open:** the TE-R gates remain unreviewed, the `08 §2.2a` contract gap and the
+  remaining uncovered review items are unfixed, and all of `03 §11` stage 3 is outstanding. The
+  feature as a whole is **still not product-accepted**.
 
 ## [0.1.0] — prepared 2026-10-06, not published
 
