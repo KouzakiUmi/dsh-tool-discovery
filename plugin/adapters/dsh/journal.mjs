@@ -196,7 +196,17 @@ export function createJournal(deps) {
 
   /** live 路径的 canonical call 缓存：callSeq → {callId, input}（只存 tool_load）。 */
   const liveCalls = new Map();
-  /** 恢复窗口内的新事件缓冲（读快照期间到达的事件不能丢）。 */
+  /**
+   * 恢复窗口内的新事件缓冲（读快照期间到达的事件不能丢）。
+   *
+   * **本缓冲只按"时间"封口，不按条数封顶**：没有 MAX_* 之类的上限，只有
+   * `stopBuffering()` 能释放它。因此每个走到"无人再读这份副本"的位置都必须显式收口
+   * —— 漏一处，就是整个会话生命周期里每个 `session/event`（含 payload 为**完整出站
+   * tools 数组**的 `request/header`）的无界累积。
+   *
+   * 容易混淆的另一层：runtime 建立**之前**的事件由 lifecycle 的 `buffers` 暂存，
+   * 那一份才由 MAX_BUFFERED_EVENTS 封顶；本缓冲与它无关，且生命周期长得多。
+   */
   let buffering = true;
   /** @type {any[]} */
   let buffer = [];
@@ -276,14 +286,47 @@ export function createJournal(deps) {
    */
   let ownOutboundSeen = false;
 
+  /**
+   * 显式结束恢复缓冲：此后的事件直接走 live 折叠路径，journal 不再留副本。
+   *
+   * 只有三条合法调用路径（少一条就等于漏一个"无人再读这份缓冲"的位置）：
+   *   * `restore()` 成功收尾 —— 快照已读、已 merge、已 fold，缓冲完成使命；
+   *   * **bootstrap 路径**（lifecycle 判 `noOwnHistoryPossible`，压根不读快照）；
+   *   * 终态（fail closed / dispose）—— 终态之后保留事件没有任何读者。
+   *
+   * 幂等，可重复调用。
+   */
+  function stopBuffering() {
+    buffering = false;
+    buffer = [];
+  }
+
+  /**
+   * 丢弃全部在途 load 的配对现场，并**同步释放**它们在 engine 侧的预算预留。
+   *
+   * `liveCalls` 的每一项都对应 engine 里一个 `op_<callId>` 未决项：entries.mjs 用
+   * 同一个 operationId 登记热态预留，journal 的 canonical call 也用同一个锚点。
+   * 因此清掉配对现场却不同步取消，就等于把那份预留留到会话结束 —— engine.pending
+   * 只有三条收口路径（applyCanonicalPair 折叠 / cancelOperation 取消 /
+   * resetCacheEpoch 清空），漏掉它时 handleLoad 会为一个从未生效的 load 报 BUDGET_EXCEEDED。
+   *
+   * 只在"这条 load 永远不会有 canonical result"的路径调用；正常成功路径由
+   * `applyCanonicalPair` 自己删掉 pending，**不得**在此取消。
+   */
+  function abandonLiveCalls() {
+    for (const { callId } of liveCalls.values()) engine.cancelOperation(`op_${callId}`);
+    liveCalls.clear();
+  }
+
   function failClosedUncertain(reason) {
     sealed = true;
     sealedReason = reason;
     engine.failClosed(scope);
     // 已 fail closed：缓冲与 live call 缓存不再有读取者（onEvent 入口即 return），
     // 丢弃它们以杜绝「残留配对 + 后续重复 result 重新激活」，并让内存回到基线。
-    buffer = [];
-    liveCalls.clear();
+    // 在途 load 同样在此收口：它们的回执永远不会再来，预留必须显式还回去。
+    stopBuffering();
+    abandonLiveCalls();
     log('journal:fail-closed', { sessionId, reason });
     return { mode: 'incompatible', reason };
   }
@@ -400,6 +443,9 @@ export function createJournal(deps) {
     }
     lastSuccessCompactionEndSeq = event.seq;
     currentEpoch = compactedEpochIdentity(id, event.seq);
+    // 周期重开即丢弃在途 load：边界之前的回执不再有对价。engine 侧的未决项由
+    // **下一行** resetCacheEpoch 一并清掉（它清本会话全部 pending），故这里不必
+    // 再逐条 cancelOperation —— 两处都做会让"谁收口"变得不可读。
     liveCalls.clear();
     engine.resetCacheEpoch(scope, 'compaction-end');
     // 周期重开：此刻（且仅此刻）取此刻的配置、换上新的常驻名单，并刷新那份**尚未发送**
@@ -676,8 +722,7 @@ export function createJournal(deps) {
       }
       const pairs = foldPairs(ownEvents).filter((p) => p.seq > lastSuccessCompactionEndSeq);
       const outcome = engine.restore(pairs, scope);
-      buffering = false;
-      buffer = [];
+      stopBuffering();
       log('restore:folded', {
         sessionId,
         events: merged.length,
@@ -794,12 +839,19 @@ export function createJournal(deps) {
     sealedReason: () => sealedReason,
     whenRestored: () => restorePromise,
     dispose() {
-      buffering = false;
-      buffer = [];
-      liveCalls.clear();
+      stopBuffering();
+      // 在途 load 一并收口：journal.dispose **不总是**伴随 engine.dispose
+      // （lifecycle 的 whenReady reject 路径只 failClosed，engine 仍持有 pending），
+      // 预留必须在这里显式还回去。
+      abandonLiveCalls();
       // 会话释放后不再有任何读者；留着它只会让迟到的重放复活授权。
       latestHeaderTools = null;
       latestHeaderSeq = undefined;
     },
+    /**
+     * 显式结束恢复缓冲（幂等）。lifecycle 在**不读快照**的 bootstrap 路径上调用：
+     * 该路径下缓冲没有任何读者，不收口就是整会话无界累积。
+     */
+    stopBuffering,
   };
 }

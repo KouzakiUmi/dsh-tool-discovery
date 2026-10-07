@@ -101,8 +101,11 @@ export function validateBinding(b) {
  * @returns {CatalogEntry}
  */
 export function buildEntry(b) {
+  // 只浅拷贝一层:wire.parameters(以及任何嵌套对象)仍与调用方共享引用。
+  // 快照的不可变性靠 digest 口径(canonical JSON)而非深拷贝保证 —— 摘要与比较
+  // 都按内容算,共享引用不影响 identity;代价是调用方**不得**在 buildCatalog
+  // 之后改写原 wire 对象。
   const wire = { ...b.wire };
-  if ('parameters' in wire) wire.parameters = b.wire.parameters;
   const schemaDigest = digestOf(wire);
   const skillRevision = b.skill ? b.skill.skillRevision : 'none';
   // revision 同时覆盖 wire 身份、技能版本与可证明的注册绑定代次。
@@ -130,6 +133,60 @@ export function buildEntry(b) {
     wireBytes: utf8Bytes(canonicalJson(wire)),
     skill: b.skill ? { ...b.skill, limitations: b.skill.limitations.slice() } : null,
   };
+}
+
+/**
+ * 绑定(或目录条目)的身份指纹。字段口径必须与 buildEntry 派生身份时用的**完全一致**:
+ * toolId、name、description、wire、bindingGeneration、技能版本、**派生类别**、**技能正文**。
+ * 少一个字段 → 把真实变更误判成"没变"(换 wire 却保留旧 ref 与旧游标);
+ * 多一个无关字段 → 把无关的热注册误判成"变了"(白白作废全量 ref 与游标)。
+ *
+ * 类别与技能正文**必须**在指纹里:categories 决定 `orderDigestByView`(游标有效性),
+ * 技能正文决定 `searchDocumentId`。当前 DSH adapter 恒传
+ * providerNamespace/trustedCategoryOverride/skill = null,两者都不会变;
+ * 但指纹的完整性不能靠"现在恰好不变"来保证 —— 任何未来接线都会立刻踩中这个洞。
+ * @param {{toolId:string, name:string, description:string, wire:object, bindingGeneration?:string|null,
+ *   skillRevision:string, categories?:readonly string[], skill?:{usage:string, limitations:string[]}|null}} rec
+ * @returns {string}
+ */
+function identityDigest(rec) {
+  return digestOf({
+    toolId: rec.toolId,
+    name: rec.name,
+    description: rec.description,
+    wire: rec.wire,
+    bindingGeneration: rec.bindingGeneration ?? null,
+    skillRevision: rec.skillRevision,
+    // 与 buildEntry 派生 searchDocumentId / orderDigestByView 时用的完全同一份值。
+    categories: rec.categories ?? null,
+    skillText: rec.skill === undefined || rec.skill === null
+      ? ''
+      : `${rec.skill.usage} ${rec.skill.limitations.join(' ')}`,
+  });
+}
+
+/**
+ * 建目录**之前**就能算的绑定集指纹(顺序敏感:同一组绑定换序 → 不同指纹)。
+ * engine.refreshCatalog 用它在 buildCatalog / buildSearchIndex 之前判
+ * "这次 tools/change 到底有没有改动本 scope 的绑定身份"。
+ *
+ * 形状异常的绑定(缺 wire、skill 不是对象等)会让本函数抛错;调用方据此退回慢路径,
+ * 由 buildCatalog 抛规范错误 —— 本函数**不**替代 validateBinding。
+ * @param {any[]} rawBindings
+ * @returns {string}
+ */
+export function identityFingerprintOf(rawBindings) {
+  return digestOf(rawBindings.map((b) => identityDigest({
+    toolId: b.toolId,
+    name: b.name,
+    description: b.description,
+    wire: b.wire,
+    bindingGeneration: b.bindingGeneration,
+    skillRevision: b.skill ? b.skill.skillRevision : 'none',
+    // 与 buildEntry 同一个口径:category 与 skill 都是派生态。
+    categories: classifyBinding(b),
+    skill: b.skill,
+  })));
 }
 
 /**
@@ -163,10 +220,13 @@ export function buildCatalog(rawBindings, opts) {
   /** @type {Map<string, string[]>} */
   const categories = new Map();
   for (const entry of entries.values()) {
+    // entries 是按 toolId 去重的 Map,每个 toolId 只在这里出现一次;classifyBinding
+    // 返回的类别数组也已去重。因此直接 push 即可 —— 先前的 arr.includes(toolId)
+    // 线性扫描在 N 个绑定 × M 个类别上是 O(N²·M),且守卫恒为 false。
     for (const c of entry.categories) {
-      const arr = categories.get(c) || [];
-      if (!arr.includes(entry.toolId)) arr.push(entry.toolId);
-      categories.set(c, arr);
+      const arr = categories.get(c);
+      if (arr === undefined) categories.set(c, [entry.toolId]);
+      else arr.push(entry.toolId);
     }
   }
   for (const [c, arr] of categories) {
@@ -185,6 +245,13 @@ export function buildCatalog(rawBindings, opts) {
   for (const [category, ids] of categories) {
     orderDigestByView.set(`available:${category}`, digestOf(ids));
   }
+  // available:all:最常用的浏览视图。缺了这一项,category:'all' 的游标会退化成绑定
+  // 常量 'empty'(engine 取不到摘要时的兜底),于是任何改动了排序的目录变更都杀不掉它。
+  // 摘要按**名称序列**算:翻页项就是名称(同名 shadow 已去重),而不是 toolId 序列。
+  orderDigestByView.set('available:all', digestOf(orderedNamesFor(
+    /** @type {any} */ ({ entries, categories }),
+    'all',
+  )));
   orderDigestByView.set('categories:all', digestOf(Array.from(categories.keys()).sort()));
 
   const snapshot = {
@@ -194,6 +261,18 @@ export function buildCatalog(rawBindings, opts) {
     byName,
     categories,
     orderDigestByView,
+    // 快照自身的身份指纹,与 identityFingerprintOf 同一口径 —— refreshCatalog
+    // 拿它和新绑定集比,决定是否真的需要重建。
+    identityFingerprint: digestOf(Array.from(entries.values(), (e) => identityDigest({
+      toolId: e.toolId,
+      name: e.name,
+      description: e.summary,
+      wire: e.wire,
+      bindingGeneration: e.bindingGeneration,
+      skillRevision: e.skillRevision,
+      categories: e.categories,
+      skill: e.skill,
+    }))),
   };
   return deepFreeze(snapshot);
 }
@@ -225,17 +304,27 @@ export function resolveByName(snapshot, name) {
 
 /**
  * 计算某视图在某类别下的稳定名称序列(供 list 与 orderDigest 使用)。
+ * 同名多绑定(shadow)只留一个名称,并按名称排序 —— engine.handleList 的 available
+ * 视图直接用它产出分页项,因此顺序摘要与实际翻页顺序天然同源。
  * @param {import('./catalog.mjs').CatalogSnapshot} snapshot
- * @param {string} category
+ * @param {string} category 'all' 或受控类别
  * @returns {string[]}
  */
 export function orderedNamesFor(snapshot, category) {
-  const ids = snapshot.categories.get(category);
-  if (!ids) return [];
-  return ids.map((id) => {
+  const ids = category === 'all'
+    ? Array.from(snapshot.entries.keys()).sort()
+    : (snapshot.categories.get(category) || []);
+  const seen = new Set();
+  /** @type {string[]} */
+  const names = [];
+  for (const id of ids) {
     const e = /** @type {import('./catalog.mjs').CatalogEntry} */ (snapshot.entries.get(id));
-    return e.name;
-  });
+    if (!e || seen.has(e.name)) continue;
+    seen.add(e.name);
+    names.push(e.name);
+  }
+  names.sort();
+  return names;
 }
 
 /**

@@ -55,7 +55,11 @@ test('R04 refreshCatalog 的 generation 确定且逐次不同，不读墙钟', a
     const { engine } = await makeEngine({ clock: fakeClock(123) });
     const seen = [];
     for (let i = 0; i < 3; i += 1) {
-      engine.refreshCatalog(sampleBindings());
+      // 每轮换一份**真的不同**的绑定(改 wire)→ 走重建路径。内容一致的 refresh
+      // 现在是快路径(身份指纹相同就不升代次),连刷同一份绑定不再产生新 generation。
+      engine.refreshCatalog(sampleBindings().map((b) => (b.toolId === 't_files_glob'
+        ? { ...b, wire: { ...b.wire, parameters: { type: 'object', required: [`round_${i}`] } } }
+        : b)));
       seen.push(engine.getCatalog().generation);
     }
     assert.equal(new Set(seen).size, 3, '冻结时钟下连刷也必须产生不同 generation');

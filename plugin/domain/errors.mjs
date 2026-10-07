@@ -1,6 +1,6 @@
 // progressive-v2/domain/errors.mjs
 import { errorCodes } from './constants.mjs';
-import { createText, DEFAULT_LOCALE, domainText } from './locale.mjs';
+import { createText, domainText } from './locale.mjs';
 
 /**
  * 领域错误。code 必须存在于错误码表。
@@ -39,12 +39,15 @@ export function isDomainError(e) {
 /**
  * 把任意异常收敛成 DomainError;未知内部错误不泄漏堆栈给模型。
  * @param {unknown} e
- * @param {string} [locale]
+ * @param {string} [locale] 缺省取激活期绑定的语言(与 DomainError 构造器同一口径)
  * @returns {DomainError}
  */
-export function toDomainError(e, locale = DEFAULT_LOCALE) {
+export function toDomainError(e, locale) {
   if (isDomainError(e)) return /** @type {DomainError} */ (e);
-  return new DomainError('INCOMPATIBLE_COMPOSITION', createText(locale).t(['error_internal']), {
+  // locale 缺省同样回落到 domainText,而不是各自 createText(undefined)：
+  // 否则中文界面下一个未预期异常会变成全篇里唯一一句英文(error_internal)。
+  const loc = locale ?? domainText.locale;
+  return new DomainError('INCOMPATIBLE_COMPOSITION', createText(loc).t(['error_internal']), {
     internal: true,
-  }, locale);
+  }, loc);
 }

@@ -4,7 +4,7 @@
 // 边界:不 import Cordis / DSH / 第三方包;不注册工具;不写日志;不改 profile。
 // 所有"当前可见性 / 展示模式 / 保留项 / 身份"都由 adapter 以可信 DTO 传入。
 import { resolveBudgets } from './budgets.mjs';
-import { buildCatalog, resolveByName, resolveByToolId } from './catalog.mjs';
+import { buildCatalog, identityFingerprintOf, orderedNamesFor, resolveByName, resolveByToolId } from './catalog.mjs';
 import { buildCategoryCards, resolveCategory } from './categories.mjs';
 import { deepEqualCanonical } from './canonical.mjs';
 import { createByteAccumulator } from './budgets.mjs';
@@ -36,6 +36,13 @@ const t = (path) => text.t(path);
 
 
 const MAX_SUMMARY_CODE_POINTS = 96;
+
+// 候选 ref 的定长形状:与 candidate-refs.mjs 的 mintOpaqueId(random, 'c_') 一致
+// (前缀 + byteLength×2 个 hex 字符,全是 ASCII)。预算判定必须发生在铸 ref 之前,
+// 于是先用**等长**占位符记账 —— JSON 里 ref 只贡献长度加两个引号,等长即逐字等价,
+// 截断边界因此与原来完全一致。
+const REF_BYTE_LENGTH = 16;
+const REF_PLACEHOLDER = `c_${'0'.repeat(REF_BYTE_LENGTH * 2)}`;
 
 /**
  * @param {any} config
@@ -231,19 +238,9 @@ export function createDiscoveryEngine(config) {
         }
 
         // available:只返回完整原生名称,不附描述/revision/schema/skill
-        const ids = category === 'all'
-          ? Array.from(catalog.entries.keys()).sort()
-          : (catalog.categories.get(category) || []);
-        const seen = new Set();
-        /** @type {string[]} */
-        const allNames = [];
-        for (const id of ids) {
-          const e = resolveByToolId(catalog, id);
-          if (!e || seen.has(e.name)) continue;
-          seen.add(e.name);
-          allNames.push(e.name);
-        }
-        allNames.sort();
+        // 序列与快照里的 available:<category> 顺序摘要同源(catalog.orderedNamesFor),
+        // 于是"翻出来的顺序"与"游标绑定的顺序"不可能各说各话。
+        const allNames = orderedNamesFor(catalog, category);
         const orderDigest = catalog.orderDigestByView.get(`available:${category}`) || 'empty';
         const page = paginateNames({
           allNames,
@@ -298,11 +295,10 @@ export function createDiscoveryEngine(config) {
         const candidates = [];
         let truncated = false;
         for (const hit of hits) {
-          const ref = refStore.issue(scope.sessionId, eligibilityGeneration, hit.entry.toolId, hit.entry.revision);
           const sel = st.selected.get(hit.entry.toolId);
           const card = {
             toolId: hit.entry.toolId,
-            ref,
+            ref: REF_PLACEHOLDER,
             revision: hit.entry.revision,
             name: hit.entry.name,
             categories: hit.entry.categories,
@@ -310,10 +306,13 @@ export function createDiscoveryEngine(config) {
             matchReasons: hit.reasons,
             loaded: alwaysNames.has(hit.entry.name) || Boolean(sel && sel.revision === hit.entry.revision),
           };
+          // 先判字节、过了才铸 ref:被上限挡掉的那个候选,不该在 ref store 里留下
+          // 一条模型从未收到的引用(candidate-refs.mjs 注释里明确要避免的泄漏)。
           if (!acc.tryAdd(JSON.stringify(card))) {
             truncated = true;
             break;
           }
+          card.ref = refStore.issue(scope.sessionId, eligibilityGeneration, hit.entry.toolId, hit.entry.revision);
           candidates.push(card);
         }
         if (candidates.length === 0) {
@@ -650,7 +649,9 @@ export function createDiscoveryEngine(config) {
      */
     evaluateCall(scope, call) {
       if (disposed) {
-        return { allowed: false, code: 'TOOL_NOT_LOADED', reason: text.t(['error', 'ENGINE_DISPOSED']), visibility: 'hidden' };
+        // ENGINE_DISPOSED 是**顶层**文案键(与 error_internal 同级),不在 error 之下 ——
+        // 写成 ['error','ENGINE_DISPOSED'] 会静默取到 undefined,拒绝原因就成了空文案。
+        return { allowed: false, code: 'TOOL_NOT_LOADED', reason: text.t(['ENGINE_DISPOSED']), visibility: 'hidden' };
       }
       const st = requireState(scope);
       const isEntryOrFramework = protectedNames.has(call.name);
@@ -679,9 +680,27 @@ export function createDiscoveryEngine(config) {
 
     /**
      * 目录刷新:重建不可变快照,升代次,旧 ref/cursor 全部失效,失效不再匹配的选择。
+     *
+     * **内容感知**:宿主对任一 scope 的任一次 register/dispose/restrict 都广播
+     * tools/change,而 lifecycle.onRegistryChange 对**每个**活会话都调这里。绑定代次
+     * 已经按 (scope, toolId) 收窄(见 registry.mjs),无关插件注册一个工具、某个 MCP
+     * 服务连上来,本 scope 的绑定身份根本没变 —— 若此时仍无条件升代次,模型手里的
+     * 候选 ref 与分页游标会被白白作废,一次 tools/change 就逼它重跑整轮搜索。
+     * 因此先用身份指纹做廉价判定:一致就走快路径(不重建、不升代次、不动 ref/cursor),
+     * 真的变了才走原路径(重建 + 升代次 + 失效不再匹配的选择 + 与新资格取交集)。
      * @param {any[]} bindings
      */
     refreshCatalog(bindings) {
+      // 指纹只哈希每条绑定的身份字段(toolId/name/description/wire/bindingGeneration/
+      // 技能版本),比整目录重建 + 索引重建便宜两个数量级。
+      let unchanged = false;
+      try {
+        unchanged = identityFingerprintOf(bindings) === catalog.identityFingerprint;
+      } catch {
+        unchanged = false; // 绑定形状异常 → 交给 buildCatalog 抛规范错误,不在此处分叉
+      }
+      if (unchanged) return { eligibilityGeneration };
+
       const nextCatalog = buildCatalog(bindings, {
         now: clock.now(),
         // 单调计数而非时钟:同一毫秒内连刷 / 冻结时钟下 generation 仍唯一且可复现。
