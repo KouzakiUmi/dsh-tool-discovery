@@ -6,6 +6,7 @@
 //
 // 纯函数约束:不读时钟、不读随机、不写文件、不发事件;所有外部事实由 ResolverContext 传入。
 import { canonicalJson, deepEqualCanonical, digestOf, utf8Bytes } from './canonical.mjs';
+import { recomputeIdentity } from './catalog.mjs';
 import { isNonEmptyString, isPlainObject } from './util.mjs';
 import { createText } from './locale.mjs';
 
@@ -87,12 +88,7 @@ export function createState(sessionId) {
  * @returns {{ok:boolean, reason?:string, computed:{revision:string,schemaDigest:string,skillRevision:string}}}
  */
 export function recomputeSelectionIdentity(entry, claimed) {
-  const schemaDigest = digestOf(entry.wire);
-  const revision = `r_${digestOf({
-    schemaDigest,
-    skillRevision: entry.skillRevision,
-    bindingGeneration: entry.bindingGeneration,
-  })}`;
+  const { schemaDigest, revision } = recomputeIdentity(entry);
   const computed = { revision, schemaDigest, skillRevision: entry.skillRevision };
 
   if (claimed.name !== entry.name) return { ok: false, reason: 'name-mismatch', computed };
@@ -279,7 +275,7 @@ export function reducePair(state, pair, ctx) {
       for (const c of refs) {
         const r = ctx.resolveRef(c.ref);
         if (!r) return reject('candidate-ref-unresolvable');
-        if (r.revision !== c.revision) return reject('candidate-revision-mismatch');
+        if (c.revision !== undefined && r.revision !== c.revision) return reject('candidate-revision-mismatch');
         resolved.push(r.toolId);
       }
       for (const s of receipt.selected) {
@@ -489,6 +485,19 @@ function cloneState(state) {
     frozen: new Map(state.frozen),
     integrity: { ...state.integrity, gaps: state.integrity.gaps.slice() },
   };
+}
+
+/**
+ * 纯状态模式切换（copy-on-write）。
+ * @param {SessionDiscoveryState} state
+ * @param {'restoring'|'ready'|'incompatible'} mode
+ * @returns {SessionDiscoveryState}
+ */
+export function setSessionMode(state, mode) {
+  if (state.mode === mode) return state;
+  const next = cloneState(state);
+  next.mode = mode;
+  return next;
 }
 
 /** 供 adapter 做"回执逐字比较"(热态 pending 路径)。 */

@@ -48,6 +48,20 @@ export function sortBy(arr, ...comparators) {
 }
 
 /**
+ * 铸造随机 opaque ID。
+ * @param {{bytes(n:number):Uint8Array}} random
+ * @param {string} prefix
+ * @param {number} [byteLength=16]
+ * @returns {string}
+ */
+export function mintOpaqueId(random, prefix, byteLength = 16) {
+  const buf = random.bytes(byteLength);
+  let hex = '';
+  for (const b of buf) hex += b.toString(16).padStart(2, '0');
+  return `${prefix}${hex}`;
+}
+
+/**
  * 单会话 FIFO 互斥锁:load/unload 串行,list/search 不受影响。
  */
 export function createMutex() {

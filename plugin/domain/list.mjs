@@ -5,7 +5,7 @@
 import { createByteAccumulator, estimatedTokenCount } from './budgets.mjs';
 import { canonicalJson } from './canonical.mjs';
 import { DomainError } from './errors.mjs';
-import { isNonEmptyString, isPlainObject } from './util.mjs';
+import { isNonEmptyString, isPlainObject, mintOpaqueId } from './util.mjs';
 
 // --- i18n shim (added by the message migration) ---------------------------
 // These validators are pure and take no locale argument. The plugin resolves
@@ -24,19 +24,19 @@ export function createCursorStore(deps) {
   const ttlMs = deps.ttlMs ?? 900_000;
   /** @type {Map<string, any>} */
   const store = new Map();
-  const mint = () => {
-    const buf = deps.random.bytes(16);
-    let hex = '';
-    for (const b of buf) hex += b.toString(16).padStart(2, '0');
-    return `p_${hex}`;
-  };
   return {
     /**
      * @param {{sessionId:string, view:string, category:string, eligibilityGeneration:number, offset:number, orderDigest:string}} rec
      */
     issue(rec) {
-      const cursor = mint();
-      store.set(cursor, { ...rec, expiresAt: deps.clock.now() + ttlMs });
+      const now = deps.clock.now();
+      // 顺带清扫已过期游标(TTL 固定 → 插入序即到期序,遇到首个未过期即停)。
+      for (const [key, old] of store) {
+        if (old.expiresAt > now) break;
+        store.delete(key);
+      }
+      const cursor = mintOpaqueId(deps.random, 'p_');
+      store.set(cursor, { ...rec, expiresAt: now + ttlMs });
       return cursor;
     },
     /**
@@ -67,14 +67,20 @@ export function createCursorStore(deps) {
 }
 
 /**
- * 名称分页。返回完整名称(不截断),超字节上限时减少**完整项数**。
- * @param {object} args
- * @returns {{names:string[], nextCursor:string|null, truncated:boolean}}
+ * 通用项分页辅助函数。
+ * @template T
+ * @param {{
+ *   items: T[], cursorStore: any, sessionId: string, view: string, category: string,
+ *   eligibilityGeneration: number, orderDigest: string, limit: number, budgets: any,
+ *   now: number, cursor?: string, emptyBudgetMessagePath: string[], emptyBudgetDetails?: Record<string, unknown>
+ * }} args
+ * @returns {{ pageItems: T[], nextCursor: string|null, truncated: boolean }}
  */
-export function paginateNames(args) {
+function paginateItems(args) {
   const {
-    allNames, cursorStore, sessionId, view, category,
+    items, cursorStore, sessionId, view, category,
     eligibilityGeneration, orderDigest, limit, budgets, now, cursor,
+    emptyBudgetMessagePath, emptyBudgetDetails,
   } = args;
 
   let offset = 0;
@@ -86,40 +92,52 @@ export function paginateNames(args) {
   }
 
   const acc = createByteAccumulator(budgets.maxListResultBytes);
-  /** @type {string[]} */
-  const names = [];
+  /** @type {T[]} */
+  const pageItems = [];
   let idx = offset;
   let truncated = false;
 
-  for (; idx < allNames.length; idx++) {
-    const name = allNames[idx]; // 完整名称,绝不截断
-    if (!acc.tryAdd(JSON.stringify(name))) {
-      // 一个完整项都放不下 → 明确失败
-      if (names.length === 0) {
-        throw new DomainError('BUDGET_EXCEEDED', t(['detail', 'nameOverByteBudget']), {
-          maxBytes: budgets.maxListResultBytes,
-        });
+  for (; idx < items.length; idx++) {
+    const item = items[idx];
+    if (!acc.tryAdd(JSON.stringify(item))) {
+      if (pageItems.length === 0) {
+        throw new DomainError('BUDGET_EXCEEDED', t(emptyBudgetMessagePath), emptyBudgetDetails);
       }
       truncated = true;
       break;
     }
-    names.push(name);
-    if (names.length >= limit) {
+    pageItems.push(item);
+    if (pageItems.length >= limit) {
       idx += 1;
-      if (idx < allNames.length) truncated = true;
+      if (idx < items.length) truncated = true;
       break;
     }
   }
 
   let nextCursor = null;
-  if (truncated && names.length > 0) {
-    const nextOffset = offset + names.length;
+  if (truncated && pageItems.length > 0) {
     nextCursor = cursorStore.issue({
-      sessionId, view, category, eligibilityGeneration, offset: nextOffset, orderDigest,
+      sessionId, view, category, eligibilityGeneration, offset: offset + pageItems.length, orderDigest,
     });
   }
 
-  return { names, nextCursor, truncated };
+  return { pageItems, nextCursor, truncated };
+}
+
+/**
+ * 名称分页。返回完整名称(不截断),超字节上限时减少**完整项数**。
+ * @param {object} args
+ * @returns {{names:string[], nextCursor:string|null, truncated:boolean}}
+ */
+export function paginateNames(args) {
+  const { allNames, ...rest } = args;
+  const page = paginateItems({
+    items: allNames,
+    ...rest,
+    emptyBudgetMessagePath: ['detail', 'nameOverByteBudget'],
+    emptyBudgetDetails: { maxBytes: rest.budgets.maxListResultBytes },
+  });
+  return { names: page.pageItems, nextCursor: page.nextCursor, truncated: page.truncated };
 }
 
 /**
@@ -128,47 +146,13 @@ export function paginateNames(args) {
  * @returns {{categories:Array<object>, nextCursor:string|null, truncated:boolean}}
  */
 export function paginateCategories(args) {
-  const {
-    allCards, cursorStore, sessionId, view, category,
-    eligibilityGeneration, orderDigest, limit, budgets, now, cursor,
-  } = args;
-
-  let offset = 0;
-  if (cursor !== undefined) {
-    const rec = cursorStore.resolve(cursor, {
-      sessionId, view, category, eligibilityGeneration, orderDigest, now,
-    });
-    offset = rec.offset;
-  }
-
-  const acc = createByteAccumulator(budgets.maxListResultBytes);
-  /** @type {Array<object>} */
-  const cards = [];
-  let idx = offset;
-  let truncated = false;
-
-  for (; idx < allCards.length; idx++) {
-    const card = allCards[idx];
-    if (!acc.tryAdd(JSON.stringify(card))) {
-      if (cards.length === 0) throw new DomainError('BUDGET_EXCEEDED', t(['detail', 'categoryCardOverByteBudget']));
-      truncated = true;
-      break;
-    }
-    cards.push(card);
-    if (cards.length >= limit) {
-      idx += 1;
-      if (idx < allCards.length) truncated = true;
-      break;
-    }
-  }
-
-  let nextCursor = null;
-  if (truncated && cards.length > 0) {
-    nextCursor = cursorStore.issue({
-      sessionId, view, category, eligibilityGeneration, offset: offset + cards.length, orderDigest,
-    });
-  }
-  return { categories: cards, nextCursor, truncated };
+  const { allCards, ...rest } = args;
+  const page = paginateItems({
+    items: allCards,
+    ...rest,
+    emptyBudgetMessagePath: ['detail', 'categoryCardOverByteBudget'],
+  });
+  return { categories: page.pageItems, nextCursor: page.nextCursor, truncated: page.truncated };
 }
 
 /**
@@ -213,7 +197,9 @@ export function navigationFootprint(cards) {
   };
 }
 
+const LIST_VIEW_SET = new Set(['available', 'loaded', 'categories', 'state']);
+
 /** 供 adapter 用:校验 view 名。 */
 export function isListView(v) {
-  return isPlainObject({ v }) && typeof v === 'string' && ['available', 'loaded', 'categories', 'state'].includes(v);
+  return typeof v === 'string' && LIST_VIEW_SET.has(v);
 }

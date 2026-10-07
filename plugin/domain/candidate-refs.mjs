@@ -3,7 +3,7 @@
 // opaque、内存态、默认 15 分钟 TTL、跨会话拒绝、fork 不继承、重启即失效。
 // "难猜"不替代当前 scope 资格复核:engine 每次 load 仍会用当前 catalog 重新解析 toolId。
 import { DomainError } from './errors.mjs';
-import { isNonEmptyString } from './util.mjs';
+import { isNonEmptyString, mintOpaqueId } from './util.mjs';
 
 /**
  * @typedef {Object} CandidateRecord
@@ -22,29 +22,22 @@ export function createRefStore(deps) {
   /** @type {Map<string, CandidateRecord>} */
   const store = new Map();
 
-  const mint = () => {
-    const buf = deps.random.bytes(16);
-    let hex = '';
-    for (const b of buf) hex += b.toString(16).padStart(2, '0');
-    return `c_${hex}`;
-  };
-
   return {
-    /**
-     * @param {string} sessionId
-     * @param {number} eligibilityGeneration
-     * @param {string} toolId
-     * @param {string} revision
-     * @returns {string} ref
-     */
     issue(sessionId, eligibilityGeneration, toolId, revision) {
-      const ref = mint();
+      const now = deps.clock.now();
+      // 顺带清扫已过期条目:每次 tool_search 每个命中都会发一个 ref,
+      // 被放弃的搜索否则会在会话内一直占着内存。TTL 固定 → Map 按插入序即到期序,遇到首个未过期即停。
+      for (const [key, rec] of store) {
+        if (rec.expiresAt > now) break;
+        store.delete(key);
+      }
+      const ref = mintOpaqueId(deps.random, 'c_');
       store.set(ref, {
         sessionId,
         eligibilityGeneration,
         toolId,
         revision,
-        expiresAt: deps.clock.now() + ttlMs,
+        expiresAt: now + ttlMs,
       });
       return ref;
     },

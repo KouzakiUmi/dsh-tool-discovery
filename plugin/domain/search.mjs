@@ -85,6 +85,23 @@ function stemForms(token) {
 }
 
 /**
+ * 同义词触发词的预编译匹配器(模块加载时只建一次)。
+ *
+ * - CJK 触发词没有词边界,保持子串匹配;
+ * - 拉丁触发词按**词边界**匹配,并允许常见屈折后缀(s/es/ed/d/ing)。
+ *   此前一律 `includes`:'cli' 会命中 "click"/"client"、'edit' 命中 "credit"、
+ *   'word' 命中 "keyword"、'unit' 命中 "community"、'prs' 命中 "express",
+ *   查询与条目文档都会被这类误命中带到无关的受控概念上。
+ * @type {ReadonlyArray<{concept: string, cjk: boolean, needle: string, re: RegExp|null}>}
+ */
+const SYNONYM_MATCHERS = Object.freeze(Object.entries(SYNONYM_INDEX).map(([trigger, concept]) => {
+  const lowered = trigger.toLowerCase();
+  if (CJK.test(lowered)) return { concept, cjk: true, needle: lowered, re: null };
+  const words = (lowered.match(LATIN_TOKEN) ?? []).join(' ');
+  return { concept, cjk: false, needle: words, re: new RegExp(` ${words}(?:s|es|ed|d|ing)? `, 'u') };
+}));
+
+/**
  * 查询侧同义词扩展:受控词表把用户词映射到受控概念。
  * @param {string} text
  * @returns {Set<string>}
@@ -92,10 +109,13 @@ function stemForms(token) {
 export function synonymConcepts(text) {
   /** @type {Set<string>} */
   const concepts = new Set();
-  const lowered = String(text ?? '').toLowerCase();
-  for (const [trigger, concept] of Object.entries(SYNONYM_INDEX)) {
-    const t = trigger.toLowerCase();
-    if (lowered.includes(t)) concepts.add(concept);
+  const raw = String(text ?? '');
+  const lowered = raw.toLowerCase();
+  // 拉丁侧:驼峰先拆开,再抽出 [a-z0-9] 词,用空格连接并首尾补空格,供词边界匹配
+  const latin = ` ${(raw.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().match(LATIN_TOKEN) ?? []).join(' ')} `;
+  for (const m of SYNONYM_MATCHERS) {
+    if (concepts.has(m.concept)) continue;
+    if (m.cjk ? lowered.includes(m.needle) : m.re.test(latin)) concepts.add(m.concept);
   }
   return concepts;
 }
@@ -180,32 +200,16 @@ export function documentTokens(entry) {
 /**
  * @typedef {Object} SearchIndex
  * @property {Array<{entry: import('./catalog.mjs').CatalogEntry, doc: ReturnType<typeof documentTokens>}>} items
- * @property {Map<string, Array<number>>} postings token → items 下标倒排
  */
 
 /**
- * 构建倒排索引。同 searchDocumentId 的条目共享内容(这里用 doc 去重后建 postings)。
+ * 构建检索索引。
  * @param {ReadonlyArray<import('./catalog.mjs').CatalogEntry>} entries
  * @returns {SearchIndex}
  */
 export function buildSearchIndex(entries) {
   const items = entries.map((entry) => ({ entry, doc: documentTokens(entry) }));
-  /** @type {Map<string, number[]>} */
-  const postings = new Map();
-  items.forEach((item, idx) => {
-    const all = new Set([
-      ...item.doc.nameTokens,
-      ...item.doc.categoryTokens,
-      ...item.doc.summaryTokens,
-      ...item.doc.skillTokens,
-    ]);
-    for (const t of all) {
-      const arr = postings.get(t) || [];
-      if (!arr.includes(idx)) arr.push(idx);
-      postings.set(t, arr);
-    }
-  });
-  return { items, postings };
+  return { items };
 }
 
 /**

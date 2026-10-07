@@ -20,7 +20,7 @@ import {
 import { buildSearchIndex, search as runSearch } from './search.mjs';
 import {
   createState, evaluateCall as evalCall, freezeTool, frozenWireList,
-  invalidateTool, recordAdvertisement, reducePair, resetCacheEpoch,
+  invalidateTool, recordAdvertisement, reducePair, resetCacheEpoch, setSessionMode,
 } from './state.mjs';
 import { clampCodePoints, createMutex, isNonEmptyString, isPlainObject } from './util.mjs';
 import { createText } from './locale.mjs';
@@ -107,7 +107,7 @@ export function createDiscoveryEngine(config) {
     let st = sessions.get(scope.sessionId);
     if (!st) {
       st = createState(scope.sessionId);
-      if (newSessionMode === 'ready') st.mode = 'ready';
+      if (newSessionMode === 'ready') st = setSessionMode(st, 'ready');
       sessions.set(scope.sessionId, st);
       locks.set(scope.sessionId, createMutex());
     }
@@ -149,12 +149,8 @@ export function createDiscoveryEngine(config) {
    * @param {any} scope
    */
   function failEnvelope(tool, operation, raw, scope) {
-    try {
-      void scope;
-      throw raw;
-    } catch (e) {
-      return errorEnvelope(tool, operation, toDomainError(e));
-    }
+    void scope;
+    return errorEnvelope(tool, operation, toDomainError(raw));
   }
 
   return {
@@ -398,16 +394,17 @@ export function createDiscoveryEngine(config) {
         const rec = refStore.resolve(item.ref, scope.sessionId, eligibilityGeneration, clock.now());
         const entry = resolveByToolId(catalog, rec.toolId);
         if (!entry) throw new DomainError('CANDIDATE_UNAVAILABLE');
-        if (entry.revision !== item.revision) throw new DomainError('STALE_CANDIDATE');
+        const expectedRevision = item.revision ?? rec.revision;
+        if (entry.revision !== expectedRevision) throw new DomainError('STALE_CANDIDATE');
         // D1:候选路径与 names 路径对称 —— 入口/框架保留项一律不可 load。
         if (protectedNames.has(entry.name)) {
           throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotLoadable']));
         }
-        if (byToolId.has(entry.toolId) && byToolId.get(entry.toolId) !== item.revision) {
+        if (byToolId.has(entry.toolId) && byToolId.get(entry.toolId) !== expectedRevision) {
           throw new DomainError('INVALID_ARGS', t(['detail', 'candidateRevisionConflict']));
         }
         if (byToolId.has(entry.toolId)) continue;
-        byToolId.set(entry.toolId, item.revision);
+        byToolId.set(entry.toolId, expectedRevision);
         resolved.push({ entry, source: 'candidate' });
       }
 
@@ -473,7 +470,14 @@ export function createDiscoveryEngine(config) {
         return !reservedOnly.has(r.entry.toolId);
       });
       assertActiveBudget(fresh.map((r) => r.entry), alreadyActive, budgets);
-      const skills = resolved.map((r) => projectSkill(r.entry));
+      // 优化 token: 仅为本会话尚未选中的新增工具交付 skills 载荷;
+      // 已选同版本工具已在既有交互中提供过使用指南,避免在历史上下文重复灌入相同文本。
+      const skills = resolved
+        .filter((r) => {
+          const sel = st.selected.get(r.entry.toolId);
+          return !sel || sel.revision !== r.entry.revision;
+        })
+        .map((r) => projectSkill(r.entry));
       assertSkillBudget(skills, budgets.maxSkillBytesPerLoad);
 
       // 提交前 recheck:资格代次 + 每项 revision 重算。变化则整批失败,绝不偷偷改选。
@@ -601,16 +605,20 @@ export function createDiscoveryEngine(config) {
     /**
      * 推进缓存周期。**只允许成功压缩调用**（adapter 侧绑定 session 的
      * compaction/start + 无 error 的 compaction/end）。清空披露缓存与执行授权，
-     * 丢弃全部未决 pending（边界之前的回执不再有对价）。
+     * 丢弃**本会话**的未决 pending（边界之前的回执不再有对价）；压缩只属于一个会话，
+     * 其它会话的未决 load 不受影响。
      * @param {any} scope
      * @param {string} reason
      */
     resetCacheEpoch(scope, reason) {
       const st = requireState(scope);
-      sessions.set(scope.sessionId, resetCacheEpoch(st));
-      pending.clear();
+      const next = resetCacheEpoch(st);
+      sessions.set(scope.sessionId, next);
+      for (const [operationId, op] of pending) {
+        if (op.sessionId === scope.sessionId) pending.delete(operationId);
+      }
       void reason;
-      return { epoch: resetCacheEpoch(st).epoch };
+      return { epoch: next.epoch };
     },
 
     /**
@@ -651,6 +659,7 @@ export function createDiscoveryEngine(config) {
         toolId: call.toolId,
         requestId: call.requestId,
         now: clock.now(),
+        locale: config.locale,
         registeredInScope: call.registeredInScope ?? null,
         isEntryOrFramework,
       });
@@ -675,7 +684,8 @@ export function createDiscoveryEngine(config) {
     refreshCatalog(bindings) {
       const nextCatalog = buildCatalog(bindings, {
         now: clock.now(),
-        generation: `g${Date.now().toString(36)}`,
+        // 单调计数而非时钟:同一毫秒内连刷 / 冻结时钟下 generation 仍唯一且可复现。
+        generation: `g${eligibilityGeneration + 1}`,
       });
       const nextIndex = buildSearchIndex(Array.from(nextCatalog.entries.values()));
       catalog = nextCatalog;
@@ -711,8 +721,7 @@ export function createDiscoveryEngine(config) {
         return { mode: 'incompatible', applied: 0, rejected: 0, error: toDomainError(e).code };
       }
       if (!Array.isArray(pairs)) {
-        st.mode = 'incompatible';
-        sessions.set(scope.sessionId, st);
+        sessions.set(scope.sessionId, setSessionMode(st, 'incompatible'));
         return { mode: 'incompatible', applied: 0, rejected: 0 };
       }
       const sorted = pairs
@@ -741,7 +750,7 @@ export function createDiscoveryEngine(config) {
         const e = catalog.entries.get(toolId);
         if (!e || e.revision !== sel.revision) cur = invalidateTool(cur, toolId, 'not-eligible-after-restore', clock.now());
       }
-      cur.mode = 'ready';
+      cur = setSessionMode(cur, 'ready');
       sessions.set(scope.sessionId, cur);
       return { mode: 'ready', applied, rejected, coldCandidateRestores: cur.integrity.coldCandidateRestores };
     },
@@ -752,15 +761,15 @@ export function createDiscoveryEngine(config) {
      */
     ready(scope) {
       const st = requireState(scope);
-      if (st.mode === 'restoring') st.mode = 'ready';
-      sessions.set(scope.sessionId, st);
+      if (st.mode === 'restoring') {
+        sessions.set(scope.sessionId, setSessionMode(st, 'ready'));
+      }
     },
 
     /** 不可信恢复 → fail closed,保持不可执行。 */
     failClosed(scope) {
       const st = requireState(scope);
-      st.mode = 'incompatible';
-      sessions.set(scope.sessionId, st);
+      sessions.set(scope.sessionId, setSessionMode(st, 'incompatible'));
     },
 
     /** 销毁会话(会话销毁 / HMR):注销缓存引用,不影响历史日志。 */
