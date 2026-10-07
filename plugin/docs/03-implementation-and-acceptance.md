@@ -25,7 +25,7 @@ plugin/                  实现根目录（早期代号 progressive-v2/，见 re
     categories.mjs   可信分类、CategoryCard、有界导航
     catalog.mjs      目录条目、不可变快照、schema 身份与版本
     budgets.mjs      字节 / token 预算核算（无 tokenizer 时显式标 estimate）
-    search.mjs       双语 tokenizer、倒排、可解释排序
+    search.mjs       双语 tokenizer、token 集合检索（有界线性扫描）、可解释排序
     candidate-refs.mjs 会话 + 代次绑定的短期 opaque ref
     list.mjs         四个 view 与 opaque 游标分页
     skills.mjs       技能校验与投影（禁止复述 schema）
