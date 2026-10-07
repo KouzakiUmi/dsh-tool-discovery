@@ -208,8 +208,8 @@ journal 此后再也看不到这次调用：`liveCalls` 条目不删、`cancelOp
 - **`tool_list {}`（不带参数）直接报错。** `view` 缺省是 `available`，而 available/loaded
   强制要求 `category`，于是模型最自然的首次调用落到 `INVALID_ARGS`。
   与其让模型猜，不如让 `view:'categories'` 成为缺省。
-- **`SYNONYM_GROUPS` 有两个重复触发词**（`search engine`、`spreadsheet` 各自在同组内出现两次）。
-  无害（同一触发词 → 同一概念），属清理项。
+- ~~**`SYNONYM_GROUPS` 有两个重复触发词**（`search engine`、`spreadsheet` 各自在同组内出现两次）。~~
+  **已处置（2026-10-07 晚）**：两处重复已删除（同一触发词 → 同一概念，删除不改变行为；349 单测 + 108 组合全过）。
 
 ### 🔐 待他人复核（不可由本轮作者签核）
 
@@ -232,8 +232,8 @@ journal 此后再也看不到这次调用：`liveCalls` 条目不删、`cancelOp
 - **死导出清理**：`registry.toolIdFor()`（无人调用，且每次调用都重跑整个 `bindingsFor()`）、
   `catalog.sameOrderDigest`、`protocol.toErrorEnvelope`、`NO_MATCH` 码元数据。
   其中 `isListView` / `navigationFootprint` / `hasNameConflict` / `orderedNamesFor` 有单测在用，**不是**死代码。
-- **`docs/01 §1.3` 说的"倒排索引"实际不存在**（全量线性扫描）。实测成本可忽略，
-  但文档该改口 —— `search.mjs` 的文件头已经悄悄从"倒排"改成"token 集合"，`docs/01` 还没跟上。
+- ~~**`docs/01 §1.3` 说的"倒排索引"实际不存在**（全量线性扫描）。~~ **已跟上（2026-10-07 晚）**：
+  `docs/01 §1.3` 与 §5.2 的"倒排索引 / 倒排项"措辞已改为与实现一致（token 集合 + 有界线性扫描打分）。
 - **`engine.mjs` 两套 locale 取值通道**（模块级 `t()` 绑全局 `domainText`，
   被 `const text = createText(config.locale)` 遮蔽）。生产里同源所以一致，
   但谁只构造引擎不调 `setDomainLocale`，拒绝文案就会退回英文。属重构，不在本轮。
@@ -271,6 +271,6 @@ journal 此后再也看不到这次调用：`liveCalls` 条目不删、`cancelOp
 2. **拿宿主事实**收掉"中断轮的 `tool_load`"那条 —— 需要 `turn/end` 与 `tool/result`
    在中断路径上的先后关系说明。拿到之前不动。
 3. **产品决策**：技能是否接线、中文工具描述从哪来（同一条链路，一起想）。
-4. 清理轮：死导出、registry 三张表的清理、`tool_list` 缺省 view、`docs/01` 的"倒排"措辞。
+4. 清理轮：死导出、registry 三张表的清理、`tool_list` 缺省 view（~~`docs/01` 的"倒排"措辞~~ 已于 2026-10-07 晚改完）。
 
 > 明确**不在**范围：任何进一步的安全边界加固。功能闭环之前不加新门禁。
