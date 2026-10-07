@@ -324,23 +324,81 @@ plugin manager.
 - Nothing. No behavioural defect was found in this round: TE-R's property already held, and the gap
   was coverage. This entry therefore records **no** product change and claims no fix.
 
+## [0.2.0-functional.5] — one bad stored record no longer stops every session
+
+Branch `feat/trusted-epoch-isolated-bad-record`. This entry describes **source** delivered by pull
+request. The package is **not published to npm**, and no profile installation, GUI reload or
+application restart is part of this delivery. Nothing here is a product-acceptance statement; the
+contract is [`plugin/docs/08-trusted-epoch-baselines.md`](plugin/docs/08-trusted-epoch-baselines.md).
+
+`version` moves to `0.2.0-functional.5` because `0.2.0-functional.3` is already taken by the
+released `build-3c2ed533706e` asset, and `0.2.0-functional.4` is carried by the separate TE-R
+coverage branch, which has since merged into `main` and whose entry is recorded above.
+
+### Fixed
+
+- **One unreadable stored record stopped every session in the domain.** When the host's storage
+  domain opened the trusted-epoch table it validated *every* stored record, and a single failure
+  aborted the whole open. The damage was local — one unreadable row — but the effect was global:
+  sessions whose own records were perfectly healthy, and which had nothing to do with that row,
+  were driven into a terminal state as well. A bad record now stops **only its own session**, and
+  the rest carry on: ready, and actually sending requests.
+- The trusted-epoch table's SDK-side schema is now a **transport shape** rather than the authority.
+  Judgement moved back to the module's own per-session validators, which were already there and are
+  in fact stricter than the schema they replace: they compare the record's key set exactly, reject
+  duplicate names, and additionally check the record against the current epoch identity.
+  **No media is touched.** A bad record is still never deleted, overwritten, or quarantined.
+
+### Changed
+
+- The SDK ships an escape hatch for exactly this, `invalidRecords: 'backup-and-skip'`, and this
+  release deliberately does **not** use it. It requires the unit to implement `backupRecord`, which
+  exists only on the `per-record` layout unit; this spec declares `layout: 'single'`, whose unit has
+  no `backupRecord`, so the SDK would throw at the very same line and the flag would be a no-op.
+  Switching layouts would additionally require replacing the `JSON.stringify([...])` record key with
+  a path-safe one, which is a destructive change with a data migration attached.
+- The unit test that pinned the old contract — asserting the table schema was a `strictObject`
+  whose field list matched the validator — now pins the new one: the transport schema accepts
+  anything, **and** every record the old schema used to reject is still rejected by the per-session
+  validators. Moving the authority is only legitimate if the authority is demonstrably intact.
+
 ### Verification boundary
 
-- Local runs, commands and exit codes: `npm test` → **283 pass / 0 fail**, exit **0**;
-  `npm run test:composition` → **105 pass / 0 fail / 0 skipped**, exit **0** (was 103; +2 from this
-  round), against the real DSH Core `0.2.1-alpha.1` composition on this machine.
-- **The new gates were mutation-checked.** Short-circuiting `engine.applyCanonicalPair` in
-  `plugin/adapters/dsh/journal.mjs` — i.e. removing the receipt chain as an authorisation source
-  entirely — turns TER0 and TER1 **red**, together with the pre-existing TE0 and TE1c. The mutation was
-  reverted and `journal.mjs` is byte-identical to `main`. TER0/TER1 are therefore not vacuous passes.
-- **Author-run results are not acceptance.** Per the contract's own discipline, these runs were
-  performed by the author of this round, so they do **not** upgrade any criterion to "passed" and do
-  **not** discharge the outstanding independent review.
-- **Still open, unchanged by this round:** the whole-domain open failure (`08 §2.4c`, one bad stored
-  record makes every session terminal, still unfixed), the bootstrap-path contract gap (`08 §2.2a`,
-  deliberately deferred), the remaining uncovered review items, the residual sign-off debt in
-  `05 §5`, and the whole of `03 §11` stage 3 (real provider wire, token reduction, TTFT/retrieval
-  experiments, npm publication and installation). This feature is still **not** product-accepted.
+The two entries above are **separate rounds**; their workspace numbers are recorded per round and are
+**not** additive claims.
+
+- `0.2.0-functional.4` round (TE-R, author-run): `npm test` → **283 pass / 0 fail**, exit **0**;
+  `npm run test:composition` → **105 pass / 0 fail / 0 skipped**, exit **0** (was 103; +2), against
+  the real DSH Core `0.2.1-alpha.1` composition on that machine. The gates were mutation-checked:
+  short-circuiting `engine.applyCanonicalPair` in `plugin/adapters/dsh/journal.mjs` turns TER0 and
+  TER1 **red**, together with the pre-existing TE0 and TE1c; the mutation was reverted and
+  `journal.mjs` is byte-identical to `main`.
+- `0.2.0-functional.5` round (bad-record isolation, author-run): `npm test` → **283 pass / 0 fail**,
+  exit **0**; `npm run test:composition` → **104 pass / 0 fail / 0 skipped**, exit **0** (was 103;
+  +1), against the real DSH Core `0.2.1-alpha.1` composition. The new criterion was written
+  **before** the fix and went red first: with the schema strict, the bystander session received
+  `incompatible` instead of `ready`. It covers four things — the affected session still ends
+  `INVALID` with zero outbound requests (**not** relaxed by this fix), the innocent session in the
+  same domain is `ready` **and** emits requests, the bad record is still on disk unmodified, and the
+  injection provably touched only the one row. Discriminating power was mutation-checked: restoring
+  a `strictObject` transport schema turns the new criterion red. The mutation was reverted.
+- **Both rounds merged into one tree, re-run in this workspace (2026-10-07, exit codes as recorded):
+  `npm test` → 283 pass / 0 fail, `npm run test:composition` → 106 pass / 0 fail / 0 skipped**
+  (103 baseline + BR4 + TER0 + TER1/TER2), logs in `.probe/pr5-merge-unit.log` and
+  `.probe/pr5-merge-comp.log`. This is a third author-side run; it merges the two suites and claims
+  no new criterion.
+- **Non-author review, limited scope (2026-10-07, PR5): pass.** The reviewer is not the author of
+  that round. Scope is **only** the bad-record isolation fix and the conflict merge — it is **not**
+  feature-wide acceptance and it does **not** sign off the TE-R work. Independent re-runs:
+  `npm test` → **283 pass / 0 fail**, `npm run test:composition` → **106 pass / 0 fail / 0 skipped**;
+  documentation cross-references and section numbering check out with no broken links. Discriminating
+  power was reproduced independently on a **private copy**: restoring the old `strictObject`
+  transport turns **BR4b red** (bystander session `incompatible` instead of `ready`, exit **1**, log
+  `.probe/pr5-parent-mutation-red.log`). **Product source was not touched**; the mutation exists only
+  in that private copy. The author-side records above are kept as written and are not rewritten.
+- **What is still open:** the TE-R gates remain unreviewed, the `08 §2.2a` contract gap and the
+  remaining uncovered review items are unfixed, and all of `03 §11` stage 3 is outstanding. The
+  feature as a whole is **still not product-accepted**.
 
 ## [0.1.0] — prepared 2026-10-06, not published
 

@@ -322,3 +322,131 @@ test('BR1: 存量坏记录（声明式注入）→ 落 INVALID_TRUSTED_EPOCH、0
 function isPlainObject (value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
+
+// ---------------------------------------------------------------------------
+// BR4（§2.4c 末段那条「未修的副作用」）：**连坐**才是这一项的真缺口
+//
+// BR1 只种了**一个**会话，所以它从未覆盖 `08 §2.4c` 末段记录的那条后果：
+// 一条坏记录让**整个域**打不开，于是**所有**会话（哪怕与那条记录毫无关系）都落终态。
+// 存储服务是健康的、别的记录是好的，却因为**同一张表里有一行读不出来**而一起停摆。
+//
+// 判据：
+//   BR4a 受影响会话：坏记录**自己**的那个会话仍必须落 INVALID + 0 出站请求
+//        —— 这一条**不允许**因为本次修复而放松。
+//   BR4b 无辜会话：同一份介质里另一条**完好**的记录，其会话必须照常 ready
+//        且**真的出站**。这才是本轮要修的东西。
+//   BR4c 数据不许被动：坏记录必须仍在文件里、仍是注入后的原值（BR3 原则不放松）。
+//   BR4d 注入正控：必须证明注入确实只落在**那一条**上，另一条记录的版本号合法。
+// ---------------------------------------------------------------------------
+
+/** BR4 阶段一：同一个 composition 里跑**两个**会话，让两条记录都真实落盘。 */
+async function seedTwoSessions (api, victimId, bystanderId) {
+  const { store, queueResponse } = await storeOf()
+  store.reset()
+  const boot1 = await bootAdapterComposition({ fixtures: FIXTURES, adapter: ADAPTER_CONFIG })
+  cleanup.push(() => boot1.dispose())
+  assert.deepEqual(boot1.activationErrors(), [], 'composition 必须收敛')
+
+  for (const [sessionId, label] of [[victimId, 'victim'], [bystanderId, 'bystander']]) {
+    queueResponse({ text: `BR4 ${label} phase one` })
+    const h = await drive(boot1.ctx, boot1.tmpRoot, sessionId)
+    await userTurn(h, 'Say something so the host writes a real trusted record.')
+    assert.equal(h.agent.session.seq > 0, true, `前置：${sessionId} 必须先有真实非空历史`)
+    await h.dispose()
+    handles.splice(handles.indexOf(h), 1)
+  }
+
+  const facility = boot1.ctx.get('storageDomain')
+  assert.ok(facility !== undefined, '前置：真实 storageDomain 服务必须可达')
+  const domain = facility.get(api.domain)
+  assert.ok(domain !== undefined, `前置：产品必须已打开可信域 ${api.domain}`)
+  const table = domain.table(api.table)
+  const victim = findRecordOf(table, victimId)
+  const bystander = findRecordOf(table, bystanderId)
+  assert.ok(victim !== null, `前置：${victimId} 的可信记录必须真实存在，否则本例是空过`)
+  assert.ok(bystander !== null, `前置：${bystanderId} 的可信记录必须真实存在，否则本例是空过`)
+  assert.notEqual(victim.key, bystander.key, '前置：两个会话必须落在**不同**的 key 上')
+
+  const file = domainFileOf(boot1.storageRoot, api.domain)
+  return { store, queueResponse, boot1, file, victim, bystander }
+}
+
+test('BR4: 一条坏记录不得连坐 —— 同一域里无辜会话必须照常 ready 且真的出站（§2.4c 末段）', async () => {
+  const api = await trustedEpochApi()
+  const victimId = 'te-badrecord-victim'
+  const bystanderId = 'te-badrecord-bystander'
+  const { store, queueResponse, boot1, file, victim, bystander } = await seedTwoSessions(api, victimId, bystanderId)
+
+  await boot1.closeServices()
+
+  // --- 注入：只改**受害者**那一条的版本号。介质是本用例私有的 tmp 真文件。---
+  const poisoned = readJson(file)
+  const rows = poisoned.tables[api.table]
+  const bystanderBefore = rows[bystander.key]
+  assert.equal(bystanderBefore.protocolVersion, api.protocolVersion, 'BR4d 正控：无辜会话的记录注入前必须合法')
+  assert.equal(bystanderBefore.schemaVersion, api.schemaVersion, 'BR4d 正控：无辜会话的 schemaVersion 注入前必须合法')
+
+  rows[victim.key].protocolVersion = INJECTED_PROTOCOL_VERSION
+  rows[victim.key].schemaVersion = INJECTED_SCHEMA_VERSION
+  fs.writeFileSync(file, JSON.stringify(poisoned, null, 2))
+
+  const reread = readJson(file).tables[api.table]
+  assert.equal(reread[victim.key].protocolVersion, INJECTED_PROTOCOL_VERSION, '注入正控：受害者记录已被改成不匹配值')
+  assert.equal(reread[bystander.key].protocolVersion, api.protocolVersion,
+    'BR4d 正控：注入必须**只**落在受害者那一条上，无辜那一条仍合法')
+  assert.equal(reread[bystander.key].schemaVersion, api.schemaVersion,
+    'BR4d 正控：无辜那一条的 schemaVersion 未被波及')
+
+  const boot2 = await bootAdapterComposition({
+    fixtures: FIXTURES, adapter: ADAPTER_CONFIG, tmpRoot: boot1.tmpRoot
+  })
+  cleanup.push(() => boot2.dispose())
+  assert.deepEqual(boot2.activationErrors(), [], '重启 composition 必须收敛')
+  store.reset()
+
+  const lifecycle = boot2.ctx.get('progressiveDiscovery').lifecycle
+
+  // ---- BR4a：受害者本人仍然是 INVALID + 0 出站请求（本轮不许放松这条）----
+  const victimHandle = await resumeDrive(boot2.ctx, victimId)
+  try {
+    const { sent, settled } = await observeNextTurn(store, queueResponse, victimHandle, victimId, 'BR4a', lifecycle)
+    assert.notEqual(settled.mode, 'ready', `BR4a：坏记录自己的会话不得 ready，实际：${JSON.stringify(settled)}`)
+    const victimRuntime = boot2.ctx.get('progressiveDiscovery').sessions.get(victimId)
+    assert.ok(victimRuntime !== undefined, `真实 runtime 必须存在：${victimId}`)
+    assert.equal(victimRuntime.ledger.state, 'blocked', `BR4a：必须是 blocked 终态；实际 ${victimRuntime.ledger.state}`)
+    assert.equal(victimRuntime.ledger.reason, api.reasons.INVALID,
+      `BR4a：仍必须落 ${api.reasons.INVALID}（数据问题）；实际 ${String(victimRuntime.ledger.reason)}`)
+    assert.equal(sent.length, 0,
+      `BR4a：坏记录自己的会话必须 0 出站请求；实际发出：${JSON.stringify(sent.map(namesOf))}`)
+  } finally {
+    await victimHandle.dispose()
+    handles.splice(handles.indexOf(victimHandle), 1)
+  }
+
+  // ---- BR4b：无辜会话必须照常 ready 且**真的出站**（本轮要修的就是这条）----
+  const bystanderHandle = await resumeDrive(boot2.ctx, bystanderId)
+  try {
+    const before = store.requests.length
+    const { sent, settled } = await observeNextTurn(store, queueResponse, bystanderHandle, bystanderId, 'BR4b', lifecycle)
+    assert.equal(settled.mode, 'ready',
+      `BR4b：同一域里与坏记录无关的会话必须照常 ready，不得被连坐；实际：${JSON.stringify(settled)}`)
+    assert.equal(sent.length > 0, true,
+      `BR4b：无辜会话必须真的发出出站请求（不能只是 mode=ready）；实际发出：${JSON.stringify(sent.map(namesOf))}`)
+    const bystanderRuntime = boot2.ctx.get('progressiveDiscovery').sessions.get(bystanderId)
+    assert.equal(bystanderRuntime.ledger.state, 'trusted',
+      `BR4b：无辜会话的基线必须 trusted；实际 ${bystanderRuntime.ledger.state}/${bystanderRuntime.ledger.reason}`)
+    assert.ok(store.requests.length > before, 'BR4b：出站计数必须真的增长')
+  } finally {
+    await bystanderHandle.dispose()
+    handles.splice(handles.indexOf(bystanderHandle), 1)
+  }
+
+  // ---- BR4c：坏记录仍不得被删/被改（BR3 的原则在本次修复下不放松）----
+  const after = readJson(file)
+  assert.ok(isPlainObject(after.tables?.[api.table]?.[victim.key]),
+    `BR4c：坏记录不得被自动删除：${api.domain}.json 里必须仍有 key ${victim.key}`)
+  assert.equal(after.tables[api.table][victim.key].protocolVersion, INJECTED_PROTOCOL_VERSION,
+    'BR4c：坏记录不得被改写回合法版本号')
+  assert.equal(after.tables[api.table][victim.key].schemaVersion, INJECTED_SCHEMA_VERSION,
+    'BR4c：坏记录不得被改写回合法 schema 版本号')
+})
