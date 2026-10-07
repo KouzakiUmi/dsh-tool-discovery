@@ -297,6 +297,7 @@ jobs:
             plugin/tests/composition/gate-trusted-epoch-fork.test.mjs \
             plugin/tests/composition/gate-trusted-epoch-failclosed.test.mjs \
             plugin/tests/composition/gate-trusted-epoch-badrecord.test.mjs \
+            plugin/tests/composition/gate-trusted-epoch-settlement.test.mjs \
             plugin/tests/composition/gate-tool-churn.test.mjs
 
   quality:

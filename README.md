@@ -63,6 +63,11 @@ git clone https://github.com/KouzakiUmi/dsh-tool-discovery
 cd dsh-tool-discovery
 ```
 
+The current source version is **`0.2.0-functional.6`**. A GitHub Release asset is built automatically
+from every green `main` run, and it is a **build artifact, not an acceptance statement** — what this
+version covers and what it deliberately does not claim is recorded in
+[current status](plugin/docs/05-current-status.md).
+
 It is plain JavaScript with no build step, and it has no dependencies of its own — the host
 provides them.
 

@@ -59,9 +59,13 @@
   优先级最高的 **TE-R**（canonical `tool_load` 回执链作为**正向**授权源），结论是**该性质本来就
   成立，缺的是覆盖**，故新增门禁 `TER0` / `TER1` / `TER2`（置空常驻基线 + 真重启冷恢复 +
   从未 load 的同族工具反空过对照），并用变异短接 `applyCanonicalPair` 证明门禁有真实分辨力。
-  **该轮产品源码一行未动**，不宣称修过任何缺陷；复跑 unit 283/0、composition 105/0。
-  TE-R 门禁由该轮产出方本人所写，**按「作者不自签」仍需独立复审**，详见
-  [08 §5.4](<08-trusted-epoch-baselines.md>)。
+  **该轮产品源码一行未动**，不宣称修过任何缺陷；该轮作者复跑 unit 283/0、composition 105/0
+  （**截至 `0.2.0-functional.4` 那一轮**）。**该门禁已于 2026-10-07 获非作者专项复核「通过」**：
+  限定范围 = 仅 TE-R 门禁及其加强（基线快照 `1049d47` + 最终门禁，14/14 绿；掐断冷恢复重放时
+  TER0 绿 TER1 红、guard 过宽时 TER2 红、假重启时 TE9 + TER1 精确红），三条**测试** finding
+  （真重启未钉住、TER2 缺 scope 存在前置与拒因、TE9 探针可静默跳过）已关闭；该复核**不包含**
+  并发的 `lifecycle.mjs` 改动与新增 unit 门禁，**不是全 feature 验收**。详见
+  [08 §5.4-1](<08-trusted-epoch-baselines.md>)。
 - **2026-10-07 再追加一轮（分支 `feat/trusted-epoch-isolated-bad-record`）**：修 `08 §2.4c`
   末段此前如实记录为「未修」的**连坐**副作用 —— 存量里一条记录读不出来会让
   `facility.open(spec)` 对**整个域**抛错，于是**所有**会话（含记录完好、与那条坏行毫无
@@ -70,7 +74,7 @@
   `put` 照旧），三条原则全部保持。受影响会话**仍**是 `INVALID` + 0 出站请求，无辜会话照常 ready
   且出站。新增判据 `BR4`（先 RED 后 GREEN），并用变异把传输层改回 `strictObject` 证明门禁有分辨力。
   **本轮改了产品源码**，作者复跑 unit 283/0、composition 104/0；**已获非作者限定范围复核「通过」**
-  （仅限本修复与冲突合并，**不替 TE-R 专项补签、不是全 feature 验收**）。详见
+  （仅限本修复与冲突合并，**不是全 feature 验收**；TE-R 门禁另有其自己的限定复核，见上）。详见
   [08 §5.3](<08-trusted-epoch-baselines.md>)。
 - **两轮合并到同一棵树之后的复跑（2026-10-07，本工作区）**：`npm test` → **283 pass / 0 fail**
   （exit **0**）、`npm run test:composition` → **106 pass / 0 fail / 0 skipped**（exit **0**），
@@ -79,8 +83,40 @@
   引用与章节编号复核无断链，并在**私有副本**把传输层恢复旧 `strictObject` 后复现 **BR4b 转红**
   （bystander 会话 `incompatible` 而非 `ready`，exit **1**，日志 `.probe/pr5-parent-mutation-red.log`），
   **产品源码未动**。
-- **验收口径不变**：TE-R 专项门禁**仍未补签**，`08 §2.2a` 契约级缺口与其余未覆盖项仍未修，
-  `03 §11` 阶段 3 全未完成；整体仍为 **WIP / 未验收**，任何一条判据都**不得**写成「已通过」。
+- **验收口径不变**：`08 §2.2a` 契约级缺口**线上未证实、未改授权行为**，审查其余未覆盖项仍未修，
+  **旧的 F4 窄窗口仍未复核**，`03 §11` 阶段 3 全未完成；TE-R 与坏记录隔离两处**限定**复核，以及
+  下方恢复收尾的**限定**修复与核验，**都不覆盖**这些项 —— 整体仍为 **WIP / 未验收**，任何一条判据
+  都**不得**写成「已通过」。
+- **2026-10-07 恢复收尾（F3）窄修复（未发布；源码版本仍 `0.2.0-functional.5`，`package.json` 未改）**：
+  关闭两处机制 —— ① `load()` / `begin()` 被更晚的 live 用户 `/compact` supersede 时返回的
+  `PENDING/null` 不再被误裁决成 `reason=null` 的失败；② 建档资格判定与初始记录的**启动同处一个同步
+  块**，消掉外层 `await` 间隙里过期初始记录覆盖手动迁移的微任务 TOCTOU。await 同期最新在途写的
+  durable 屏障**不绕过**，**未新增** ledger API / state / reason / timeout。canonical 链与调度点是
+  **声明式注入的产品代码反例**，**不**冒称线上自然复现；真实宿主上的防回归是
+  `npm run test:composition` **106/106/0 skip**。非作者**限定**复核（只读快照：新增 unit 12/12、
+  真 Loader 子集 37/37、回退该同步启动后新用例转红）与主代理独立复核（`npm test` **295/295**、
+  composition **106/106/0 skip**）均**通过**；`retryBaseline` 在 `restoring=false` 时沿用旧 blocked
+  归因、维持 **0 request** 的既有窗口**本轮未改**。详见 [08 §5.5](<08-trusted-epoch-baselines.md>)。
+- **2026-10-07 再追加一轮（pending 结算门禁 + 记录键单测；未发布，源码版本仍 `0.2.0-functional.5`）**：
+  **本子轮只涉及测试与文档**，验证的是上一条已记录的未发布 F3 源码改动；`package.json` 只在
+  `test:composition` 里加了这一个文件（CI 主机显式列表另加一行），未 bump。新增**一个**门禁文件含**两例**
+  （[gate-trusted-epoch-settlement.test.mjs](../tests/composition/gate-trusted-epoch-settlement.test.mjs)）：
+  `TS1` = own 段为空的 bootstrap / post-begin 裁决点（注入仅 `put` 写屏障），`TS2` = legacy 冷恢复入口
+  （**先等测试闸门再调用真实 `facility.open()`**、真实域打开后的 `put` 屏障、对 `ledger.load` 的**只观察**
+  旁路——返回同一个原始 promise）；交叉为回退 post-begin **只 TS1 红**、回退 legacy（F3 之前的忠实形态）
+  **只 TS2 红**，**不**证明宿主会自然产生这两条窗口。另加可移植单测 `TE-U19`（**不**宣称真实 SDK 内部
+  提交 / 排队时点）。`npm test` **296/296/0 skip**、composition **108/108/0 skip**（14 份）；指纹
+  `DD691EBA…` / `8D37D411…`，`lifecycle.mjs`、ledger、上一轮收尾 unit、TE-R 门禁**逐字未改**，前轮
+  283 / 295 / 106 **不相加不漂白**。**旧 F4 窄窗口整范围仍未闭合**；`08 §2.2a`、其余未覆盖项、阶段 3
+  仍在；质量 20 PASS / 1 FAIL **未漂白**；整体仍 **WIP / 未验收**，本轮是有限工作区实现，**不等于**全
+  feature 发布验收。详见 [08 §5.6](<08-trusted-epoch-baselines.md>)。
+- **发布准备（源码版本 `0.2.0-functional.6`）**：本文件上方记录的 F3 两机制、TER 门禁加强、
+  TS1 / TS2 与 `TE-U19` 随该版本一并纳入发布。`0.2.0-functional.5` **已作为 GitHub 构建版发布**
+  （`v0.2.0-functional.5 · 1049d47f920d`，tag `build-1049d47f920d`，commit `1049d47f920d…`）；它
+  **之后**的两处 `[Unreleased …]` 条目此前**未发布**，现首次并入本版本，那几段历史**按原样保留、
+  不做粗改**。GitHub Release 资产由 `main` 绿跑自动产出（`build-<sha>`），**本条目写在发布动作之前、
+  不声称本版本已发布**；未安装、未重载、未重启，**未发布到 npm**，也**未给 semantic tag**。
+  **不宣称无缺陷、不是全 feature 验收**。
 
 ## 1. 状态速览
 
@@ -94,7 +130,7 @@
 | 安装 / 发布 | **部分完成** | 源码基线已随 `main` 发布；**未安装、未启用、未构建产物、未上 npm** |
 | 文档与路径口径整理 | **已完成** | 本文件集已按迁移后布局订正；**不升级以上任何一行** |
 | 基线独立门禁（当前 `main`） | **已通过（限 §0 范围）** | unit 160/0、composition 42/0（含 `S03c`、recovery、event-seq）、质量工装 14/0/1 skip、validate 20PASS/1FAIL |
-| 可信周期基线（见 §0.1） | **已初步实现 / WIP，验收未完成** | 契约、判据与门禁见 [08](<08-trusted-epoch-baselines.md>)；三处修复已获**非作者独立复审「通过」**；另新增 2 份门禁（failclosed / badrecord）并接入 `package.json` 与 CI，unit 283/0、composition 101/0（均 exit 0）；**复审 9 项中优先级最高的 TE-R 已于 2026-10-07 补齐门禁**（TE-R 轮 composition 105/0），**`08 §2.4c` 的「坏记录连坐」已于同日修复**（坏记录轮 composition 104/0，变异验证过）——**坏记录修复已获非作者限定范围复核「通过」，TE-R 门禁仍未补签**；**其余未覆盖项 + 一条 MEDIUM 契约级缺口（`08 §2.2a`）未修**；合并后本机复跑 unit 283/0、composition 106/0（均 exit 0），**整体仍 WIP、无验收结论、不表示缺陷已全部修复** |
+| 可信周期基线（见 §0.1） | **已初步实现 / WIP，验收未完成** | 契约、判据与门禁见 [08](<08-trusted-epoch-baselines.md>)；三处修复已获**非作者独立复审「通过」**；另新增 2 份门禁（failclosed / badrecord）并接入 `package.json` 与 CI，unit 283/0、composition 101/0（均 exit 0）；**复审 9 项中优先级最高的 TE-R 已于 2026-10-07 补齐门禁**（TE-R 轮 composition 105/0），**该门禁随后获非作者专项复核「通过」**（限定范围：仅 TE-R 门禁及其加强，基线快照 `1049d47` + 最终门禁），**`08 §2.4c` 的「坏记录连坐」已于同日修复**（坏记录轮 composition 104/0，变异验证过）——**坏记录修复亦获非作者限定范围复核「通过」**；**其余未覆盖项 + 一条 MEDIUM 契约级缺口（`08 §2.2a`，线上未证实）未修**；**恢复收尾（F3）已作窄修复并获非作者限定复核 + 主代理独立复核通过**（unit 295/295、composition 106/106/0 skip；**旧 F4 窄窗口仍未复核**）；合并后本机复跑 unit 283/0、composition 106/0（均 exit 0），**整体仍 WIP、无验收结论、不表示缺陷已全部修复** |
 | 恢复覆盖增强（内容已并入基线） | 已合并；源码曾经独立复审（限 3 个 code 文件） | composition 42（14 + 7 + recovery 13 + event-seq 8）；**不等于产品验收**；见 [07](<07-lifecycle-recovery-coverage.md>) |
 
 ## 2. 已验证

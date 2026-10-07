@@ -681,13 +681,20 @@ test('TE9: 同 root 重启后，同一 epoch 的常驻基线必须仍是该 epoc
   await h1.dispose()
 
   // **真关闭** boot1 的全部服务（保留 tmpRoot），让第二个 Loader 不是并发开同一物理介质。
+  // 句柄必须在关闭**前**取出来，并把「域已打开」钉成强前置；关闭**后**再**无条件**断言句柄
+  // 已释放。这里**不允许** `if (probe !== undefined)` 式静默跳过（TER 独立审查 F3）：
+  // 那样「storageDomain 不可达」时整段断言会悄悄消失，门禁就测不到「真的关过」。
+  const facility = boot1.ctx.get('storageDomain')
+  assert.ok(facility !== undefined,
+    '前置：真实 storageDomain 服务必须可达（否则「域已释放」这条断言无法成立，不得跳过）')
+  const { domain } = await trustedEpochConstants()
+  // 断言一律用 **boolean** 表达式：把 Cordis 的 domain 对象直接交给 assert.equal，失败时会先
+  // 触发它的 custom inspect，抛出的就不是本判据的 AssertionError，而会遮掉真正要看的差异。
+  assert.equal(facility.get(domain) !== undefined, true,
+    `前置：第一段必须已打开可信域 ${domain}（否则关闭后的「已释放」是空过）`)
   await boot1.closeServices()
-  const probe = boot1.ctx.get('storageDomain')
-  if (probe !== undefined) {
-    const { domain } = await trustedEpochConstants()
-    assert.equal(probe.get(domain), undefined,
-      '真关闭后：storageDomain.get(可信域) 必须返回 undefined（域已释放）')
-  }
+  assert.equal(facility.get(domain) === undefined, true,
+    '真关闭后：可信域句柄必须已释放（storageDomain.get 返回 undefined）；否则第二段就是并发打开同一介质')
 
   // 同一 root 上重启 Loader；配置改成包含 hidden —— 同 epoch 不得被改写。
   const boot2 = await bootAdapterComposition({
@@ -944,6 +951,8 @@ test('TER0: 置空基线下 canonical tool_load 折叠产出的 selection 是该
 
   assert.ok(lastNames(store).includes(HIDDEN),
     `前置：真实折叠后该工具必须已披露，否则本组全是空转；实际出站：${lastNames(store).join(', ')}`)
+  assert.equal(store.bodyCount('ter0-use'), 1,
+    '前置：原队列里紧接 tool_load 的那次直连调用必须真的执行到 body（证明放行是「执行得下去」而不是「没报错」）')
 
   const runtime = runtimeOf(boot.ctx, 'ter-receipt')
   const state = runtime.engine.getState(runtime.scope)
@@ -983,7 +992,19 @@ test('TER1/TER2: 真重启冷恢复后，canonical 回执链重放仍授权按�
 
   // **真关闭**全部服务（保留 tmpRoot）：让第二个 Loader 不是并发开同一物理介质。
   // 这是 TE9 已验证过的形态 —— 只有真关闭，第二个 Loader 才读得到同一份历史。
+  // 判据因此必须**自己**钉住「真的关过」，而不是只调用一下 closeServices（TER 独立审查 F1）：
+  // 关闭前钉「域已打开」的前置、关闭后无条件断言域句柄已释放。
+  const facility1 = boot1.ctx.get('storageDomain')
+  assert.ok(facility1 !== undefined,
+    '前置：真实 storageDomain 服务必须可达（否则「真重启」无法断言，不得跳过）')
+  const { domain: trustedDomain } = await trustedEpochConstants()
+  // 同 TE9：断言一律用 **boolean** 表达式，不把 Cordis 的 domain 对象交给 assert.equal
+  // （失败格式化会触发它的 custom inspect，把真正的判据差异遮掉）。
+  assert.equal(facility1.get(trustedDomain) !== undefined, true,
+    `前置：第一段必须已打开可信域 ${trustedDomain}（否则关闭后的「已释放」是空过）`)
   await boot1.closeServices()
+  assert.equal(facility1.get(trustedDomain) === undefined, true,
+    '真关闭后：可信域句柄必须已释放 —— 否则第二段就是并发打开同一介质，「真重启」不成立')
 
   // ---- 第二段：同 root 重启。配置与第一段**逐字相同**，基线因此仍是 []。----
   const boot2 = await bootAdapterComposition({
@@ -1027,10 +1048,21 @@ test('TER1/TER2: 真重启冷恢复后，canonical 回执链重放仍授权按�
     'TE-R 核心：冷恢复后直连执行必须真的到达 body（证明不是「空放行」）')
 
   // ---- TER2：反空过对照 —— 从未 load 的同族工具必须仍被拒 ----
+  // 前置 + 正控：两个工具都必须**在本 agent scope 内解析得到**。`fixture_hidden_scope` 是
+  // agent scope 注册，根 `ctx.tools.get(name)` 返回 undefined，必须带 agent 走同一条解析路径
+  // （与 `guard.mjs:55` 的 `registeredInScope` 一致）。缺了这条，「被拒」可能只是宿主解析不到，
+  // 而不是本插件的按需授权拒绝 —— 那样 TER2 就证明不了 TER1 的对照关系（TER 独立审查 F2）。
+  assert.ok(boot2.ctx.tools.get(TER_SCOPE_ONLY, h2.agent) !== undefined,
+    `前置：对照工具必须在本 agent scope 内解析得到（不得退化成宿主解析失败）；实际 ${TER_SCOPE_ONLY}`)
+  assert.ok(boot2.ctx.tools.get(HIDDEN, h2.agent) !== undefined,
+    '正控：同一解析路径下已被授权的工具也必须解析得到（证明上面那条不是恒真）')
+
   const denied = await directExec(boot2.ctx, h2.agent, TER_SCOPE_ONLY, { text: 'never-loaded' }, 'ter2-exec')
   assert.equal(denied.isError, true,
     `对照：从未 load 的隐藏工具必须仍被拒（否则 TER1 是靠放宽换来的）；实际文本：${denied.text.slice(0, 300)}`)
   assert.equal(store.bodyCount('ter2-exec'), 0, '对照：从未 load 的工具 body 必须为 0')
+  assert.match(denied.text, new RegExp(`${TER_SCOPE_ONLY}: [\\s\\S]*\\(TOOL_NOT_LOADED\\)`),
+    `对照：拒绝必须来自本插件 guard 的稳定码 TOOL_NOT_LOADED，而不是「工具根本解析不到」之类的宿主原因；实际文本：${denied.text.slice(0, 300)}`)
 
   await h2.dispose()
 })

@@ -19,6 +19,61 @@ Nothing in this file is a product-acceptance statement. For the authoritative pe
 what is verified, what is unverified, and what this version refuses to support — see
 [`plugin/docs/05-current-status.md`](plugin/docs/05-current-status.md).
 
+## [0.2.0-functional.6] — release preparation: restore settlement, TE-R strengthening, and the pending-settlement gates
+
+Source version `0.2.0-functional.6`. **The package is not published to npm**, and this round performs
+no install, GUI reload or application restart. A GitHub Release asset is built automatically by the
+`publish` job on a green `main` run (`build-<sha>` tags, named `v<version> · <sha>`); **this entry is
+written before that release runs and does not claim it has already happened.** No semantic tag is
+created for this version: the tag-triggered job runs host-bound unit files and cannot complete on a
+hosted runner.
+
+### What this version carries
+
+Earlier entries are consolidated rather than rewritten. `0.2.0-functional.5` **is already published
+as a GitHub build release** (`v0.2.0-functional.5 · 1049d47f920d`, tag `build-1049d47f920d`, commit
+`1049d47f920d…`); the two `[Unreleased …]` sections **after** it were workspace work that had not been
+released and are carried into this version for the first time. Those sections are kept exactly as
+written — they remain the record of that moment.
+
+- **Restore settlement (F3), two mechanisms.** A `load()` / `begin()` superseded by a later live
+  user `/compact` no longer returns `PENDING` / `null` and have it adjudicated as a failure with a
+  `null` attribution; and the bootstrap qualification decision and the start of the initial record now
+  happen in **one synchronous block**, removing a microtask window in which a real manual migration
+  could be reverted to `initial` plus the then-current configuration. No ledger API, state, reason
+  or timeout was added.
+- **TE-R gates strengthened** after a non-author review: a real restart is pinned, the
+  scope-resolution precondition and the rejection code are asserted, and a silently skippable release
+  probe was removed.
+- **Pending-settlement gates (TS1 / TS2)** — one new real-host composition file with two cases, on a
+  real Loader, adapter, runtime / journal / ledger, agent and user `/compact`; no `createLifecycle`
+  fake and no mock `apply`. `TS1` pins the **own-segment-empty bootstrap** post-begin adjudication
+  (its only injection is a `table().put` barrier); `TS2` pins the **legacy cold-restore** entry (a
+  gate **before** the real `facility.open()`, a `put` barrier after the domain opens, and a read-only
+  pass-by on `ledger.load` returning the same original promise). Cross-checked on private copies:
+  rolling back the post-begin adjudication turns **TS1 red / TS2 green**; rolling back the legacy
+  entry to its pre-F3 shape (a single `load()`, a single adjudication) turns **TS2 red / TS1 green**.
+- **`TE-U19`**, one portable unit case pinning the record-key contract: the key comes from the
+  identity frozen at record construction, a late-resolving old write does not overwrite the runtime
+  `identity` / `names`, and a cold restore aligned to the newest identity reads that record. It makes
+  no claim about the real SDK's internal commit / enqueue timing, and does not assert that the old
+  write can never land.
+
+### Verification boundary
+
+- `npm test` → **296 pass / 0 fail / 0 skipped**; `npm run test:composition` → **108 pass / 0 fail /
+  0 skipped** across **14** host-composition files, against the real DSH Core `0.2.1-alpha.1`
+  composition. Earlier rounds' recorded numbers stand as written and are **not** added to these.
+- Fingerprints: gate `DD691EBA…`, unit `8D37D411…`; ledger `228ADEC7…`, `lifecycle.mjs` `68AFA230…`,
+  earlier settlement unit `D2451321…`, TE-R gate `3FA2A991…`. Non-author limited reviews passed on
+  the TE-R gates, the F3 fix, the settlement gate file and the record-key unit.
+- **This entry does not claim the absence of defects, and it is not whole-feature acceptance.**
+  Still open: the `08 §2.2a` bootstrap contract gap (not demonstrated online, authorisation behaviour
+  unchanged), the old **F4** window as a whole, the remaining uncovered review items, and all of
+  `03 §11` stage 3 (real wire / token / TTFT / retrieval thresholds). The frozen quality result
+  (21 checks, 20 PASS / 1 FAIL) is unchanged. The feature remains **WIP / not product-accepted**, and
+  no token saving, latency improvement or online behaviour is measured or claimed.
+
 ## [0.2.0-functional.1] — 2026-10-07
 
 Functional build on `fix/discovery-functionality`; not an online GUI acceptance or npm publication.
@@ -389,16 +444,95 @@ The two entries above are **separate rounds**; their workspace numbers are recor
   no new criterion.
 - **Non-author review, limited scope (2026-10-07, PR5): pass.** The reviewer is not the author of
   that round. Scope is **only** the bad-record isolation fix and the conflict merge — it is **not**
-  feature-wide acceptance and it does **not** sign off the TE-R work. Independent re-runs:
-  `npm test` → **283 pass / 0 fail**, `npm run test:composition` → **106 pass / 0 fail / 0 skipped**;
-  documentation cross-references and section numbering check out with no broken links. Discriminating
-  power was reproduced independently on a **private copy**: restoring the old `strictObject`
-  transport turns **BR4b red** (bystander session `incompatible` instead of `ready`, exit **1**, log
-  `.probe/pr5-parent-mutation-red.log`). **Product source was not touched**; the mutation exists only
-  in that private copy. The author-side records above are kept as written and are not rewritten.
-- **What is still open:** the TE-R gates remain unreviewed, the `08 §2.2a` contract gap and the
-  remaining uncovered review items are unfixed, and all of `03 §11` stage 3 is outstanding. The
-  feature as a whole is **still not product-accepted**.
+  feature-wide acceptance. Independent re-runs: `npm test` → **283 pass / 0 fail**,
+  `npm run test:composition` → **106 pass / 0 fail / 0 skipped**; documentation cross-references and
+  section numbering check out with no broken links. Discriminating power was reproduced
+  independently on a **private copy**: restoring the old `strictObject` transport turns **BR4b red**
+  (bystander session `incompatible` instead of `ready`, exit **1**). **Product source was not
+  touched**; the mutation exists only in that private copy. The author-side records above are kept as
+  written and are not rewritten.
+- **TE-R non-author review, limited scope (2026-10-07): pass.** Scope is **only** the TE-R gates and
+  their strengthening, over baseline snapshot `1049d47` plus the final gate file
+  (SHA256 `3FA2A991…B320401`). Reviewer measurements: gate file **14/14 green**; cutting the
+  cold-restore replay leaves **TER0 green** and turns **TER1 red** (so TER1 is not a restatement of
+  TER0); an over-permissive guard turns **TER2 red**; a fake close (`closeServices` as a no-op) turns
+  **TE9 and TER1 red** with `actual: false / expected: true`. The three **test** findings — TER1 not
+  pinning a real restart, TER2 missing the scope-resolution precondition and the rejection code, and
+  TE9's release probe being silently skippable — are **closed**.
+  **Naming:** that third finding is a *test* finding (TE9's probe could be skipped); it is **not** the
+  product-side **restore-settlement race**, which is handled separately in the follow-up section below.
+  This review excludes the concurrent `lifecycle.mjs` work and the newly added unit gate and is
+  **not** feature-wide acceptance.
+- **What is still open:** the `08 §2.2a` contract gap (not demonstrated online, no change to the
+  authorisation behaviour), the remaining uncovered review items, and all of `03 §11` stage 3. The
+  feature as a whole is **still not product-accepted** and still **WIP**.
+
+## [Unreleased follow-up] — restore-settlement (F3) narrow fix, limited review, not published
+
+**Not a release.** The source version stays `0.2.0-functional.5` and `package.json` is unchanged; this
+is workspace work **after** that entry and belongs to no published version. Nothing here is published,
+installed or restarted.
+
+### Fixed
+
+- **`PENDING/null` was mis-adjudicated as a failure.** When a `load()` / `begin()` is superseded by a
+  later live user `/compact` adopt inside its own `await` window it returns early with
+  `PENDING/null`. The caller judged the state once and ran `blockBaseline`, producing a `reason=null`
+  attribution, an emptied name set, a fail-closed engine and `restoring` flipped to `false` while the
+  real state later flipped back. Settlement now follows the newest in-flight work to a terminal state.
+- **A microtask TOCTOU after the bootstrap qualification check.** If the "missing and eligible"
+  decision handed back a snapshot and the initial record only started after an outer `await`, a live
+  migration arriving in that gap was superseded by the stale initial record — a real manual migration
+  silently reverted to `initial` plus the then-current configuration. Decision and initiation now
+  happen in the **same synchronous block**; only the resulting promise is awaited outside. Awaiting the
+  newest in-flight write is not bypassed, and **no** ledger API, state, reason or timeout was added.
+
+### Verification boundary
+
+- The canonical `/compact` chain, the scheduling point and the fake store are **declaratively
+  injected counterexamples against the product code**; they show product behaviour under that
+  ordering and are **not** a claim that the window reproduces online. The real-host regression
+  evidence is `npm run test:composition` → **106 pass / 0 fail / 0 skipped**.
+- Non-author **limited** review (read-only snapshot): new unit **12/12**, real-Loader subset
+  **37/37**, the new case turning red when the synchronous initiation is reverted, and the pre-existing
+  legacy / post-begin cases still red. Independent final check: `npm test` **295/295**,
+  `npm run test:composition` **106/106/0 skip**, no broken links across the doc set. Snapshot
+  fingerprints: `lifecycle.mjs` SHA256 `68AFA23071A78AEC…`, new unit `D245132120B5C790…`;
+  `trusted-epoch.mjs` (`228ADEC7…`) and the TE-R gate (`3FA2A991…`) are **byte-identical to base**.
+- **Still open:** the `08 §2.2a` contract gap (not demonstrated online, authorisation behaviour
+  unchanged), the old **F4** narrow window (unreviewed), `retryBaseline`'s existing `restoring=false`
+  window that still reuses the previous blocked reason and keeps **0 requests** (unchanged this round),
+  and all of `03 §11` stage 3. Whole-feature acceptance is **not** claimed; the tree stays **WIP**.
+
+### Follow-up added after the entry above — pending-settlement gates and the record-key unit
+
+Tests and documentation only; the product source exercised is the unpublished F3 change above.
+Version stays `0.2.0-functional.5`; nothing is published, installed, reloaded, restarted or bumped.
+
+- One new real-host composition file with **two cases**
+  ([gate-trusted-epoch-settlement.test.mjs](plugin/tests/composition/gate-trusted-epoch-settlement.test.mjs)):
+  `TS1` is **own-segment-empty bootstrap** (only injection: a `table().put` barrier on the real
+  storage domain); `TS2` is **legacy cold restore** (injections: a gate **before the real
+  `facility.open()`**, a `put` barrier after the domain opens, and a **read-only** pass-by on
+  `ledger.load` returning the **same original promise**). Neither may settle or authorise inside the
+  window; once the **newest `manual` write** is released both must be `ready` / `trusted` with the
+  boundary-captured names, an epoch matching the journal and the durable record, and the **same**
+  pending user turn then emitting **exactly one** request. Rollbacks cross: post-begin → **TS1 red /
+  TS2 green**; legacy in its pre-F3 shape → **TS2 red / TS1 green** (a rollback dropping the `load()`
+  altogether only fails a precondition and is not decisive). They pin separately repeatable
+  settlement contracts and do **not** show that a real host naturally produces either window.
+- One new portable unit case `TE-U19`
+  ([unit/trusted-epoch.test.mjs](plugin/tests/unit/trusted-epoch.test.mjs)): a declaratively injected
+  test store pins record-key isolation, no runtime overwrite by a late write, and cold restore by
+  newest identity, making **no claim about the real SDK's internal commit / enqueue timing**.
+- `test:composition` names that one file; the explicit host list in CI gains one line.
+- `npm test` **296/296/0 skip**; `npm run test:composition` **108/108/0 skip** over **14** files.
+  Fingerprints: gate `DD691EBA…`, unit `8D37D411…`; ledger `228ADEC7…`, `lifecycle.mjs` `68AFA230…`,
+  earlier settlement unit `D2451321…`, TE-R gate `3FA2A991…` are **byte-identical to the previous
+  round**. Earlier rounds' numbers stand as written and are **not** added or whitened.
+- Still **WIP**: the old **F4** window is **not closed as a whole**, `08 §2.2a` and the remaining
+  uncovered items and `03 §11` stage 3 are open, the frozen quality result is unchanged, and this is
+  **not** whole-feature acceptance. Detail: [08 §5.6](plugin/docs/08-trusted-epoch-baselines.md).
 
 ## [0.1.0] — prepared 2026-10-06, not published
 
