@@ -1,4 +1,4 @@
-// progressive-v2/domain/canonical.mjs
+// plugin/domain/canonical.mjs
 // 无损 canonical JSON、SHA-256 digest、UTF-8 字节核算。
 // 键按 code unit 排序;数组顺序保持;拒绝 undefined / NaN / Infinity / function / symbol。
 // 这是 digest 与"回执逐字比较"的唯一实现。

@@ -56,14 +56,18 @@ pass.
 ```sh
 npm test                          # unit suite — trust the output of this command
 npm run test:composition          # composition gates — trust the output of this command
+npm run test:all                  # both, in order
+npm run check                     # package identity + docs consistency (scripts/check-repo.mjs)
+npm run clean                     # remove regenerable residue (plugin/fixtures/tmp)
 ```
 
 Counts are deliberately not written down: suites are added over time, so any number printed here
-would drift. Treat the actual output of these two commands as the source of truth.
+would drift. Treat the actual output of these commands as the source of truth.
 
-`test:composition` covers real-Loader suites — adapter gates, lifecycle, recovery and fork, event-
-`seq`, the cache-epoch gate, and the settings gate. Which are present depends on the branch you have
-checked out; see [07 — recovery and fork coverage](<docs/07-lifecycle-recovery-coverage.md>).
+`test:composition` runs every `tests/composition/gate-*.test.mjs` through a glob, so a new gate file
+joins it (and the manual CI job that calls it) without editing a list. Helper modules in that
+directory that are not `gate-*.test.mjs` are not suites. See
+[07 — recovery and fork coverage](<docs/07-lifecycle-recovery-coverage.md>).
 
 Prerequisites, because the suites do not have the same ones:
 
@@ -74,8 +78,9 @@ Prerequisites, because the suites do not have the same ones:
   version. It resolves packages from that installation through
   [`contracts/install-resolver.mjs`](<contracts/install-resolver.mjs>), which uses
   `DSH_INSTALL_ROOT` when set and otherwise falls back to the default install root. These commands
-  install and restart nothing and do not touch the DSH profile; they do create and remove temporary
-  session files under the git-ignored `fixtures/tmp/`.
+  install and restart nothing and do not touch the DSH profile; they do create temporary session
+  files under the git-ignored `fixtures/tmp/`, which `contracts/harness.mjs` removes when each test
+  process exits (`DSH_KEEP_TMP=1` keeps them; `npm run clean` clears leftovers).
 - **The quality tooling is published, but the full suite does not complete on a public checkout.**
   The validator needs the frozen scoring dataset, and so does the tooling's own digest test, which
   reads the held-out queries and the frozen labels — none of which are published. Recorded results

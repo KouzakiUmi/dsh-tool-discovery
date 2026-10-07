@@ -1,6 +1,6 @@
 // freeze-labels 工装的单测。
 //
-// 边界：全部在 progressive-v2/quality/tests/.tmp 下的专属临时目录里操作，
+// 边界：全部在 plugin/quality/tests/.tmp 下的专属临时目录里操作，
 // 绝不写仓库内的真实 queries/labels。清理前先断言解析后的真实路径确属本文件创建的临时目录。
 // 本测试证明的是工装行为（排他创建不覆盖已存在的冻结文件、拒绝覆盖、来源声明、时间来源、
 // 无 import 写副作用），不证明也不声称数据可以评分。

@@ -6,7 +6,7 @@
 >
 > **方法**：通读 `plugin/domain/**` 与 `plugin/adapters/dsh/**` 全部产品源码 + 设计文档 01/02，
 > 加上在 `.probe/` 下对活引擎跑的定向探针（检索排序、入口行为、分页与预算），
-> 以及 `fix/runtime-stability-and-retrieval-quality` 分支上的一轮修复。
+> 以及一轮运行时稳定性与检索质量修复（已并入 `main`，PR #8 / #9）。
 > 涉及宿主动态行为的结论标注了静态推理的部分；本轮改动碰到 `domain/` 的 load/unload
 > 状态机，**按 CONTRIBUTING 的规矩不算作者自签**，需非作者复核。
 >
@@ -126,7 +126,7 @@ outOfOrderIgnored / gaps / rejected / coldCandidateRestores）。
 ## 7. 问题清单与本轮处置
 
 > 排序依据是"是否影响功能逻辑成立"，安全边界一律排最后。
-> **状态口径**：`已修` = 本分支已改且有新增单测钉住；`未修` = 明确不做；
+> **状态口径**：`已修` = 已并入 `main` 且有新增单测钉住；`未修` = 明确不做；
 > `待他人复核` = 涉及边界，按 CONTRIBUTING 不可由本轮作者签核。
 
 ### ✅ 已修（7 项，含 4 份新增单测）

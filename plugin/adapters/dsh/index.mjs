@@ -1,4 +1,4 @@
-// progressive-v2/adapters/dsh/index.mjs
+// plugin/adapters/dsh/index.mjs
 // 插件装配面：Config 校验、入口冲突检测、有序注册、整组 disposer 回滚。
 //
 // 激活顺序（任一步失败 → 逆序回滚已创建项，不留孤儿 listener/guard，L09）：

@@ -1,4 +1,4 @@
-// progressive-v2/tests/unit/helpers.mjs
+// plugin/tests/unit/helpers.mjs
 // **人工单测 fixture**:全部手写,不复制 quality/fixtures 的描述当 query,
 // 不读取任何 held-out query / labels / quality-review 报告。
 // 这些数据与真实 registry 无关,只是稳定的测试输入。

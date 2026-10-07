@@ -1,7 +1,7 @@
 // 组合测试：真实 Cordis Loader + 安装内 0.2.1-alpha.1 服务 + mock provider
 // + **产品 adapters/dsh**。
 //
-// 运行：node --test progressive-v2/tests/composition/gate-adapter.test.mjs
+// 运行：node --test plugin/tests/composition/gate-adapter.test.mjs
 //
 // 覆盖（03 §8 中 adapter 相关项）：
 //   F01 首请求只有三个入口；S01 猜 inherited 工具名 body=0；

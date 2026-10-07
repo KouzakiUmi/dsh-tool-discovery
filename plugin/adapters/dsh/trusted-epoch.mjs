@@ -1,4 +1,4 @@
-// progressive-v2/adapters/dsh/trusted-epoch.mjs
+// plugin/adapters/dsh/trusted-epoch.mjs
 // **可信常驻名单的权威来源**：官方 `ctx.storageDomain` 上的持久记录。
 //
 // 为什么不再用日志反推（这是本模块存在的唯一理由）：

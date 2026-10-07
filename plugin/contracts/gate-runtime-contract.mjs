@@ -1,6 +1,6 @@
 // 阶段0 合同门禁（覆盖 G1-G8 + S08 同响应负例；8 项验收口径不降低）。
-// 运行：node progressive-v2/contracts/gate-runtime-contract.mjs
-// 产物：progressive-v2/reports/runtime-contract-gates.json（每门禁 pass/fail 与证据索引）。
+// 运行：node plugin/contracts/gate-runtime-contract.mjs
+// 产物：plugin/reports/runtime-contract-gates.json（每门禁 pass/fail 与证据索引）。
 // 说明：fixture 的投影/回执折叠是合同探针，不是产品实现；mock 录制面是最终
 // GenerateOptions，不是外部真实 provider wire（后者未验证）。
 import test, { after } from 'node:test'
@@ -318,7 +318,7 @@ after(async () => {
     stage: 'stage0-gates-incremental',
     note: '增量运行；8 项门禁验收口径不变，未列门禁尚未验证。fixture 投影/回执折叠是合同探针，不是产品实现；mock 录制面是最终 GenerateOptions，非外部真实 provider wire。',
     timestamp: new Date().toISOString(),
-    command: 'node progressive-v2/contracts/gate-runtime-contract.mjs',
+    command: 'node plugin/contracts/gate-runtime-contract.mjs',
     node: process.version,
     coveredGates: results.map((entry) => entry.id),
     results,

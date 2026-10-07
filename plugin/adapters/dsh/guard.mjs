@@ -1,4 +1,4 @@
-// progressive-v2/adapters/dsh/guard.mjs
+// plugin/adapters/dsh/guard.mjs
 // 同步执行披露门禁：只**增加拒绝**，不授予任何权限，不改动原执行管线。
 //
 // F1 处置（domain-api §7 / runtime-review §4.1）：调用面**不区分存在性**。

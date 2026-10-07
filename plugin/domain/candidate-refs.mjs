@@ -1,4 +1,4 @@
-// progressive-v2/domain/candidate-refs.mjs
+// plugin/domain/candidate-refs.mjs
 // 会话 + 资格代次绑定的短期 opaque 引用。
 // opaque、内存态、默认 15 分钟 TTL、跨会话拒绝、fork 不继承、重启即失效。
 // "难猜"不替代当前 scope 资格复核:engine 每次 load 仍会用当前 catalog 重新解析 toolId。

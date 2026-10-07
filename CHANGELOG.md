@@ -26,6 +26,36 @@ and this round performs no install, GUI reload or application restart. This entr
 product-acceptance claim: see [`plugin/docs/05-current-status.md`](plugin/docs/05-current-status.md)
 for the authoritative per-item status.
 
+### Changed — developer workflow and documentation
+
+No product source behaviour changes in this group.
+
+- **One command set.** `npm test`, `npm run test:composition`, `npm run test:all`, `npm run check`,
+  `npm run check:quality`, `npm run clean`. `test:composition` now runs the glob
+  `plugin/tests/composition/gate-*.test.mjs` instead of a 14-file list that had to be kept in sync
+  by hand in `package.json` **and** `ci.yml`; a new gate file is picked up with no other edit.
+- **`scripts/check-repo.mjs`** holds the identity and documentation gates that used to be inline
+  shell in `ci.yml` (name match with `cordis.patch.yml`, private package, no vendor scope, no stale
+  former-name references, README pair, relative-link resolution, unmeasured-saving claims). CI calls
+  the same script, so the two jobs `identity` and `docs` collapse into one `repo-checks` job and the
+  checks run locally. The manual composition CI job now calls `npm run test:composition`.
+- **`ci.yml`**: the release-asset job runs for `main` only; the hard-coded development branch name
+  `fix/discovery-functionality` is gone.
+- **Composition temp files no longer accumulate.** `contracts/harness.mjs` removes every temp root a
+  test process created when that process exits (`DSH_KEEP_TMP=1` keeps them). A cleanup that ran
+  before host-side asynchronous persistence finished used to leave directories behind; the
+  exit-time pass covers that. `plugin/fixtures/tmp/` had grown to 185 directories. `npm run clean`
+  clears leftovers (`--all` also removes `.functional-dist/`).
+- **Stale `progressive-v2/` paths** in source comments, usage lines and recorded `command` strings
+  now say `plugin/`. The migration notes in `CONTRIBUTING.md`, `.gitignore` and `plugin/docs/` keep
+  the old name on purpose, because they describe the migration.
+- **Docs aligned.** [`plugin/docs/05-current-status.md`](plugin/docs/05-current-status.md) is rewritten
+  as a current snapshot (conclusions, numbers, open items) instead of a layered per-round narrative:
+  stale counts (unit 160, composition 42) are replaced by a dated re-run, and the per-round detail
+  stays in this changelog, in `08` and in the private evidence. `plugin/docs/README.md` §2.1/§5,
+  both READMEs, `plugin/README.md` and `CONTRIBUTING.md` use the npm scripts and no longer hard-code
+  counts or say which suites "depend on the branch".
+
 ### Fixed — functional
 
 - **The restore buffer is never released for a new session.** `journal.mjs` buffered every

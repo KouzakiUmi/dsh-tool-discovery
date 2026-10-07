@@ -1,4 +1,4 @@
-// progressive-v2/adapters/dsh/projection.mjs
+// plugin/adapters/dsh/projection.mjs
 // system-prompt/assemble 的最终投影。
 //
 // 规则（03 §3.2 / adapter-plan §4）：

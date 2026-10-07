@@ -1,4 +1,4 @@
-// progressive-v2/adapters/dsh/lifecycle.mjs
+// plugin/adapters/dsh/lifecycle.mjs
 // scope 注册、事件分发、registry 变更代次、disposer 所有权。
 //
 // 关键约束（03 §5 / adapter-plan §8）：

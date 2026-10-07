@@ -1,4 +1,4 @@
-// progressive-v2/domain/catalog.mjs
+// plugin/domain/catalog.mjs
 // schema 身份、版本与不可变目录快照。
 // 不依赖宿主:schema 身份由"有效 wire 字段"的无损 canonical JSON 完全重算。
 import { classifyBinding } from './categories.mjs';

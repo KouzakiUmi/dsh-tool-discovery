@@ -68,7 +68,10 @@
   "license": "MIT",
   "scripts": {
     "test": "node --test plugin/tests/unit/*.test.mjs",
-    "test:composition": "node --test plugin/tests/composition/gate-adapter.test.mjs plugin/tests/composition/gate-adapter-lifecycle.test.mjs plugin/tests/composition/gate-adapter-recovery.test.mjs plugin/tests/composition/gate-adapter-event-seq.test.mjs plugin/tests/composition/gate-cache-epoch.test.mjs plugin/tests/composition/gate-settings.test.mjs plugin/tests/composition/gate-review-boundaries.test.mjs plugin/tests/composition/gate-trusted-epoch.test.mjs plugin/tests/composition/gate-trusted-epoch-io.test.mjs plugin/tests/composition/gate-trusted-epoch-fork.test.mjs plugin/tests/composition/gate-trusted-epoch-failclosed.test.mjs plugin/tests/composition/gate-trusted-epoch-badrecord.test.mjs plugin/tests/composition/gate-trusted-epoch-settlement.test.mjs plugin/tests/composition/gate-tool-churn.test.mjs",
-    "check:quality": "node plugin/quality/validate.mjs"
+    "test:composition": "node --test \"plugin/tests/composition/gate-*.test.mjs\"",
+    "test:all": "npm test && npm run test:composition",
+    "check": "node scripts/check-repo.mjs",
+    "check:quality": "node plugin/quality/validate.mjs",
+    "clean": "node scripts/clean.mjs"
   }
 }

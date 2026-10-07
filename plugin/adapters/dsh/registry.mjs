@@ -1,4 +1,4 @@
-// progressive-v2/adapters/dsh/registry.mjs
+// plugin/adapters/dsh/registry.mjs
 // 资格事实的唯一入口：把当前 scope 的**真实可见集合**投影成 domain 的
 // CatalogBindingDTO[]，并维护宿主侧的绑定代次。
 //

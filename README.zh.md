@@ -63,7 +63,10 @@ cd dsh-tool-discovery
 
 ```sh
 npm test                          # 单元测试 —— 以该命令的实际输出为准
-npm run test:composition          # 组合门禁 —— 以该命令的实际输出为准
+npm run test:composition          # 组合门禁（真实 DSH Loader）—— 以实际输出为准
+npm run test:all                  # 依次运行以上两者
+npm run check                     # 包身份 + 文档一致性检查（只需 Node）
+npm run clean                     # 清除可再生的测试残留
 ```
 
 单测大部分只需要 Node。其中两个文件依赖宿主：`plugin/tests/unit/client.test.mjs` 与
@@ -78,12 +81,14 @@ npm run test:composition          # 组合门禁 —— 以该命令的实际输
 用例数会随测试增减而变化，因此这里**刻意不写死数字**。以这两条命令的实际输出为准；写在本文件
 里的数字必然过时。
 
-`test:composition` 跑真实 Loader 用例：适配器门禁、生命周期、恢复与 fork、事件 `seq`，缓存周期
-门禁，以及设置门禁。具体包含哪几套取决于你检出的分支，详见 [07 · 恢复与 fork 覆盖](plugin/docs/07-lifecycle-recovery-coverage.md)。
+`test:composition` 会在真实 Loader 上运行 `plugin/tests/composition/gate-*.test.mjs` 的全部文件：
+适配器门禁、生命周期、恢复与 fork、事件 `seq`、缓存周期、设置、工具增减，以及可信周期各套。新增
+门禁文件会被 glob 自动纳入，无需改其它地方。详见 [07 · 恢复与 fork 覆盖](plugin/docs/07-lifecycle-recovery-coverage.md)。
 
 组合测试会针对已安装的 DSH 启动真实 Cordis Loader，因此需要宿主在场。它们从该安装解析包；若
 安装不在默认位置，请用 `DSH_INSTALL_ROOT` 指向它。这些命令不安装、不重启，也不会改动你的
-DSH profile；但会在被 Git 忽略的 `plugin/fixtures/tmp/` 下创建并清理临时会话文件。
+DSH profile；但会在被 Git 忽略的 `plugin/fixtures/tmp/` 下创建临时会话文件，并在每个测试进程退出时
+清除。设置 `DSH_KEEP_TMP=1` 可保留现场用于排查；`npm run clean` 清除任何残留。
 
 质量工装是公开的，但完整跑完需要冻结的评分数据集，而该数据集未公开，因此在公开检出上无法跑完。
 该数据集覆盖什么、当前处于什么状态，见[当前状态](plugin/docs/05-current-status.md)。

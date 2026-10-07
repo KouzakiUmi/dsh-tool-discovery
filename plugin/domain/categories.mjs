@@ -1,4 +1,4 @@
-// progressive-v2/domain/categories.mjs
+// plugin/domain/categories.mjs
 // 可信分类与有界导航。
 // 分类优先级:可信 override → 受控 namespace 映射 → 结构性确定性规则 → ['other']。
 // 关键安全约束:规则只看 name / providerNamespace 的**结构**(前缀、分隔符),

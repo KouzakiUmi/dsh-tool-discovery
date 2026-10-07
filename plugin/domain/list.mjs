@@ -1,4 +1,4 @@
-// progressive-v2/domain/list.mjs
+// plugin/domain/list.mjs
 // 四个 view 的名称/类别/状态投影 + opaque 游标分页。
 // 名称模式逐项**只有完整原生名称**:不附 description / summary / revision / schema / skill。
 // 游标绑定 {sessionId, view, category, eligibilityGeneration, offset, expiresAt, orderDigest}。

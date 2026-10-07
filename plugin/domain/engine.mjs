@@ -1,4 +1,4 @@
-// progressive-v2/domain/engine.mjs
+// plugin/domain/engine.mjs
 // 组合根:请求处理、load/unload 事务、advertise/guard/失效/恢复。
 //
 // 边界:不 import Cordis / DSH / 第三方包;不注册工具;不写日志;不改 profile。

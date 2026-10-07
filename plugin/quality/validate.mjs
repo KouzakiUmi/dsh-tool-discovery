@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// progressive-v2/quality 数据集机械验证器。
+// plugin/quality 数据集机械验证器。
 //
 // 约束：只使用 Node 内置模块与 node:assert，不 import 任何产品代码，不连接 registry，
 // 不网络访问，不写任何文件。全部检查失败会一次性列出并以退出码 1 结束。
 //
-// 用法：node progressive-v2/quality/validate.mjs [--json]
+// 用法：node plugin/quality/validate.mjs [--json]
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';

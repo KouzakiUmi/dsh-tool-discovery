@@ -1,4 +1,4 @@
-// progressive-v2/domain/skills.mjs
+// plugin/domain/skills.mjs
 // 可信工具技能:只补使用指导与边界,不重复 schema。
 // 技能载荷若复述 schema(parameters/schema/description/examples)即拒绝,避免双份累积。
 import { utf8Bytes } from './canonical.mjs';

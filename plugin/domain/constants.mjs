@@ -1,4 +1,4 @@
-// progressive-v2/domain/constants.mjs
+// plugin/domain/constants.mjs
 // 协议版本、错误码元数据、预算默认值、受控类别与受控匹配标签。
 // 宿主无关:不 import Cordis / DSH / 第三方包。
 import { createText } from './locale.mjs';

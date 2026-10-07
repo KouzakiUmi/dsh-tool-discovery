@@ -1,6 +1,6 @@
 // 阶段0 smoke：真实 Loader entry 树收敛 + 公共服务可达性（仅安装内服务，不含 fixture）。
-// 运行：node progressive-v2/contracts/smoke-loader.mjs
-// 产物：progressive-v2/reports/runtime-contract-smoke.json（命令、exit、entry 实际状态）。
+// 运行：node plugin/contracts/smoke-loader.mjs
+// 产物：plugin/reports/runtime-contract-smoke.json（命令、exit、entry 实际状态）。
 // smoke 通过 ≠ 任何门禁通过。
 import fs from 'node:fs'
 import path from 'node:path'
@@ -16,7 +16,7 @@ const result = {
   stage: 'stage0-smoke-loader-convergence',
   note: 'smoke 通过不等于任何验收门禁通过；8 项门禁仍未降低、仍未验证。',
   timestamp: new Date().toISOString(),
-  command: 'node progressive-v2/contracts/smoke-loader.mjs',
+  command: 'node plugin/contracts/smoke-loader.mjs',
   node: process.version,
   platform: process.platform,
   versions: {},

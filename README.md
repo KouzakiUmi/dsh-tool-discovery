@@ -77,7 +77,10 @@ Run from the repository root:
 
 ```sh
 npm test                          # unit suite — trust the output of this command
-npm run test:composition          # composition gates — trust the output of this command
+npm run test:composition          # composition gates (real DSH Loader) — trust the output
+npm run test:all                  # both, in order
+npm run check                     # package identity + docs consistency (needs only Node)
+npm run clean                     # remove regenerable test residue
 ```
 
 Most of the unit suite needs nothing but Node. Two files —
@@ -95,15 +98,17 @@ against a real DSH root exercises. Nothing here claims browser or DOM rendering 
 Counts move as suites are added, so they are deliberately not written down here. Treat the actual
 output of these two commands as the source of truth; a number printed in this file would drift.
 
-`test:composition` runs real-Loader suites: adapter gates, lifecycle, recovery and fork, event-`seq`,
-the cache-epoch gate, and the settings gate. Which of those are present depends on the branch you
-have checked out. See [07 — recovery and fork coverage](plugin/docs/07-lifecycle-recovery-coverage.md).
+`test:composition` runs every `plugin/tests/composition/gate-*.test.mjs` file against a real Loader:
+adapter gates, lifecycle, recovery and fork, event-`seq`, cache epoch, settings, tool churn and the
+trusted-epoch suites. A new gate file is picked up by the glob; nothing else needs editing. See
+[07 — recovery and fork coverage](plugin/docs/07-lifecycle-recovery-coverage.md).
 
 The composition suites boot a real Cordis Loader against an installed DSH, so they need the host to
 be present. They resolve packages from that installation; if it is not at the default location,
 point `DSH_INSTALL_ROOT` at it. These commands install and restart nothing, and they do not touch
-your DSH profile; they do create and remove temporary session files under
-`plugin/fixtures/tmp/`, which is ignored by Git.
+your DSH profile; they do create temporary session files under `plugin/fixtures/tmp/` (ignored by
+Git) and remove them when each test process exits. Set `DSH_KEEP_TMP=1` to keep them for debugging;
+`npm run clean` removes any leftovers.
 
 The quality tooling is published, but the full suite needs the frozen scoring dataset, which is
 not published — so it does not complete on a public checkout. See

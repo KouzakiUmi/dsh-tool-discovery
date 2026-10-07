@@ -1,4 +1,4 @@
-// progressive-v2/domain/state.mjs
+// plugin/domain/state.mjs
 // 纯 reducer + canonical pair 严格核验 + guard 判据。
 //
 // 这是 runtime-review F2 的**产品实现**:不信任回执自报字段与自报版本,

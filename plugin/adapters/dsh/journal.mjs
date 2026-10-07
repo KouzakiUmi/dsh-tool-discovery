@@ -1,4 +1,4 @@
-// progressive-v2/adapters/dsh/journal.mjs
+// plugin/adapters/dsh/journal.mjs
 // canonical 日志折叠 + public sessionQuery 冷恢复。
 //
 // 硬规则（domain-api §5 / adapter-plan §6-§7）：

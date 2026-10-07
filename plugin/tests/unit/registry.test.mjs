@@ -1,4 +1,4 @@
-// progressive-v2/tests/unit/registry.test.mjs
+// plugin/tests/unit/registry.test.mjs
 // 绑定代次稳定性回归：把「无关 tools/change 不得作废已有 selected」这条产品需求
 // 钉在 registry + domain refreshCatalog 的真实接缝上。
 //

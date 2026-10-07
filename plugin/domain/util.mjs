@@ -1,4 +1,4 @@
-// progressive-v2/domain/util.mjs
+// plugin/domain/util.mjs
 // 通用小工具(不引入任何第三方依赖)。
 
 /**

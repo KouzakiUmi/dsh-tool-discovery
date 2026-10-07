@@ -1,4 +1,4 @@
-// progressive-v2/domain/protocol.mjs
+// plugin/domain/protocol.mjs
 // 三个入口请求的**严格**校验 + 响应外壳。
 // 关键约束:未知字段一律 INVALID_ARGS;不接受 sessionId/agentId/provider/路径/自由技能名/代码。
 import { DEFAULT_BUDGETS, PROTOCOL_VERSION } from './constants.mjs';

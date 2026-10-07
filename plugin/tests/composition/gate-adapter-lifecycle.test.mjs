@@ -1,7 +1,7 @@
 // 组合测试补充：恢复链路(L01)、unload(F08)、候选 load 路径(F03 candidates/S03)。
 // 独立于 gate-adapter.test.mjs，复用同一 harness。
 //
-// 运行：node --test progressive-v2/tests/composition/gate-adapter-lifecycle.test.mjs
+// 运行：node --test plugin/tests/composition/gate-adapter-lifecycle.test.mjs
 import test, { after } from 'node:test'
 import assert from 'node:assert/strict'
 import { dshModule } from '../../contracts/install-resolver.mjs'

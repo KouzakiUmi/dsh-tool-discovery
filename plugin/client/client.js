@@ -1,4 +1,4 @@
-// progressive-v2/client/client.js
+// plugin/client/client.js
 // 设置面板（浏览器半边）：官方 ModuleLoader 惰性 CJS factory，**无 JSX、无构建**。
 //
 // 取舍说明（此前这里有一条未经验证的推断，已删）：

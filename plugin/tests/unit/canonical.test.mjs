@@ -1,4 +1,4 @@
-// progressive-v2/domain 基础原语测试
+// plugin/domain 基础原语测试
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { canonicalJson, digestOf, utf8Bytes, deepEqualCanonical } from '../../domain/canonical.mjs';

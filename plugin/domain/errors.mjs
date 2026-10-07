@@ -1,4 +1,4 @@
-// progressive-v2/domain/errors.mjs
+// plugin/domain/errors.mjs
 import { errorCodes } from './constants.mjs';
 import { createText, domainText } from './locale.mjs';
 

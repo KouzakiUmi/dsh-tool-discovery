@@ -1,4 +1,4 @@
-// progressive-v2/domain/search.mjs
+// plugin/domain/search.mjs
 // 双语 tokenizer、token 集合与可解释排序。
 // 约束:
 // - 自然无关查询返回 [] ,不凑 K(01 §5.3 / F06);

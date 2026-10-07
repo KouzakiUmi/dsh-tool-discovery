@@ -1,8 +1,8 @@
-// progressive-v2/domain/index.mjs
+// plugin/domain/index.mjs
 // 阶段1 领域内核的唯一公开出口。
 // 宿主无关:不 import Cordis / DSH / 第三方包;仅依赖 node:crypto / node:util。
 //
-// 冻结的接口说明见 progressive-v2/reports/domain-api.md。
+// 冻结的接口说明见 plugin/reports/domain-api.md。
 // 签名若需变更,必须先在该文件追加 delta 并通知主代理与独立 reviewer。
 
 export { PROTOCOL_VERSION, CONTROLLED_CATEGORIES, DEFAULT_BUDGETS, OPTIONAL_LIMIT_KEYS, ENTRY_TOOL_NAMES, ERROR_CODES, errorCodes, MATCH_REASONS, SIGNAL_WEIGHTS, SYNONYM_INDEX } from './constants.mjs';

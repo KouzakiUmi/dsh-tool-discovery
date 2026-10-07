@@ -3,8 +3,8 @@
 // 这是数据工装，不是产品代码：它不 import 任何产品模块，也不参与运行时。
 //
 // 用法：
-//   node progressive-v2/quality/tools/freeze-labels.mjs           # 仅创建尚不存在的 labels 文件
-//   node progressive-v2/quality/tools/freeze-labels.mjs --json    # 同上，机器可读输出
+//   node plugin/quality/tools/freeze-labels.mjs           # 仅创建尚不存在的 labels 文件
+//   node plugin/quality/tools/freeze-labels.mjs --json    # 同上，机器可读输出
 //
 // 不可用且刻意不提供的绕过方式：
 //   --force / 任何覆盖既有冻结文件的开关：一律拒绝。没有环境变量或隐藏参数可以绕过。

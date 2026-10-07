@@ -1,4 +1,4 @@
-# 07 · 恢复与 fork 覆盖增强（分支 `fix/lifecycle-recovery-coverage`）
+# 07 · 恢复与 fork 覆盖增强（原分支 `fix/lifecycle-recovery-coverage`，已并入基线）
 
 > **状态**：本文件所述的恢复与 fork 覆盖增强**已并入当前 `main` 基线**。
 > 仓库于 2026-10-06 重建，旧历史（`2a1f9c0`、`257ddc0` 等）已重写移除、**不再可引用**；
@@ -31,7 +31,7 @@ own-only 折叠的权威事实改为**当前公开的 query / session 协议**�
 - own 对被 domain 判据拒绝时**照常计入 rejected**——过滤不吞安全判据。
 - **未改**：`domain/**`（零 diff）、冻结常量与协议、`lifecycle.mjs`；沿用既有 fail-closed 语义，不使用已弃用的会话快照接口。
 
-### 2.1 事件 seq 门禁（同一分支的后续修复，仍只改 `journal.mjs`）
+### 2.1 事件 seq 门禁（同一分支当时的后续修复，仍只改 `journal.mjs`）
 
 **基线上的缺陷**：canonical `tool/result` 的 `seq` 畸形（`undefined` / `NaN` / 非整 / 负数 /
 unsafe integer / `null` / 缺键）时，**撤销动作被直接丢弃，而该对仍被计入 allowed 集合**，即
@@ -95,7 +95,7 @@ provider wire**。
 **不等价于异源独立证据**。本轮的主要证据是**机器可复现的断言与命令退出码**；本 PR 留维护者复核，
 **不自动合并**。所谓「核验通过」在本文件里**只覆盖源码与其可复现证据**，不覆盖产品验收。
 
-**本分支的状态分层（不得合并表述）**：
+**该增强的状态分层（不得合并表述）**：
 
 | 范围 | 状态 |
 |---|---|

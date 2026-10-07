@@ -31,13 +31,15 @@ name the reason — do not quote a number from a previous run.
 From a clean checkout, with Node `^22.19.0 || >=24.0.0`:
 
 ```sh
-node --test plugin/tests/unit/*.test.mjs                                # 160 pass / 0 fail, exit 0
-node --test plugin/tests/composition/gate-adapter.test.mjs              # 14 pass / 0 fail, exit 0
-node --test plugin/tests/composition/gate-adapter-lifecycle.test.mjs   # 7 pass / 0 fail, exit 0
-node plugin/quality/validate.mjs                                       # 20 PASS / 1 FAIL, exit 1 (expected)
+npm test                    # unit suite (Node only; two files are host-bound, see the README)
+npm run test:composition    # real-Loader gates; needs an installed DSH Core
+npm run check               # package identity + docs consistency; needs only Node
+npm run check:quality       # exit 1 is expected on the known H037/H044 mislabelled samples
 ```
 
-The two composition suites resolve host packages from the DSH installation through
+Counts are not written down here on purpose; they drift. Quote the actual output you got.
+
+The composition suites resolve host packages from the DSH installation through
 `plugin/contracts/install-resolver.mjs`, which anchors on the install's own `package.json`. Set
 `DSH_INSTALL_ROOT` to point at a different installation. The install is read only; never install
 into a profile, never modify the DSH core or a profile manifest, and never restart anything as

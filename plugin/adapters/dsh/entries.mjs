@@ -1,4 +1,4 @@
-// progressive-v2/adapters/dsh/entries.mjs
+// plugin/adapters/dsh/entries.mjs
 // 三个 typed definition：tool_list / tool_search / tool_load。
 //
 //   * 各自**完整**的输入/输出 schema 与 output.render。

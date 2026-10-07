@@ -1,4 +1,4 @@
-// progressive-v2/adapters/dsh/config.mjs
+// plugin/adapters/dsh/config.mjs
 // 插件的 schemastery Config 与设置面板用的活目录元数据。
 //
 // 两个职责，刻意放在一个模块：

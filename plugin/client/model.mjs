@@ -1,4 +1,4 @@
-// progressive-v2/client/model.mjs
+// plugin/client/model.mjs
 // 设置面板的纯逻辑：不 import React，可在无 DOM 的单测里直接跑。
 //
 // 组件（client.js）只负责把这层算出来的派生值渲染成复选框列表；所有"哪些工具

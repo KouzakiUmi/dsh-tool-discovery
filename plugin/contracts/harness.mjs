@@ -1,6 +1,6 @@
 // 阶段0 合同门禁 harness：用真实 Cordis Loader entry 树装配公共 DSH 服务
 // （systemPrompt/tools/sessions/sessionProjections/sessionPersistence/sessionQuery/
-// approval/llm/agents/agentLoop）与 progressive-v2/fixtures 下的 fixture 插件。
+// approval/llm/agents/agentLoop）与 plugin/fixtures 下的 fixture 插件。
 // 测试专用；不改核心、不改依赖树。SDK 一律经 install-resolver 的 createRequire
 // 锚点解析为显式模块 URL 后动态 import。
 import fs from 'node:fs'
@@ -49,10 +49,28 @@ export const REQUIRED_SERVICES = [
   'sessionPersistence', 'sessionQuery', 'approval', 'llm', 'agents', 'agentLoop'
 ]
 
+// 本进程创建的临时根。进程退出时统一兜底清除，避免个别用例漏清而在 fixtures/tmp 下累积；
+// 设置 DSH_KEEP_TMP=1 可保留现场用于排查。
+const ownedTmpRoots = new Set()
+let exitCleanupInstalled = false
+
+function installExitCleanup () {
+  if (exitCleanupInstalled) return
+  exitCleanupInstalled = true
+  process.on('exit', () => {
+    if (process.env.DSH_KEEP_TMP === '1') return
+    for (const root of ownedTmpRoots) {
+      try { fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 }) } catch { /* 兜底清理，失败不影响测试结果 */ }
+    }
+  })
+}
+
 /** 创建一个测试生命周期管理的临时根目录。 */
 export function makeTmpRoot (label) {
   const root = path.join(TMP_ROOT, `${label}-${process.pid}-${Date.now()}`)
   fs.mkdirSync(root, { recursive: true })
+  ownedTmpRoots.add(root)
+  installExitCleanup()
   return root
 }
 
@@ -62,6 +80,7 @@ export function removeTmpRoot (root) {
   const expected = path.resolve(TMP_ROOT)
   if (!resolved.startsWith(expected + path.sep)) throw new Error(`refusing to remove path outside fixture tmp root: ${resolved}`)
   fs.rmSync(resolved, { recursive: true, force: true })
+  // 刻意不从 ownedTmpRoots 移除：宿主的异步落盘可能在此之后重建目录，退出时还要再清一次。
 }
 
 async function waitFor (probe, timeoutMs, what) {

@@ -1,4 +1,4 @@
-// progressive-v2/domain/budgets.mjs
+// plugin/domain/budgets.mjs
 // 字节 / token 预算核算。
 // 无 tokenizer 时一律 estimate 并显式标注 method:'estimate'——不用 bytes/4 冒充实测。
 // 原则:不截断 schema / name / ref / ids / version;超限只减完整项数或明确失败。

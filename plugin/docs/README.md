@@ -71,9 +71,10 @@
 
 | 命令 | 运行前提 | 说明 |
 |---|---|---|
-| `node --test plugin/tests/unit/*.test.mjs` | 只需 Node | 单测唯一的仓库内文件依赖是公开的 `quality/fixtures/catalog.invented.json`（合成 protocol fixture，不含 held-out 数据） |
-| `node --test plugin/tests/composition/gate-adapter.test.mjs`<br>`node --test plugin/tests/composition/gate-adapter-lifecycle.test.mjs` | **目标 DSH Core 安装在本 host 且提供被测宿主依赖与对应版本**。**Core 位于默认安装根时不设环境变量即可运行**；**仅当在其它机器或非默认安装根时才需用 `DSH_INSTALL_ROOT` 覆盖** | 组合测试经 [`contracts/install-resolver.mjs`](../contracts/install-resolver.mjs) 解析真实 Loader 与服务。**文件齐备、宿主到位即可运行；无宿主则不可运行** |
-| `node plugin/quality/validate.mjs` | **需完整内部资料** | 缺私有的 `quality/queries/` 与 `quality/labels/` 时必然报缺文件；**21 项 / 20 PASS / 1 FAIL 的结论只在完整内部资料下成立** |
+| `npm test`（= `node --test plugin/tests/unit/*.test.mjs`） | 只需 Node（`client` / `settings` 两个文件依赖宿主，见根 README） | 单测唯一的仓库内文件依赖是公开的 `quality/fixtures/catalog.invented.json`（合成 protocol fixture，不含 held-out 数据） |
+| `npm run test:composition`（glob 展开全部 `gate-*.test.mjs`） | **目标 DSH Core 安装在本 host 且提供被测宿主依赖与对应版本**。**Core 位于默认安装根时不设环境变量即可运行**；**仅当在其它机器或非默认安装根时才需用 `DSH_INSTALL_ROOT` 覆盖** | 组合测试经 [`contracts/install-resolver.mjs`](../contracts/install-resolver.mjs) 解析真实 Loader 与服务。**文件齐备、宿主到位即可运行；无宿主则不可运行**。新增 `gate-*.test.mjs` 自动纳入 |
+| `npm run check` | 只需 Node（可选 git） | 包身份（`package.json` ↔ `cordis.patch.yml`、私有、无厂商 scope、无旧包名）与本文档集的相对链接 / 未测量声明检查，CI 调用同一脚本 |
+| `npm run check:quality`（= `node plugin/quality/validate.mjs`） | **需完整内部资料** | 缺私有的 `quality/queries/` 与 `quality/labels/` 时必然报缺文件；**21 项 / 20 PASS / 1 FAIL 的结论只在完整内部资料下成立** |
 
 `contracts/install-resolver.mjs` 的解析根是 `process.env.DSH_INSTALL_ROOT` 优先、否则回落到默认安装根（本机路径 `C:/Program Files/DSH NEXT/resources/app`）。因此 `DSH_INSTALL_ROOT` **不是无条件必填**：默认安装根下直接可跑，只有换机器或改用非默认安装根时才需要它；该覆盖与根 README 的说明一致。**产品代码不写绝对安装路径**，机器差异只出现在这个 resolver 里。
 
@@ -127,27 +128,19 @@
 
 ## 5. 状态口径：已发布基线 ≠ 产品验收
 
-> **版本坐标**：`main` / `origin/main` 同为**当前已发布的初始基线**（单一 initial-publish 提交）。
-> 本仓库于 2026-10-06 重建，旧历史（`2a1f9c0`、`257ddc0` 等）已被重写移除、**不再可引用**。
-> 恢复与 fork 覆盖增强原在分支 `fix/lifecycle-recovery-coverage`，现已并入基线。
-> 远端状态一律以提交记录与推送核验为准。
-
-**历史事实（不改写）**：本文件集曾以「源码基线待发布」措辞描述同一份源码基线。
-那是**发布前的观察记录**，不是对当前发布状态的判断；两者不冲突，因为发布状态本就随时间变化。
-仓库其后经历历史重建，commit 坐标随之失效——**内容结论未变，坐标已不可引用**。
-
 整理完成 ≠ 发布完成 ≠ 产品验收 ≠ npm 发布 ≠ 安装生效，五者互不替代，任何一者的结论都不得外推到另一者。
+
+> 仓库于 2026-10-06 重建，旧历史（`2a1f9c0`、`257ddc0` 等）已被重写移除、**不再可引用**。远端状态一律以提交记录与推送核验为准；新的事实由新的提交与文档修订承载，**不在 `main` 上直接改写**。
 
 | 事项 | 当前状态 | 判据出处 |
 |---|---|---|
-| 源码基线**发布** | **已完成**：`main` 已发布 | 本节、[05 §0](<05-current-status.md>) |
-| 基线独立门禁 | **已通过（限该范围）**：unit 160/0、composition 42/0、质量工装 14/0/1 skip、validate 20PASS/1FAIL | [05 §0](<05-current-status.md>) |
-| 恢复与 fork 覆盖增强 | **已并入基线**：composition 42 | [07](<07-lifecycle-recovery-coverage.md>) |
+| 源码基线**发布** | **已完成**：`main` 已发布，每次绿的 `main` 构建自动产出 GitHub Release 资产（构建产物，**不是**验收声明） | [05 §0](<05-current-status.md>) |
+| 工作区独立门禁（单测 / 组合 / 质量工装） | 逐项数字与签署范围只在 05 一处维护，本文**不复写计数** | [05 §0、§1](<05-current-status.md>) |
+| 恢复与 fork 覆盖增强 | **已并入基线** | [07](<07-lifecycle-recovery-coverage.md>) |
+| 可信周期基线 | **WIP，验收未完成** | [08](<08-trusted-epoch-baselines.md>) |
 | 产品验收（`03 §11` 发布门槛全通过） | **未达成**：性能 / 真实 wire / 检索门槛仍未验证 | [03 §11](<03-implementation-and-acceptance.md>)、[05 §3](<05-current-status.md>) |
-| npm 发布 / 插件市场上架 | **未做** | [05 §1](<05-current-status.md>) 安装 / 发布行 |
-| 安装到用户 profile 并在 GUI 生效 | **未做** | [05 §3](<05-current-status.md>) 末条 |
-
-本节记录的是**该时点的观察**，不是对发布状态的承诺；新的事实由新的提交与新的文档修订承载，**不在 `main` 上直接改写**。远端发布状态一律以提交记录与推送核验为准。
+| npm 发布 / 插件市场上架 | **未做** | [05 §1](<05-current-status.md>) |
+| 安装到用户 profile 并在 GUI 生效 | **未做** | [05 §3](<05-current-status.md>) |
 
 ## 6. 阅读顺序
 

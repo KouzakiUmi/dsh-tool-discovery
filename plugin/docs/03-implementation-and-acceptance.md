@@ -48,7 +48,7 @@ plugin/                  实现根目录（早期代号 progressive-v2/，见 re
       harness.mjs + fixtures/          共享 harness 与 fixture 插件
       gate-adapter.test.mjs             组合门禁 14 项
       gate-adapter-lifecycle.test.mjs   生命周期 7 项
-      gate-adapter-recovery.test.mjs    恢复与 fork 覆盖 13 项（分支 fix/lifecycle-recovery-coverage 新增，未合并）
+      gate-adapter-recovery.test.mjs    恢复与 fork 覆盖 13 项（原分支 fix/lifecycle-recovery-coverage，已并入基线）
       gate-adapter-event-seq.test.mjs   事件 seq 门禁 8 项（同上分支，同一轮新增）
   quality/           检索质量数据与验证工装
     fixtures/ queries/ labels/ tools/ tests/ validate.mjs
@@ -202,7 +202,7 @@ constraints:
 | L11 | query 缺失或日志损坏 | fail closed；不得恢复成全量可用，也不得因“有历史”误判为新会话 |
 | L12 | renderer / pruner 改写回执 | 不激活，并拒绝未通过验收的组合 |
 
-**当前覆盖速览（不改变上表判据，只标实证状态）**：`L01`、`L03`、`L08` 之外，`L11` 已在分支 `fix/lifecycle-recovery-coverage` 上以真实组合实证（query 缺失 / readSession 失败均 fail closed，含健康会话正控）；该分支另有 8 项 event-seq 套件覆盖 canonical `tool/result` 的 `seq` 门禁与封存后的出站收敛。**L04、L08、L10 仍未验证**，不得因上述用例的绿而外推。对应测试见 [`gate-adapter-recovery.test.mjs`](../tests/composition/gate-adapter-recovery.test.mjs)、[`gate-adapter-event-seq.test.mjs`](../tests/composition/gate-adapter-event-seq.test.mjs) 与 [07](<07-lifecycle-recovery-coverage.md>)。
+**当前覆盖速览（不改变上表判据，只标实证状态）**：`L01`、`L03`、`L08` 之外，`L11` 已以真实组合实证（原分支 `fix/lifecycle-recovery-coverage`，已并入基线）（query 缺失 / readSession 失败均 fail closed，含健康会话正控）；另有 8 项 event-seq 套件覆盖 canonical `tool/result` 的 `seq` 门禁与封存后的出站收敛。**L04、L08、L10 仍未验证**，不得因上述用例的绿而外推。对应测试见 [`gate-adapter-recovery.test.mjs`](../tests/composition/gate-adapter-recovery.test.mjs)、[`gate-adapter-event-seq.test.mjs`](../tests/composition/gate-adapter-event-seq.test.mjs) 与 [07](<07-lifecycle-recovery-coverage.md>)。
 
 ## 8. 验收矩阵：宿主 wire 与执行链
 
