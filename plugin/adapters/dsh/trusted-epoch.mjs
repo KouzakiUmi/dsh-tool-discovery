@@ -283,21 +283,43 @@ export function validateEpochRecord (raw, expected) {
 /**
  * 记录 schema（**zod**，不是 schemastery —— `@deepseek-ai/dsh-storage-domain` 的
  * `domainTable()` 收 zod schema；schemastery 只管插件 Config 那一层，没有 parse/safeParse）。
- * 字段与 validateEpochRecordShape 的 RECORD_KEYS 保持一致。
+ *
+ * ## 这里为什么是**刻意宽松**的（`08 §2.4c` 的修法，读之前请先读完）
+ *
+ * 这条 schema **不再是权威**，它只是一层**传输形状**。真正的判据是本文件里的
+ * `validateEpochRecordShape` / `validateEpochRecord`，它们**逐会话**执行并给出精确归因。
+ *
+ * 放宽的原因不是图省事，而是 SDK 侧这层校验的**失败语义是全局的**：
+ * `@deepseek-ai/dsh-storage-domain` 0.2.1-alpha.1 在 `facility.open(spec)` 里对
+ * **每一条**存量记录跑 `tableSpec.valueSchema.parse(raw)`，**任何一条**抛错就
+ * `throw` 掉整个 `open`（`lib/index.js:371-373`）。于是「表里有一行读不出来」
+ * 这个**局部**问题，被放大成「这个域里**所有**会话都停摆」——
+ * 包括那些记录完好、跟那条坏行毫无关系的会话（实测记录见 `08 §2.4c` 末段）。
+ *
+ * SDK 确实自带一个针对这个的开关 `invalidRecords: 'backup-and-skip'`，但**本插件用不上**：
+ * 它要求 unit 实现 `backupRecord`，而那只存在于 `per-record` 布局的 unit 上
+ * （`dsh-storage-json` 的 `PerRecordJsonUnit`）；本 spec 声明的是 `layout: 'single'`，
+ * 其 `SingleJsonUnit` **没有** `backupRecord`，于是 SDK 走到
+ * `unit.backupRecord === void 0` 分支**照旧抛出**（同一行 `lib/index.js:373`）。
+ * 换句话说：开这个开关在本布局上是个**空开关**。改布局则要同时把
+ * `epochKeyOf()` 的 `JSON.stringify([...])` 键改成 path-safe 形状
+ * （JSON backend 要求 `/^[a-zA-Z0-9_-]+$/`），那是一次带数据迁移的破坏性变更。
+ *
+ * 相比之下，把这层放宽**不损失任何安全性**：
+ *   * 写入侧仍由 `store.put()` 调用的 `validateEpochRecordShape` 自证，非法记录**写不出去**；
+ *   * 读取侧仍由 `ledger.load()` 调的 `validateEpochRecord` 逐条严格校验，
+ *     并**额外**比对当前 epoch 身份；唯一键、字段集合、版本号都在那里把关，
+ *     比 SDK 那层更严（SDK 那层是 `strictObject`，我们这层还要求 key 集合精确相等）；
+ *   * 坏记录仍然**不被删除、不被覆盖、不被 quarantine** —— 本模块一行介质都不碰。
+ *
+ * 放宽换来的**唯一**行为变化，正是要修的那条：坏记录从「拖垮整个域」变成
+ * 「只让**它自己**那个会话落 INVALID」，其余会话照常工作。
  * @param {any} z 注入的 zod 模块（生产 = `await import('zod')`）
  */
-export function createEpochSchema (z) {
-  return z.strictObject({
-    protocolVersion: z.literal(TRUSTED_EPOCH_PROTOCOL_VERSION),
-    schemaVersion: z.literal(TRUSTED_EPOCH_SCHEMA_VERSION),
-    sessionId: z.string().min(1),
-    ownSeqStart: z.number().int().min(0),
-    epochId: z.string().min(1),
-    compactionEndSeq: z.number().int(),
-    names: z.array(z.string().min(1)),
-    trigger: z.enum(TRIGGERS),
-    writtenAt: z.number().int().min(0),
-  }).refine((value) => new Set(value.names).size === value.names.length, { message: 'names must be unique' });
+export function createEpochTransportSchema (z) {
+  // 接受任何 JSON 值。刻意**不**在此处收紧：这里收紧就等于把局部数据问题
+  // 重新变成 08 §2.4c 记录的那个全局失败。
+  return z.unknown()
 }
 
 /**
@@ -310,7 +332,7 @@ export function createTrustedEpochSpec ({ defineDomain, domainTable, z }) {
     name: TRUSTED_EPOCH_DOMAIN,
     version: TRUSTED_EPOCH_SCHEMA_VERSION,
     layout: 'single',
-    tables: { [TRUSTED_EPOCH_TABLE]: domainTable(createEpochSchema(z)) },
+    tables: { [TRUSTED_EPOCH_TABLE]: domainTable(createEpochTransportSchema(z)) },
   });
 }
 

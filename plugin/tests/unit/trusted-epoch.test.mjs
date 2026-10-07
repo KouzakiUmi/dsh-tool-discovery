@@ -44,6 +44,7 @@ import {
   initialEpochIdentity,
   trustedEpochBlockedError,
   validateEpochRecord,
+  validateEpochRecordShape,
 } from '../../adapters/dsh/trusted-epoch.mjs';
 
 const SESSION = 'sess-1';
@@ -66,6 +67,8 @@ function fakeZod () {
     number: () => chain('number'),
     array: () => chain('array'),
     enum: (values) => chain(`enum:${values.join('|')}`),
+    // `08 §2.4c` 的修法把 SDK 侧 schema 降为**传输层**，产品只用到 `z.unknown()`。
+    unknown: () => chain('unknown'),
   };
 }
 
@@ -220,7 +223,7 @@ test('TE-U3: 记录字段严格校验 —— 身份/版本/名单/未知键', ()
   }).ok, false, '当前 epoch 身份与记录不符必须是 invalid（不得静默采用）');
 });
 
-test('TE-U4: spec 只声明一次，layout single + zod 表；注入的 defineDomain/domainTable 被真实使用', () => {
+test('TE-U4: spec 只声明一次，layout single + 传输层 schema；权威在纯 JS 校验器，不在 SDK 那层', () => {
   const seen = [];
   const spec = createTrustedEpochSpec(fakeApi(seen));
   assert.equal(seen.length, 1);
@@ -229,14 +232,36 @@ test('TE-U4: spec 只声明一次，layout single + zod 表；注入的 defineDo
   assert.equal(spec.version, 1);
   assert.equal(spec.layout, 'single');
   assert.ok(Object.hasOwn(spec.tables, TRUSTED_EPOCH_TABLE));
-  assert.equal(spec.tables[TRUSTED_EPOCH_TABLE].valueSchema.__zod, 'strictObject',
-    '记录 schema 必须是 zod 严格对象（schemastery 不是 zod，不得冒充）');
-  assert.deepEqual(Object.keys(spec.tables[TRUSTED_EPOCH_TABLE].valueSchema.shape).sort(), [
-    'compactionEndSeq', 'epochId', 'names', 'ownSeqStart', 'protocolVersion',
-    'schemaVersion', 'sessionId', 'trigger', 'writtenAt',
-  ], 'zod schema 的字段必须与纯 JS 校验的字段一致');
-  assert.equal(typeof spec.tables[TRUSTED_EPOCH_TABLE].valueSchema.refinement?.fn, 'function',
-    '名单唯一性也必须落在 zod schema 上（domain open 会用它校验存量记录）');
+
+  // `08 §2.4c` 的修法：SDK 那层 schema **刻意宽松**。这不是松掉校验，而是把权威
+  // 从「一条坏记录 → 整个域 open 失败」这条**全局**失败语义，移回逐会话的纯 JS 校验器。
+  const valueSchema = spec.tables[TRUSTED_EPOCH_TABLE].valueSchema;
+  assert.equal(valueSchema.__zod, 'unknown',
+    'SDK 侧记录 schema 必须是 zod unknown（纯传输层）：收紧它就等于把局部数据问题重新变成全局失败');
+  assert.equal(valueSchema.shape, undefined,
+    '传输层不再声明字段集合 —— 字段判据归 validateEpochRecordShape');
+  assert.equal(valueSchema.refinement, undefined,
+    '传输层不再承载名单唯一性 —— 唯一性归 assertEpochNames / validateEpochRecordShape');
+
+  // **因此权威必须仍然完整**。下面这组断言就是本条测试真正的重量所在：
+  // 凡是过去由 SDK 那层挡掉的坏记录，现在**全部**必须由纯 JS 校验器逐条挡掉。
+  // （TE-U3 已穷举同一张表，这里只钉住「不再依赖 SDK 那层」这个前提本身。）
+  assert.equal(TRUSTED_EPOCH_PROTOCOL_VERSION, 2, '协议版本常量仍是判据的一部分（由纯 JS 校验器把关）');
+  assert.equal(TRUSTED_EPOCH_SCHEMA_VERSION, 1, 'schema 版本常量仍是判据的一部分（由纯 JS 校验器把关）');
+  for (const bad of [
+    { protocolVersion: TRUSTED_EPOCH_PROTOCOL_VERSION + 1 },
+    { schemaVersion: TRUSTED_EPOCH_SCHEMA_VERSION + 98 },
+    { names: ['ok', 'ok'] },
+    { names: 'core_read' },
+    { writtenAt: -1 },
+    { extra: true },
+  ]) {
+    const verdict = validateEpochRecordShape({ ...storedRecord(), ...bad });
+    assert.equal(verdict.ok, false,
+      `SDK 那层已不再把关，因此 ${JSON.stringify(bad)} 必须由纯 JS 校验器挡下`);
+  }
+  assert.equal(validateEpochRecordShape(storedRecord()).ok, true,
+    '正控制：合法记录必须仍然通过纯 JS 校验器（不得把一切一律拒掉）');
 });
 
 test('TE-U5: 存储缺失/open 失败 → 确定的终态，不抛到调用面', async () => {

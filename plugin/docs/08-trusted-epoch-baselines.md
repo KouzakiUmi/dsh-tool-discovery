@@ -105,8 +105,10 @@ post-next 等待覆盖到 `assemble` 之后才开启的那次新写入。
   「不会被覆盖、不会被删除，请人工处置」）；认不出的一律落 `UNAVAILABLE`。
   **诚实降级**：宁可少一个归因，也绝不把未知失败猜成「坏记录」。
 - **仍然不做**的事：**不自动删除、不 quarantine、不用当前配置覆盖**坏记录。
-- **仍未验证的副作用**：一条坏记录会让**整个域**打不开，因此**所有**会话（哪怕与那条记录
-  无关）都落终态。这是 SDK `loadAll` 的行为，本轮**未**改变布局去规避它。
+- **已修（2026-10-07，分支 `feat/trusted-epoch-isolated-bad-record`）**：上面那条「一条坏记录
+  让**所有**会话落终态」的副作用**已消除**。坏记录现在**只**让**它自己**那个会话落
+  `INVALID`，同一域里其它记录完好的会话照常 ready、照常出站。**介质一行未动** ——
+  上面的「不删除 / 不 quarantine / 不覆盖」三条原则**全部保持**。修法与判据见 [§5.3](#53-24c-连坐修复2026-10-07)。
 
 ### 2.5 迁移（一次性、严格受限）
 
@@ -206,7 +208,7 @@ null、summary 多于一条或缺失、`sourceEventSeq` 与 summary 不对应，
 | TE-P | 持久写时点 | post-next agent / pre-step 屏障；**仅在 assemble 等待不足以拦住首请求抢跑**（assemble 先于自动压缩，pre-step 才开启新写） | `io`（IO1 初始 put 挂住、IO2 自动压缩后新 epoch put 挂住） |
 | TE-LM | 存储**迟到到位** + legacy 会话 | **不得**补建初始记录（durable 侧无该会话任何记录）；基线仍不可授权；再开一轮仍 0 请求 | `gate-trusted-epoch`（TE-LM） |
 | TE-FC | 会话因**与可信周期无关**的既有原因 fail closed | 请求**照发**、只带基线、引擎停 incompatible、执行照拒（既有语义不被 0-request 规则吞掉） | `gate-adapter-recovery`（L11b）、`gate-review-boundaries`（RB2） |
-| TE-BAD | 存量记录与 schema 不匹配（域整体 open 失败） | 落 **INVALID**（数据问题）而非 UNAVAILABLE；坏记录**不删不改** | 单测 TE-U18 / TE-U18b（真实 SDK 行为见 §2.4c 的实测） |
+| TE-BAD | 存量记录与 schema 不匹配 | 落 **INVALID**（数据问题）而非 UNAVAILABLE；坏记录**不删不改**；**且不得连坐**——同一域里其它完好会话必须照常 ready 并出站（`08 §2.4c` 末段那条副作用已修） | 单测 TE-U18 / TE-U18b / TE-U4（真实 SDK 行为见 §2.4c 的实测）；组合 `gate-trusted-epoch-badrecord` 的 BR1 与 **BR4** |
 | TE-MIG | legacy 会话在**恢复收尾**期间完成迁移 | 恢复收尾**不得**用一次 `load()` 覆盖在途的迁移写；迁移成功后正常出站并落 ready | `gate-trusted-epoch`（TE4b） |
 | TE-DP | pending 期间 dispose / 释放闸门 | 释放后**不得复活授权** | `io`（IO4） |
 | TE-R | canonical `tool_load` 回执链 | 仍为按需 selection 的授权事实；本项**不**将其移除或降级 | `gate-trusted-epoch`、`fork` |
@@ -275,6 +277,71 @@ null、summary 多于一条或缺失、`sourceEventSeq` 与 summary 不对应，
 - §2.4c 末段那条「一条坏记录拖垮整个域」的副作用**未修**，只是被如实记录并给了诚实归因。
 - 本轮源码**已提交并以 PR 形式提交评审**；**未安装、未发布到 npm、未重启**，任何宿主
   profile 与 GUI 生效状态均未变。本轮源码版本为 `0.2.0-functional.3`。
+
+### 5.3 §2.4c「连坐」修复（2026-10-07，分支 `feat/trusted-epoch-isolated-bad-record`）
+
+**这一轮改了产品源码**：[`trusted-epoch.mjs`](../adapters/dsh/trusted-epoch.mjs) 一处，外加门禁
+与单测。它修的是 §2.4c 末段那条此前如实记录为「未修」的副作用。
+
+#### 缺口到底是什么
+
+`BR1` 只种了**一个**会话，因此从未覆盖这件事：SDK 在 `facility.open(spec)` 里对**每一条**存量
+记录跑 `tableSpec.valueSchema.parse(raw)`，**任何一条**抛错就 `throw` 掉整个 `open`
+（安装内 `dsh-storage-domain` `lib/index.js:371-373`）。于是「表里有一行读不出来」这个
+**局部**问题，被放大成「这个域里**所有**会话都停摆」——包括记录完好、与那条坏行毫无关系的
+会话。实测：同一份介质里，被注入坏版本号的会话与未受影响的会话**双双**拿到非 ready 终态。
+
+#### 为什么不能用 SDK 自带的开关
+
+`dsh-storage-domain` 确实提供 `invalidRecords: 'backup-and-skip'`（`defineDomain` 显式支持，
+`lib/index.js:69-72`；`open` 里校验失败就 `backupRecord` 后 `continue`）。**本插件用不上**：
+
+- 它要求 unit 实现 `backupRecord`，而那只存在于 **`per-record` 布局**的 unit 上
+  （`dsh-storage-json` 的 `PerRecordJsonUnit`）。本 spec 声明 `layout: 'single'`，其
+  `SingleJsonUnit` **没有** `backupRecord`，于是 SDK 走到 `unit.backupRecord === void 0`
+  分支**照旧抛出**（同一行 `lib/index.js:373`）——**在本布局上是个空开关**。
+- 改布局则要同时把 `epochKeyOf()` 的 `JSON.stringify([...])` 键换成 path-safe 形状
+  （JSON backend 要求 `/^[a-zA-Z0-9_-]+$/`），那是一次带数据迁移的破坏性变更。
+
+#### 采用的修法：把权威从 SDK 那层移回逐会话校验器
+
+`createEpochSchema` → **`createEpochTransportSchema`**，内容改为 `z.unknown()`：SDK 那层**不再
+收紧**，只当传输形状。判据全部回到本模块已有的 `validateEpochRecordShape`（写前自证）与
+`validateEpochRecord`（读时逐条校验，并**额外**比对当前 epoch 身份）。
+
+**为什么不损失任何安全性**——逐条核对：
+
+| 面 | 收紧前 | 收紧后 |
+|---|---|---|
+| 写入 | SDK 不校验；`store.put()` 调 `validateEpochRecordShape` 自证 | **不变**（非法记录仍然写不出去） |
+| 读取 | SDK `strictObject` + 纯 JS 校验**双重** | 只剩纯 JS 校验，且它**更严**（key 集合精确相等、`names` 唯一、身份逐字段比对） |
+| 坏记录处置 | 不删不改 | **不变**（不删、不改、不 quarantine，本模块一行介质都不碰） |
+| 全局失败 | **有**：一条坏记录 → 整个域打不开 → 所有会话停摆 | **无**：只有坏记录自己那个会话落 `INVALID` |
+
+**唯一的行为变化，正是要修的那条。**
+
+#### 判据（`gate-trusted-epoch-badrecord` 的 **BR4**，判据先于实现）
+
+BR4 在**同一个 composition** 里种**两个**会话，让两条记录都真实落盘，然后只注入**受害者**那一条：
+
+- **BR4a** 受害者**自己**的会话仍必须 `INVALID` + **0 出站请求** —— 本次修复**不放宽**这条；
+- **BR4b** 同一份介质里另一条**完好**记录对应的会话必须 `ready` 且**真的出站**
+  —— 这才是要修的东西（`settled.mode` 与出站计数都必须成立，`ready` 但没发请求不算）；
+- **BR4c** 坏记录**仍在**文件里、**仍是**注入后的原值（BR3 原则不放松）；
+- **BR4d** 注入正控：必须证明注入**只**落在那一条上，另一条版本号仍合法。
+
+单测 **TE-U4** 同步重写：它原先把「`valueSchema.__zod === 'strictObject'`」当成契约，现在改为
+断言传输层是 `unknown`，**并**断言那些过去由 SDK 那层挡掉的坏记录**全部**仍被纯 JS 校验器挡下
+——权威搬家了，就得把权威本身钉住。
+
+**分辨力已用变异验证**：把传输层改回 `z.strictObject(...)` 后，BR4 **转红**。变异已撤销。
+
+**工作区复跑**（**本轮改动者本人**所跑，按 §4 纪律**不是**验收结论）：`npm test` **283 pass /
+0 fail**；`npm run test:composition` **104 pass / 0 fail**（+1 = BR4）。
+
+**仍未完成**：本修复**未经独立复审**（作者不自签）；`§2.2a` bootstrap 契约缺口仍未修；
+审查其余未覆盖项、`03 §11` 阶段 3（真实 wire / token / TTFT / 检索门槛）、npm 发布与安装生效
+**全部仍未完成**。本包仍未发布到 npm，本轮源码版本为 `0.2.0-functional.5`。
 
 ## 6. 相关文件
 

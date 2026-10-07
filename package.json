@@ -1,7 +1,7 @@
 {
   "name": "dsh-tool-discovery",
   "description": "Progressive tool discovery for DSH: three-entry control protocol with a host-independent domain kernel and a DSH adapter (source baseline, not published to npm)",
-  "version": "0.2.0-functional.3",
+  "version": "0.2.0-functional.5",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.7.0",
