@@ -285,6 +285,63 @@ to the plugin manager.
   result (21 checks, 20 PASS / 1 FAIL) is unchanged by this branch and the scoring data is still
   not publishable.
 
+## [0.2.0-functional.4] — TE-R coverage for the canonical tool_load receipt chain
+
+Branch `feat/tool-load-receipt-authorization`. **This round changes tests and documentation only; no
+product source file is modified.** The package is **not published to npm**, and no profile
+installation, GUI reload or application restart is part of this delivery. Nothing here is a
+product-acceptance statement.
+
+`version` moves to `0.2.0-functional.4` because `0.2.0-functional.3` is already taken by the released
+`build-3c2ed533706e` asset; reusing it would make two different source states indistinguishable to the
+plugin manager.
+
+### Added
+
+- **The canonical `tool_load` receipt chain is now gated as a positive authorisation source (TE-R).**
+  The previous round's independent review listed TE-R among nine uncovered items, and it is the one
+  that matters most for this feature: the durable epoch record is the authority for a session's
+  **resident** names, but an **on-demand** tool must still be authorised by the canonical
+  `tool/call`→`tool/result` chain. Nothing had proven that the record had not quietly replaced that
+  chain as the authorisation source.
+  The new gates make the two authorisation surfaces **separately** observable:
+  - **TER0** — with the resident baseline explicitly empty, a real `tool_load` fold must produce the
+    tool's selection, and the name must appear in **neither** `alwaysNameSet` nor the trusted record's
+    `names`. Without both negatives the rest of the group would be a vacuous pass.
+  - **TER1** — across a **real restart** (all services genuinely closed, the loader reopened on the
+    same root, session resumed), the selection must be rebuilt by replaying the receipt chain from the
+    persisted log, and a direct execution must reach the tool body (`isError:false`, body count 1).
+    The baseline is empty for the whole sequence, so there is no other authorisation surface to borrow.
+  - **TER2** — in that same restored session, a sibling hidden tool that was **never** loaded must
+    still be refused with a zero body count. This is the anti-vacuity control: TER1 must not be
+    obtainable by allowing everything after a restore.
+- The gates resolve the selection through the **same** path the product uses
+  (`plugin/domain/state.mjs:429` filters `selected.values()` by `.name`), because `selected` is a map
+  keyed by canonical tool id (`global::…`), not by bare tool name.
+
+### Fixed
+
+- Nothing. No behavioural defect was found in this round: TE-R's property already held, and the gap
+  was coverage. This entry therefore records **no** product change and claims no fix.
+
+### Verification boundary
+
+- Local runs, commands and exit codes: `npm test` → **283 pass / 0 fail**, exit **0**;
+  `npm run test:composition` → **105 pass / 0 fail / 0 skipped**, exit **0** (was 103; +2 from this
+  round), against the real DSH Core `0.2.1-alpha.1` composition on this machine.
+- **The new gates were mutation-checked.** Short-circuiting `engine.applyCanonicalPair` in
+  `plugin/adapters/dsh/journal.mjs` — i.e. removing the receipt chain as an authorisation source
+  entirely — turns TER0 and TER1 **red**, together with the pre-existing TE0 and TE1c. The mutation was
+  reverted and `journal.mjs` is byte-identical to `main`. TER0/TER1 are therefore not vacuous passes.
+- **Author-run results are not acceptance.** Per the contract's own discipline, these runs were
+  performed by the author of this round, so they do **not** upgrade any criterion to "passed" and do
+  **not** discharge the outstanding independent review.
+- **Still open, unchanged by this round:** the whole-domain open failure (`08 §2.4c`, one bad stored
+  record makes every session terminal, still unfixed), the bootstrap-path contract gap (`08 §2.2a`,
+  deliberately deferred), the remaining uncovered review items, the residual sign-off debt in
+  `05 §5`, and the whole of `03 §11` stage 3 (real provider wire, token reduction, TTFT/retrieval
+  experiments, npm publication and installation). This feature is still **not** product-accepted.
+
 ## [0.1.0] — prepared 2026-10-06, not published
 
 > **Outcome, added after the fact:** this tree became the initial publish commit on `main`.

@@ -52,8 +52,15 @@
      `ledger.load()` 会自增 revision 让迁移变成 superseded，并把尚未落盘的新 epoch 读成
      `MISSING` → 一次**真实成功的用户 `/compact`** 被判成 legacy，永久 0 请求。
 - 本节**不改变**上文任何一行结论：header 授权缺陷**既未宣称已修，也不因此降级既有已验证项**；
-  `07` 的结论同样保持不变。本包**未发布到 npm**，本轮源码版本为 `0.2.0-functional.3`
+  `07` 的结论同样保持不变。本包**未发布到 npm**，本轮源码版本为 `0.2.0-functional.4`
   （`0.2.0-functional.2` 已由 `build-c4a111c` 占用，不可复用）。
+- **2026-10-07 追加一轮（分支 `feat/tool-load-receipt-authorization`）**：复核审查 9 项未覆盖里
+  优先级最高的 **TE-R**（canonical `tool_load` 回执链作为**正向**授权源），结论是**该性质本来就
+  成立，缺的是覆盖**，故新增门禁 `TER0` / `TER1` / `TER2`（置空常驻基线 + 真重启冷恢复 +
+  从未 load 的同族工具反空过对照），并用变异短接 `applyCanonicalPair` 证明门禁有真实分辨力。
+  **该轮产品源码一行未动**，不宣称修过任何缺陷；复跑 unit 283/0、composition 105/0。
+  TE-R 门禁由本轮产出方本人所写，**按「作者不自签」仍需独立复审**，详见
+  [08 §5.3](<08-trusted-epoch-baselines.md>)。
 
 ## 1. 状态速览
 
@@ -67,7 +74,7 @@
 | 安装 / 发布 | **部分完成** | 源码基线已随 `main` 发布；**未安装、未启用、未构建产物、未上 npm** |
 | 文档与路径口径整理 | **已完成** | 本文件集已按迁移后布局订正；**不升级以上任何一行** |
 | 基线独立门禁（当前 `main`） | **已通过（限 §0 范围）** | unit 160/0、composition 42/0（含 `S03c`、recovery、event-seq）、质量工装 14/0/1 skip、validate 20PASS/1FAIL |
-| 可信周期基线（见 §0.1） | **已初步实现 / WIP，验收未完成** | 契约、判据与门禁见 [08](<08-trusted-epoch-baselines.md>)；三处修复已获**非作者独立复审「通过」**；另新增 2 份门禁（failclosed / badrecord）并接入 `package.json` 与 CI，unit 283/0、composition 101/0（均 exit 0）；**复审 9 项未覆盖 + 一条 MEDIUM 契约级缺口未修**，**无验收结论、不表示缺陷已修复** |
+| 可信周期基线（见 §0.1） | **已初步实现 / WIP，验收未完成** | 契约、判据与门禁见 [08](<08-trusted-epoch-baselines.md>)；三处修复已获**非作者独立复审「通过」**；另新增 2 份门禁（failclosed / badrecord）并接入 `package.json` 与 CI，unit 283/0、composition 101/0（均 exit 0）；**复审 9 项中优先级最高的 TE-R 已于 2026-10-07 补齐门禁（composition 105/0）但仍未经独立复审**；**其余未覆盖项 + 一条 MEDIUM 契约级缺口 + `§2.4c` 整域 open 失败均未修**，**无验收结论、不表示缺陷已修复** |
 | 恢复覆盖增强（内容已并入基线） | 已合并；源码曾经独立复审（限 3 个 code 文件） | composition 42（14 + 7 + recovery 13 + event-seq 8）；**不等于产品验收**；见 [07](<07-lifecycle-recovery-coverage.md>) |
 
 ## 2. 已验证
