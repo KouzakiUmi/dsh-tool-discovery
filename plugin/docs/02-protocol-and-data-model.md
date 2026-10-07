@@ -29,7 +29,7 @@
 
 ```ts
 interface ToolListRequest {
-  view?: 'available' | 'loaded' | 'categories' | 'state' // 默认 available
+  view?: 'available' | 'loaded' | 'categories' | 'state' // 省略时：无 category 默认 categories，有 category 默认 available
   category?: string // available/loaded 必填；允许显式 all
   cursor?: string
   limit?: number
@@ -51,6 +51,7 @@ interface ToolLoadRequest {
 }
 ```
 
+- `list` 省略 `view`：未给 `category` 时默认 `categories`（包括 `{}`）；给了 `category` 时仍默认 `available`，保持已有调用兼容。`null` / 空串不作为缺省值，未知字段仍拒绝。
 - `list` `view=available|loaded`：`category` 必填；`limit` 默认 20、最大 20。
 - `list` `view=categories`：只允许 `view` / `cursor` / `limit`；分页返回类别卡片，不返回普通工具名。
 - `list` `view=state`：只允许 `view`；返回本会话 `selected` / `advertised` / `invalidated` 与预算，不枚举未加载目录。

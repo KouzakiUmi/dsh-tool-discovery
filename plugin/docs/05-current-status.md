@@ -53,7 +53,16 @@
 - 中文检索可用（类别标题 / 摘要并入检索字段）；同义词证据不再压过直接名称证据；
 - `tool_load` 的 `candidates[].revision` 真正可选（键缺失 / `null` / `""`）。
 
-每项有新增单测钉住（含变异反证）。**这些改动碰到 `domain/` 的 load/unload 状态机与资格代次失效面，按 [CONTRIBUTING](../../CONTRIBUTING.md) 作者不得自签，需非作者复核——尚未完成。** 仍**未修**的项（中断轮的 `tool_load` 占预算槽、技能从未接线、中文只能定位到类别等）清单见 09 §7。
+每项有新增单测钉住（含变异反证）。**这些改动碰到 `domain/` 的 load/unload 状态机与资格代次失效面，按 [CONTRIBUTING](../../CONTRIBUTING.md) 作者不得自签，需非作者复核——尚未完成。** 仍**未修**的项（技能从未接线、中文只能定位到类别等）清单见 09 §7；终态预算结算的新修复见下节。
+
+### 0.3 失败终态结算与默认导航（本地分支，未合并 / 未发布）
+
+`fix/load-terminal-reservation-and-list-default` 在基线 `fc015b8` 上修复两项：已配对的非协议终态 result 只释放对应 load 预留；`tool_list {}` 默认 categories，而省略 view 的 `{category}` 保持 available。未新增 turn/end 全量清理，不改变成功回执/selected/advertised/frozen，不安装、不改 profile、不重启。
+
+- 新增单测 **13 pass / 0 fail**、真实 Loader 门禁 **4 pass / 0 fail**；全量 `npm run test:all` 为 unit **362 / 0**、composition **112 / 0**（均 exit 0）。上文 §0 的 349/108 是已发布基线，不能混称同一提交。
+- 首批修复前测试：unit **5 pass / 7 fail**、composition **1 pass / 3 fail**（均 exit 1），红跑日志保留；修复后均绿，随后再补 1 项跨会话隔离单测。命令与证据路径见私有报告 `plugin/reports/terminal-load-result-fix-20261008.md`。
+- **GLM 独立测试复核已 PASS（限两项修复）**：按用户选择由 `zai/glm-5.3-flash high` 非作者亲跑新增 13/0 单测、4/0 真实 Loader 门禁、全量 362/0 + 112/0、仓库检查与 9/9 自建边界探针。报告 `plugin/audits/glm-terminal-load-result-review-20261008.md`；主代理核对日志及 10 个待复核文件哈希，GLM 未改产品、测试或公开文档。此前 MiniMax 两次失败的记录保留。**这是独立测试，不是对等强度安全发布签署**；不据此自动合并、推送或升级产品验收。
+- 宿主取消在真实 post-policy seam 的确定窗口触发；不冒称 GUI Esc 自然复现或外部 provider wire。协议说明同步于 [02 §1.1](<02-protocol-and-data-model.md>)，原推断订正于 [09 §7](<09-business-logic-map.md>)。
 
 ## 1. 状态速览
 

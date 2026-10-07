@@ -26,6 +26,23 @@ and this round performs no install, GUI reload or application restart. This entr
 product-acceptance claim: see [`plugin/docs/05-current-status.md`](plugin/docs/05-current-status.md)
 for the authoritative per-item status.
 
+### Fixed — failed load settlement and default navigation
+
+- A `tool_load` body could reserve budget, then cancellation or a post-policy block replaced
+  its result with plain error text. The canonical result removed the journal's live call but
+  bypassed `applyCanonicalPair`, leaving an orphan pending reservation. The journal now cancels
+  **only the matched operation** when its terminal result cannot be parsed as the protocol
+  envelope. Selected tools, advertisement/frozen caches and unrelated pending calls are unchanged;
+  successful results still go through receipt verification. No broad `turn/end` cancellation added.
+- `tool_list {}` now returns category navigation. Omitting `view` **with** `category` still means
+  `available`, preserving existing calls. Explicit `available` / `loaded` still require `category`;
+  null/empty values and unknown fields are not made valid. Both language descriptions and the
+  protocol specification agree with this conditional default.
+- Regression tests include pre-fix RED evidence, plain/rewritten error results, success positive
+  control, unrelated/duplicate/late results, unchanged selection/disclosure state, and real Loader
+  post-policy rejection and user cancellation after the body. Mock provider recordings are not
+  external provider wire or GUI cancellation acceptance.
+
 ### Changed — developer workflow and documentation
 
 No product source behaviour changes in this group.

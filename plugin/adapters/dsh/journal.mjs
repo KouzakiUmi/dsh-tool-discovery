@@ -609,6 +609,10 @@ export function createJournal(deps) {
       liveCalls.delete(callSeq);
       const shell = parseResultEnvelope(resultText(event));
       if (shell === null) {
+        // 终态 result 已命中本会话登记的 canonical call。取消 / post-policy 拒绝
+        // 可返回非协议错误文本：不能激活，但也不能遗留 body 创建的预算预留。
+        // 只取消该调用；已有 selected / advertised / frozen 与其它调用均不动。
+        engine.cancelOperation(`op_${call.callId}`);
         log('journal:unparsable-result', { sessionId, seq: event.seq });
         continue;
       }
