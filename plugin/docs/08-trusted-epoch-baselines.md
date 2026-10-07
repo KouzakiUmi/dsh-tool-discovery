@@ -209,7 +209,7 @@ null、summary 多于一条或缺失、`sourceEventSeq` 与 summary 不对应，
 | TE-BAD | 存量记录与 schema 不匹配（域整体 open 失败） | 落 **INVALID**（数据问题）而非 UNAVAILABLE；坏记录**不删不改** | 单测 TE-U18 / TE-U18b（真实 SDK 行为见 §2.4c 的实测） |
 | TE-MIG | legacy 会话在**恢复收尾**期间完成迁移 | 恢复收尾**不得**用一次 `load()` 覆盖在途的迁移写；迁移成功后正常出站并落 ready | `gate-trusted-epoch`（TE4b） |
 | TE-DP | pending 期间 dispose / 释放闸门 | 释放后**不得复活授权** | `io`（IO4） |
-| TE-R | canonical `tool_load` 回执链 | 仍为按需 selection 的授权事实；本项**不**将其移除或降级 | `gate-trusted-epoch`、`fork` |
+| TE-R | canonical `tool_load` 回执链 | 仍为按需 selection 的授权事实；本项**不**将其移除或降级 | `gate-trusted-epoch`（**TE-R0 / TER1 / TER2**，2026-10-07 补齐，见 §5.3）、`fork` |
 
 「对应套件」列只表示**该判据由哪份门禁覆盖**，**不表示该判据已通过**。
 
@@ -251,7 +251,8 @@ null、summary 多于一条或缺失、`sourceEventSeq` 与 summary 不对应，
 存储历史，MEDIUM）**维持原判并已写入 §2.2a，本轮不修**；F3 / F4 为 LOW，未复现、不凭推测改。
 
 **仍未覆盖**（审查报告 §4 共 9 项）：其中最值得优先补的是 **TE-R**（canonical `tool_load`
-回执链作为**正向**授权源）与 `§2.4c` 的整域 open 失败。真实 provider wire、token/TTFT、
+回执链作为**正向**授权源）与 `§2.4c` 的整域 open 失败。**TE-R 已于 2026-10-07 补齐门禁
+（见 §5.3），但仍未经独立复审**；`§2.4c` 的整域 open 失败仍未处理。真实 provider wire、token/TTFT、
 性能、GUI 生效、在线迁移仍**未验证**。
 
 ### 5.2 工作区复跑记录（**不是验收结论**）
@@ -275,6 +276,50 @@ null、summary 多于一条或缺失、`sourceEventSeq` 与 summary 不对应，
 - §2.4c 末段那条「一条坏记录拖垮整个域」的副作用**未修**，只是被如实记录并给了诚实归因。
 - 本轮源码**已提交并以 PR 形式提交评审**；**未安装、未发布到 npm、未重启**，任何宿主
   profile 与 GUI 生效状态均未变。本轮源码版本为 `0.2.0-functional.3`。
+
+### 5.3 TE-R 门禁补齐（2026-10-07，分支 `feat/tool-load-receipt-authorization`）
+
+**这一轮只改测试与文档，产品源码一行未动。** 复核结论是：TE-R 要保住的性质**本来就成立**，
+缺的是覆盖 —— 因此本节**不**宣称修过任何缺陷。
+
+为什么 TE-R 必须独立成门禁，不能由 TE0 / TE1x 代替：
+
+- TE0 覆盖**新鲜会话**折叠后 `selected` 可观测、body 执行 1 次；
+- TE1x 覆盖**常驻名单**（`alwaysVisible` 显式含该工具 → `alwaysNameSet` 早退放行）。
+
+两者都没有把「授权来自**回执链**」与「授权来自**常驻名单**」**拆开**证明。本组用
+`alwaysVisible: []`（基线显式置空）把常驻名单这条面整个拿掉，于是该工具能被执行就**只可能**
+是因为 canonical 回执链产出了 selection。
+
+| 判据 | 断言 | 反空过控制 |
+|---|---|---|
+| **TER0** | 置空基线下真实 `tool_load` 折叠产出该工具的 selection，且该名字**既不在** `alwaysNameSet` **也不在** `ledger.names` | 两条否定前置缺一即报错，先判空转 |
+| **TER1** | **真重启**（全部服务真关闭 → 同 root 重开 Loader → resume）冷恢复后，selection 必须由持久日志里的回执链**重放重建**，直连执行 `isError:false` + body=1 | 全程基线为空，授权无处可借 |
+| **TER2** | 同一冷恢复后的同族隐藏工具（`fixture_hidden_scope`，**从未 load**）必须仍被拒、body=0 | TER1 不得靠「恢复后一律放行」换来 |
+
+两点实现事实（本轮实测所得，值得单独记）：
+
+1. `engine.selected` 是以**规范 toolId**（`global::fixture_hidden_inherited`）为键的 Map，
+   **不是**裸工具名。产品自己的授权判据按 `.name` 过滤
+   （[`state.mjs`](../domain/state.mjs) `evaluateCall`：`Array.from(state.selected.values()).filter((s) => s.name === ctx.name)`），
+   所以门禁也走**同一条**解析路径。此前 TE0 只断言 `selected.size`，因此没有暴露这个区别。
+2. 冷恢复里重建 selection 的是 `applyCanonicalPair`（`journal.mjs` 的折叠点），它在 live 与
+   restore 两条路径上是**同一段**代码 —— 这正是 TER1 能成立的结构原因。
+
+**分辨力已用变异验证**：把 `journal.mjs` 的 `engine.applyCanonicalPair` 短接（= 整条回执链退出
+授权面）后，TER0 与 TER1 **双双转红**，连同既有 TE0 / TE1c。变异已撤销，`journal.mjs` 与 `main`
+逐字节一致。
+
+**工作区复跑**（`npm test` **283 pass / 0 fail**、`npm run test:composition` **105 pass / 0 fail**
+（原 103，+2），均为**本轮改动者本人**所跑）：
+
+- 按 §4 的验收纪律，作者自测**不等于**验收结论 —— 上述任一判据**不得**据此写成「已通过」，
+  也**不**解除任何一项待办的独立复审。
+- **TE-R 仍未获独立复审**：补门禁的是本轮产出方本人，按「作者不自签」，它与三处修复的
+  非作者复审是**两件不同的事**。
+- `§2.4c` 整域 open 失败、`§2.2a` bootstrap 契约缺口、审查其余未覆盖项、`03 §11` 阶段 3
+  （真实 wire / token / TTFT / 检索门槛）、npm 发布与安装生效：**全部仍未完成**。
+  本包仍未发布到 npm，本轮源码版本为 `0.2.0-functional.4`。
 
 ## 6. 相关文件
 

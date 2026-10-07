@@ -888,3 +888,149 @@ test('TE-LM: storage 迟到到位不得给 legacy 会话补建初始记录（绕
     try { await handle.dispose() } catch { /* 已释放 */ }
   }
 })
+
+// ---------------------------------------------------------------------------
+// TE-R：canonical `tool_load` 回执链仍是按需 selection 的**正向授权源**
+//
+// 判据（08 §4 的 TE-R 行）：本项（可信周期基线）**不**得把 canonical
+// `tool/call`→`tool/result` 回执链移除或降级成「仅披露」的事实。
+//
+// 为什么这需要**独立**门禁，而不是 TE0 / TE1x 已经覆盖：
+//   * TE0  覆盖**新鲜会话**折叠后 selected 可观测、body 执行 1 次；
+//   * TE1x 覆盖**常驻名单**（alwaysVisible 显式含该工具 → alwaysNameSet 早退放行）。
+//   两者都没有把「授权来自回执链」与「授权来自常驻名单」**拆开**证明 ——
+//   TE0 的会话基线虽为空，但它断言的是披露 + selected 可观测，没有断言执行面
+//   「只可能」由回执链放行。
+//   本组用 `alwaysVisible: []`（基线显式置空）把常驻名单这条面整个拿掉，于是该工具
+//   能被执行就**只可能**是因为 canonical 回执链产出了 selection。
+//
+// 三条判据：
+//   TER0 前置：置空基线下真实 `tool_load` 折叠 → selected 含该工具，且该名字既不在
+//        alwaysNameSet 也不在 ledger.names 里（不满足则本组是空转，必须先报出来）。
+//   TER1 **正向**：跨**真重启**（同 root 真关闭后重开 Loader + resume）冷恢复之后，
+//        该工具**仍被授权**：selection 必须由持久日志里的回执链重放重建，直连执行
+//        body=1、isError=false。可信基线在此期间**始终为空**，所以授权无处可借。
+//   TER2 **不得放宽**（同一冷恢复后的反空过对照）：同一份历史里另一个**从未 load**
+//        的隐藏工具（fixture_hidden_scope）必须仍被拒、body=0 ——
+//        证明 TER1 不是靠「恢复后一律放行」换来的。
+// ---------------------------------------------------------------------------
+
+/** 对照工具：scope-own、从不被 load，用来证明 TER1 不是「恢复后一律放行」。 */
+const TER_SCOPE_ONLY = 'fixture_hidden_scope'
+
+/**
+ * `engine.selected` 是以**规范 toolId**（`global::x` / scope 前缀）为键的 Map，
+ * 而产品自己的授权判据是按 `.name` 过滤（`plugin/domain/state.mjs:429`
+ * `Array.from(state.selected.values()).filter((s) => s.name === ctx.name)`）。
+ * 因此这里走**同一条**解析路径，而不是假设 Map 的键就是裸工具名。
+ * @param {{selected:Map<string,any>}} state
+ * @param {string} name
+ */
+function isSelected (state, name) {
+  return Array.from(state.selected.values()).some((entry) => entry.name === name)
+}
+
+test('TER0: 置空基线下 canonical tool_load 折叠产出的 selection 是该工具唯一可能的授权来源', async () => {
+  const { store, queueResponse } = await storeOf()
+  store.reset()
+  const boot = await bootAdapterComposition({ fixtures: FIXTURES, adapter: ADAPTER_CONFIG })
+  cleanup.push(() => boot.dispose())
+
+  queueResponse({ toolCalls: [{ id: 'ter0-load', name: 'tool_load', arguments: { names: [HIDDEN] } }] })
+  queueResponse({ toolCalls: [{ id: 'ter0-use', name: HIDDEN, arguments: { text: 'control' } }] })
+  queueResponse({ text: 'TER0 done' })
+  const handle = await drive(boot.ctx, boot.tmpRoot, 'ter-receipt')
+  await userTurn(handle, 'Load the hidden fixture tool, then call it.')
+
+  assert.ok(lastNames(store).includes(HIDDEN),
+    `前置：真实折叠后该工具必须已披露，否则本组全是空转；实际出站：${lastNames(store).join(', ')}`)
+
+  const runtime = runtimeOf(boot.ctx, 'ter-receipt')
+  const state = runtime.engine.getState(runtime.scope)
+  assert.equal(state.mode, 'ready', `前置：会话必须 ready；实际 ${state.mode}`)
+  assert.equal(isSelected(state, HIDDEN), true,
+    '前置：canonical 回执链折叠必须产出该工具的 selection（这正是 TE-R 要保住的那条授权面）')
+
+  // **两条常驻授权面必须同时为否** —— 否则 TER1 证明不了「授权只能来自回执链」。
+  assert.equal(runtime.alwaysNameSet.has(HIDDEN), false,
+    `前置：alwaysNameSet 不得含该工具（显式置空基线）；实际 ${JSON.stringify(runtime.alwaysNames)}`)
+  assert.equal(runtime.ledger.names?.includes(HIDDEN) ?? false, false,
+    `前置：可信记录 names 不得含该工具；实际 ${JSON.stringify(runtime.ledger.names)}`)
+  assert.equal(runtime.ledger.state, 'trusted',
+    `前置：基线必须已落定为 trusted，否则是另一种终态在起作用；实际 ${runtime.ledger.state}/${runtime.ledger.reason}`)
+
+  await handle.dispose()
+})
+
+test('TER1/TER2: 真重启冷恢复后，canonical 回执链重放仍授权按需 selection，且不得放宽到未 load 的工具', async () => {
+  const { store, queueResponse } = await storeOf()
+  const sessionId = 'ter-cold-reload'
+  store.reset()
+  const boot1 = await bootAdapterComposition({ fixtures: FIXTURES, adapter: ADAPTER_CONFIG })
+  cleanup.push(() => boot1.dispose())
+
+  // ---- 第一段：真实加载一次，随后真关闭 ----
+  queueResponse({ toolCalls: [{ id: 'ter1-load', name: 'tool_load', arguments: { names: [HIDDEN] } }] })
+  queueResponse({ toolCalls: [{ id: 'ter1-use', name: HIDDEN, arguments: { text: 'phase one' } }] })
+  queueResponse({ text: 'TER1 phase one' })
+  const h1 = await drive(boot1.ctx, boot1.tmpRoot, sessionId)
+  await userTurn(h1, 'Load the hidden tool, then call it.')
+  assert.equal(store.bodyCount('ter1-use'), 1,
+    '前置：重启之前该工具必须真的执行过一次（否则后面测的是一条从未生效过的路径）')
+  assert.ok(lastNames(store).includes(HIDDEN),
+    `前置：重启之前该工具必须已披露；实际 ${lastNames(store).join(', ')}`)
+  await h1.dispose()
+
+  // **真关闭**全部服务（保留 tmpRoot）：让第二个 Loader 不是并发开同一物理介质。
+  // 这是 TE9 已验证过的形态 —— 只有真关闭，第二个 Loader 才读得到同一份历史。
+  await boot1.closeServices()
+
+  // ---- 第二段：同 root 重启。配置与第一段**逐字相同**，基线因此仍是 []。----
+  const boot2 = await bootAdapterComposition({
+    fixtures: FIXTURES,
+    adapter: ADAPTER_CONFIG,
+    tmpRoot: boot1.tmpRoot,
+  })
+  cleanup.push(() => boot2.dispose())
+  store.reset()
+
+  const h2 = await resumeDrive(boot2.ctx, sessionId)
+  const lifecycle = boot2.ctx.get('progressiveDiscovery').lifecycle
+  // runtime 由首次触达建立（`whenReady` 在 runtime 还不存在时只回 unknown）：
+  // 先真实跑一轮，让冷恢复在这条链上真正发生，再取终态。形态与 TE9 一致。
+  queueResponse({ text: 'TER1 resumed' })
+  await userTurn(h2, 'Continue after restart.')
+  const settled = await lifecycle.whenReady(sessionId)
+  assert.equal(settled.mode, 'ready',
+    `前置：冷恢复后必须落 ready（基线可信 + 回执链重放）；实际 ${JSON.stringify(settled)}`)
+
+  const runtime = runtimeOf(boot2.ctx, sessionId)
+
+  // 可信基线在整个过程中**始终为空** —— 这是本判据成立的前提，先钉死。
+  assert.equal(runtime.ledger.state, 'trusted',
+    `前置：冷恢复后基线必须 trusted；实际 ${runtime.ledger.state}/${runtime.ledger.reason}`)
+  assert.equal((runtime.ledger.names ?? []).includes(HIDDEN), false,
+    `前置：可信记录仍不得含该工具；实际 ${JSON.stringify(runtime.ledger.names)}`)
+  assert.equal(runtime.alwaysNameSet.has(HIDDEN), false,
+    `前置：alwaysNameSet 仍不得含该工具；实际 ${JSON.stringify(runtime.alwaysNames)}`)
+
+  // ---- TER1：正向 —— selection 必须由持久日志里的回执链重放重建 ----
+  const state = runtime.engine.getState(runtime.scope)
+  assert.equal(isSelected(state, HIDDEN), true,
+    'TE-R 核心：冷恢复后 canonical tool_load 回执链必须重建该工具的按需 selection'
+    + `（这是「回执链仍为正向授权源」的判据）；实际 selected=${JSON.stringify([...state.selected.values()].map((s) => s.name))}`)
+
+  const admitted = await directExec(boot2.ctx, h2.agent, HIDDEN, { text: 'after-cold-reload' }, 'ter1-exec')
+  assert.equal(admitted.isError, false,
+    `TE-R 核心：冷恢复后该工具必须仍被授权执行；实际文本：${admitted.text.slice(0, 300)}`)
+  assert.equal(store.bodyCount('ter1-exec'), 1,
+    'TE-R 核心：冷恢复后直连执行必须真的到达 body（证明不是「空放行」）')
+
+  // ---- TER2：反空过对照 —— 从未 load 的同族工具必须仍被拒 ----
+  const denied = await directExec(boot2.ctx, h2.agent, TER_SCOPE_ONLY, { text: 'never-loaded' }, 'ter2-exec')
+  assert.equal(denied.isError, true,
+    `对照：从未 load 的隐藏工具必须仍被拒（否则 TER1 是靠放宽换来的）；实际文本：${denied.text.slice(0, 300)}`)
+  assert.equal(store.bodyCount('ter2-exec'), 0, '对照：从未 load 的工具 body 必须为 0')
+
+  await h2.dispose()
+})
