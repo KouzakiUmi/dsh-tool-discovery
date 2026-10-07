@@ -183,18 +183,22 @@ fail closed 与 dispose 三处显式关闭，并把文件头那句"读起来像�
 dispose 后的拒绝文案原本是 `undefined`；`toDomainError` 原先回落英文而 `DomainError`
 构造器回落界面语言，同一次失败可能中英混排 —— 现统一为回落绑定语言。
 
-### ❌ 未修（明确不做，需要一个本仓库无法提供的事实）
+### 🛠 失败终态预算结算（2026-10-08，本地修复分支，尚未合并）
 
-**被中断的那一轮 `tool_load` 仍会永久占用预算槽。**
-turn 被取消（用户 Esc / 审批被拒 / post-policy 失败）时宿主不产 canonical `tool/result`，
-journal 此后再也看不到这次调用：`liveCalls` 条目不删、`cancelOperation` 不触发、
-`pendingLoadNames()` 会一直告诉门禁"pending fold"（与事实相反的措辞）。
-仓库里唯一带证据的相邻事件是 `turn/end`，但
-`contracts/gate-runtime-contract.mjs:302-307` **只证明了正常完成时会记录它**，
-没有证明它不会与迟到的 `tool/result` 竞态。在 `turn/end` 上取消有把一次合法晚到的折叠
-误判掉的��险（工具会卡在 `TOOL_NOT_ADVERTISED`），那比泄漏更糟，因此不猜。
-**需要**：宿主对 `turn/end` 与 `tool/result` 在中断路径上先后关系的可核验说明。
-拿到之后修复很小：`onEvent` 里一个 `turn/end` 分支调 `abandonLiveCalls()`。
+**订正旧推断**：目标宿主 `0.2.1-alpha.1` 在 body 后取消时仍会写错误 `tool/result`，
+然后才写 `turn/end`；post-policy block 同样会写错误 result。真实 Loader 的确定时机
+探针已确认这一顺序，**不是 GUI Esc 的自然复现，也不是真实 provider wire**。
+
+根因不在缺 result：`journal.onEvent` 找到 canonical source 对应的调用后删掉 `liveCalls`，
+但非 JSON / 非协议错误文本使 `parseResultEnvelope` 返回 null，绕过 `applyCanonicalPair`，
+body 创建的 `engine.pending` 仍留着。`selected` 为空也会在下一次 load 报 `BUDGET_EXCEEDED`。
+
+修复仅在已配对、不能解析协议外壳的终态分支 `cancelOperation(op_<callId>)`；不加
+`turn/end` 全量清理，不改变成功回执折叠或已有 selected / advertised / frozen。
+新增 [`terminal-load-result.test.mjs`](../tests/unit/terminal-load-result.test.mjs) 与
+[`gate-terminal-load-result.test.mjs`](../tests/composition/gate-terminal-load-result.test.mjs)
+覆盖失败释放、正常成功正控制、其它 pending、重复/迟到结果与真实宿主取消/策略拒绝。
+**修复已有红绿证据，GLM 非作者独立测试复核 PASS（限这两项修复）；不构成对等强度安全发布签署或产品验收，不自动合并/推送。**
 
 ### 🔍 新发现（尚未处置）
 
@@ -205,9 +209,10 @@ journal 此后再也看不到这次调用：`liveCalls` 条目不删、`cancelOp
   `读取文件内容` 会把 files 类几个工具打成同分再按名字序 tiebreak。
   要修需要**每个工具的中文可描述**（catalog / adapter 层），不是检索层能单独解决的 ——
   与下面"技能从未接线"是同一类缺口。
-- **`tool_list {}`（不带参数）直接报错。** `view` 缺省是 `available`，而 available/loaded
-  强制要求 `category`，于是模型最自然的首次调用落到 `INVALID_ARGS`。
-  与其让模型猜，不如让 `view:'categories'` 成为缺省。
+- **`tool_list {}` 默认导航已在本地修复分支修复（尚未合并）。** 无 `view` 且无 `category`
+  时返回 `categories`；有 `category` 时仍默认 `available`，保留既有调用兼容。显式
+  available/loaded 缺 category、null/空串、未知字段仍拒绝。回归见
+  [`list-default-navigation.test.mjs`](../tests/unit/list-default-navigation.test.mjs) 与上述组合门禁。
 - ~~**`SYNONYM_GROUPS` 有两个重复触发词**（`search engine`、`spreadsheet` 各自在同组内出现两次）。~~
   **已处置（2026-10-07 晚）**：两处重复已删除（同一触发词 → 同一概念，删除不改变行为；349 单测 + 108 组合全过）。
 

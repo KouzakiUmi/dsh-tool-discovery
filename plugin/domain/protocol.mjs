@@ -72,7 +72,8 @@ function normalizeLimit(value, def, max) {
  */
 export function validateListRequest(raw, budgets = DEFAULT_BUDGETS) {
   const o = requireObjectRoot(raw);
-  const view = o.view === undefined ? 'available' : o.view;
+  // 空请求先给类别导航；已有 {category} 的省略 view 调用仍保持 available。
+  const view = o.view === undefined ? (o.category === undefined ? 'categories' : 'available') : o.view;
   if (typeof view !== 'string' || !LIST_VIEWS.includes(view)) {
     throw new DomainError('INVALID_ARGS', t(['detail', 'unknownView']));
   }
