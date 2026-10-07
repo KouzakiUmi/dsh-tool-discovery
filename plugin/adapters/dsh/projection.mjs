@@ -42,6 +42,7 @@
 //   `await query.readSession(...)` 上让出；读盘不会回调 `system-prompt/assemble`，
 //   `ensureRuntime` 里的 `refreshToolChoices()` 也只是同步排一个微任务。无环形等待。
 import { DomainError, ENTRY_TOOL_NAMES } from '../../domain/index.mjs';
+import { BASELINE_STATE, trustedEpochBlockedError } from './trusted-epoch.mjs';
 
 /**
  * @param {{ctx:any, lifecycle:any, frameworkRetained?:readonly string[], log?:Function}} deps
@@ -191,7 +192,34 @@ export function createProjection(deps) {
     }
   }
 
+  /**
+   * 可信基线门禁：`runtime.ledger` 不存在（例如既有单测的最小 runtime 替身）时
+   * 本插件不做额外约束；存在时 pending / blocked 都**停止发请求**。
+   *
+   * pending 是"记录正在落盘"：等它落定（同样只在宿主取消信号上退出，没有超时兜底）；
+   * blocked 是确定的终态：按 reason 报出明确错误。
+   * @param {any} runtime
+   * @param {AbortSignal} [signal]
+   */
+  async function enforceTrustedBaseline(runtime, signal) {
+    const ledger = runtime.ledger;
+    if (ledger === undefined) return;
+    if (ledger.state !== BASELINE_STATE.PENDING && ledger.state !== BASELINE_STATE.BLOCKED) return;
+    if (ledger.state === BASELINE_STATE.BLOCKED) throw trustedEpochBlockedError(ledger.reason);
+    const settled = await lifecycle.awaitEpochRecord(runtime.scope.sessionId, signal);
+    if (settled?.state === BASELINE_STATE.BLOCKED) throw trustedEpochBlockedError(settled.reason);
+  }
+
   return ctx.on('system-prompt/assemble', async (assembly, context, next) => {
+    const previous = context?.agent;
+    // **进入本次 assemble 就先把上一份"尚未发送的刷新入口"作废**：上一次 pre-step 的
+    // assembly 已经被用掉了（而且宿主很可能已经冻结它），此后任何压缩都不该再去改写
+    // 那份死数组 —— 改不动（frozen）只是表象，真正的错误是改了一个不会被发送的数组。
+    // 本次这一份在返回前重新登记，所以"pre-step 里的自动压缩"仍能就地刷新。
+    if (previous?.session !== undefined) {
+      const prior = lifecycle.sessions?.get(previous.session.id);
+      if (prior !== undefined) prior.refreshPendingProjection = null;
+    }
     const transformed = await next();
     const agent = context?.agent;
     if (agent === undefined) return transformed;
@@ -207,6 +235,16 @@ export function createProjection(deps) {
     // 冷恢复未落定就先等它落定：否则这一轮会把已披露工具整段丢掉（见文件头
     //「冷恢复窗口」）。仍在恢复 = 不发请求；已决失败 = 只留基线（fail closed）。
     if (runtime.restoring) await awaitRestore(runtime, context?.signal);
+    // 可信基线（trusted-epoch.mjs）：pending/blocked 一律**不发请求**。
+    // 这不是"缩水兜底"——发一份只带三入口的请求等于承认"没有授权也照发"，
+    // 那正是本轮要移除的出站授信。
+    await enforceTrustedBaseline(runtime, context?.signal);
+    if (runtime.pendingProjectionError !== undefined && runtime.pendingProjectionError !== null) {
+      // 就地刷新失败过：这份还没发送的 assembly 仍是旧样子，绝不能发出去。
+      const error = runtime.pendingProjectionError;
+      runtime.pendingProjectionError = null;
+      throw error;
+    }
     const incoming = Array.isArray(transformed?.tools) ? transformed.tools : [];
     const kept = project(runtime, scope, incoming);
 
@@ -215,13 +253,16 @@ export function createProjection(deps) {
       try {
         const next_kept = project(runtime, scope, incoming);
         kept.splice(0, kept.length, ...next_kept);
+        runtime.pendingProjectionError = null;
         log('projection:pending-refreshed', {
           sessionId: runtime.scope.sessionId,
           kept: kept.map((t) => t.name),
         });
         return true;
       } catch (error) {
-        // 数组被冻结 / 投影判据被触发：如实记录并放弃，绝不吞掉。
+        // 数组被冻结 / 投影判据被触发：**记录现场并让下一次发请求中止**，
+        // 绝不吞掉还继续发一份仍带旧名单的数组。
+        runtime.pendingProjectionError = error;
         log('projection:pending-refresh-failed', { error: String(error) });
         return false;
       }

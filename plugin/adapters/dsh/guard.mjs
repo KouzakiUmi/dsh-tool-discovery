@@ -6,6 +6,7 @@
 // 绝不拼进模型可见的拒绝文本；也**不使用** UNKNOWN_TOOL 字样
 // （那是宿主原生语义，与本插件拒绝不同义）。
 import { ENTRY_TOOL_NAMES } from '../../domain/index.mjs';
+import { BASELINE_STATE } from './trusted-epoch.mjs';
 
 /**
  * @param {{ctx:any, lifecycle:any, frameworkRetained?:readonly string[], locale?:string, log?:Function}} deps
@@ -14,9 +15,9 @@ export function createGuard(deps) {
   const { ctx, lifecycle } = deps;
   const config = { locale: deps.locale };
   const frameworkRetained = new Set([...(deps.frameworkRetained ?? [])]);
-  // 常驻工具与入口同权：它们每一轮都在请求里，无需 selected 凭据。
-  // 漏掉这一组会让白名单工具在 tool_load 成功后仍被拒（INCOMPATIBLE_COMPOSITION）。
-  // 名单取自 runtime（每次周期边界刷新），不是 apply 期的静态快照。
+  // 三入口与可信 framework 保留项由宿主配置背书，放行判据不受可信周期基线影响。
+  // 常驻工具则**只**由 storageDomain 上那份可信记录背书（trusted-epoch.mjs），
+  // 所以基线判据必须排在 alwaysNameSet 早退**之前**（见下）。
   const entryNames = new Set(ENTRY_TOOL_NAMES);
   const log = deps.log ?? (() => {});
 
@@ -29,9 +30,19 @@ export function createGuard(deps) {
       return `tool "${exec.name}" is not admitted: INCOMPATIBLE_PRESENTATION (tools mode is not native)`;
     }
     const runtime = lifecycle.runtimeFor(agent.session, agent);
-    if (entryNames.has(exec.name) || frameworkRetained.has(exec.name) || runtime.alwaysNameSet?.has(exec.name) === true) {
-      return undefined;
+    if (entryNames.has(exec.name) || frameworkRetained.has(exec.name)) return undefined;
+    // 可信基线未落定（pending）或已封（blocked）时，**任何**常驻名都不得被放行：
+    // 这条必须早于 alwaysNameSet 的早退，否则一份不可信（或根本不存在）的名单
+    // 就能凭"猜名"真正执行隐藏工具的 body。
+    const baseline = runtime.ledger?.state;
+    if (baseline !== undefined && baseline !== BASELINE_STATE.TRUSTED) {
+      const reason = runtime.ledger?.reason ?? 'TRUSTED_EPOCH_PENDING';
+      log('guard:baseline-not-trusted', {
+        sessionId: agent.session.id, name: exec.name, state: baseline, reason,
+      });
+      return `tool "${exec.name}" is not admitted: STATE_NOT_READY (${reason})`;
     }
+    if (runtime.alwaysNameSet?.has(exec.name) === true) return undefined;
     // 有 listener 在我们的投影之后重加了未披露工具 → 整会话 fail closed
     if (runtime.compositionBypass !== null) {
       log('guard:bypass-closed', { sessionId: agent.session.id, name: exec.name, leaked: runtime.compositionBypass.names });

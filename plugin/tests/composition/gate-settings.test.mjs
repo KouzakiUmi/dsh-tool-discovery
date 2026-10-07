@@ -62,6 +62,22 @@ function assembleContext (session, agentId = 'a1') {
   }
 }
 
+/**
+ * 建 runtime 并**等它真正落定**。
+ *
+ * 名单断言必须发生在 `whenReady` 之后：新实现在建立 runtime 时会先把本 epoch 的
+ * 可信 baseline durable 落定，落定前 `alwaysNames` 可能尚未成形。不等就断言等于
+ * 拿一个中间态签字 —— 而且「轮询几毫秒看看」不是等待真实失败/成功的正确做法。
+ */
+async function readyRuntime (ctx, sessionId, agentId = 'a1') {
+  const lifecycle = serviceOf(ctx).lifecycle
+  const runtime = lifecycle.ensureRuntime(fakeSession(sessionId), { id: agentId })
+  const settled = await lifecycle.whenReady(sessionId)
+  assert.equal(settled.mode, 'ready',
+    `${sessionId} 必须落 ready 才允许断言名单；实际：${JSON.stringify(settled)}`)
+  return { runtime, settled }
+}
+
 test('SG1: Config 在首次 resolveConfig 之前存在 —— alwaysVisible 是 volatile 引用', async () => {
   const { ctx, loader } = await boot({})
   const entry = adapterEntry({ loader })
@@ -77,7 +93,7 @@ test('SG1: Config 在首次 resolveConfig 之前存在 —— alwaysVisible 是 
 
 test('SG2/SG3: 默认名单是 DSH 自带工具；显式 [] 清空默认但保留三个发现入口', async () => {
   const withDefault = await boot({})
-  const runtimeA = serviceOf(withDefault.ctx).lifecycle.ensureRuntime(fakeSession('s-default'), { id: 'a1' })
+  const { runtime: runtimeA } = await readyRuntime(withDefault.ctx, 's-default', 'a1')
   assert.deepEqual(runtimeA.alwaysNames, [...CORE_TOOL_NAMES], '默认即 DSH 自带工具')
 
   const cleared = await boot({ alwaysVisible: [] })
@@ -86,7 +102,7 @@ test('SG2/SG3: 默认名单是 DSH 自带工具；显式 [] 清空默认但保�
   assert.equal(typeof live.get, 'function')
   assert.deepEqual(live.get(), [], '显式 [] 必须真的清空，不得回落到 CORE')
 
-  const runtimeB = serviceOf(cleared.ctx).lifecycle.ensureRuntime(fakeSession('s-empty'), { id: 'a2' })
+  const { runtime: runtimeB } = await readyRuntime(cleared.ctx, 's-empty', 'a2')
   assert.deepEqual(runtimeB.alwaysNames, [], '替换语义：不给就一个都不常驻，不是并集')
 
   // 三个发现入口独立于该字段：清空默认后它们依然存在
@@ -156,7 +172,7 @@ test('SG5: 周期中途改配置不动已在跑的 runtime；新 runtime 才拿�
   const { ctx, loader } = await boot({})
   const entry = adapterEntry({ loader })
 
-  const running = serviceOf(ctx).lifecycle.ensureRuntime(fakeSession('s-live'), { id: 'a1' })
+  const running = (await readyRuntime(ctx, 's-live', 'a1')).runtime
   assert.deepEqual(running.alwaysNames, [...CORE_TOOL_NAMES])
   const frozenWireBefore = JSON.stringify(running.engine.getFrozenWire(running.scope))
 
@@ -172,7 +188,7 @@ test('SG5: 周期中途改配置不动已在跑的 runtime；新 runtime 才拿�
   assert.deepEqual(entry.fiber.config.alwaysVisible.get(), ['fixture_hidden_inherited'])
 
   // 下一个周期（这里用新会话代表）才拿到新名单
-  const next = serviceOf(ctx).lifecycle.ensureRuntime(fakeSession('s-next'), { id: 'a2' })
+  const { runtime: next } = await readyRuntime(ctx, 's-next', 'a2')
   assert.deepEqual(next.alwaysNames, ['fixture_hidden_inherited'], '新周期采用新配置')
 })
 
@@ -197,7 +213,7 @@ test('SG6: 成功自动压缩后，未发送的那份 tools 数组被就地刷�
   const entry = adapterEntry({ loader })
   const lifecycle = serviceOf(ctx).lifecycle
   const session = fakeSession('s-auto')
-  const runtime = lifecycle.ensureRuntime(session, { id: 'a1' })
+  const { runtime } = await readyRuntime(ctx, 's-auto', 'a1')
   assert.deepEqual(runtime.alwaysNames, ['fixture_hidden_inherited'])
 
   // 改配置：下一个周期改用另一个名字。
@@ -215,6 +231,20 @@ test('SG6: 成功自动压缩后，未发送的那份 tools 数组被就地刷�
     lifecycle.onSessionEvent(session, event)
   }
 
+  // 新周期的名单必须先落定（durable 写完），**然后**才读那份尚未发送的数组 ——
+  // 早读一次拿到的是 durable 落定前的中间态，等于拿中间态签字。
+  //
+  // 等的必须是**这一条屏障本身**（lifecycle.awaitEpochRecord，也就是 index.mjs 在
+  // agent/pre-step 的 post-next 处等 put 落定的那条），不是 whenReady：后者在
+  // `restoring === false` 时立即返回 engine 的当前 mode，它覆盖的是**冷恢复**，不覆盖
+  // 周期边界那次 adopt 的写。就地刷新刻意排在 durable 之后（先刷新就等于披露一份还没
+  // 落盘的名单），所以只等 whenReady 读到的是必然陈旧的数组。
+  const afterSettled = await lifecycle.whenReady('s-auto')
+  assert.equal(afterSettled.mode, 'ready',
+    `压缩开新周期后必须落 ready 才允许断言新名单；实际：${JSON.stringify(afterSettled)}`)
+  const barrier = await lifecycle.awaitEpochRecord('s-auto')
+  assert.equal(barrier.state, 'trusted',
+    `pre-step 屏障必须等到本 epoch 的记录 durable 才放行；实际：${JSON.stringify(barrier)}`)
   const after = pending.map((t) => t.name)
   assert.deepEqual(runtime.alwaysNames, ['fixture_mutating'], '压缩即周期边界，应采用新配置')
   assert.ok(!after.includes('fixture_hidden_inherited'), `压缩后仍披露旧工具: ${JSON.stringify(after)}`)
@@ -229,7 +259,7 @@ test('SG7: 已发送的数组不再被后来的压缩改写（canonical header �
   const entry = adapterEntry({ loader })
   const lifecycle = serviceOf(ctx).lifecycle
   const session = fakeSession('s-sent')
-  const runtime = lifecycle.ensureRuntime(session, { id: 'a1' })
+  const { runtime } = await readyRuntime(ctx, 's-sent', 'a1')
 
   const assembled = await ctx.systemPrompt.assemble(assembleContext(session))
   const pending = assembled.tools
@@ -249,6 +279,9 @@ test('SG7: 已发送的数组不再被后来的压缩改写（canonical header �
   }
 
   assert.deepEqual(pending.map((t) => t.name), namesAtSend, '事后压缩不得改写已发送的历史数组')
+  const sentSettled = await lifecycle.whenReady('s-sent')
+  assert.equal(sentSettled.mode, 'ready',
+    `新周期必须落 ready 才允许断言新名单；实际：${JSON.stringify(sentSettled)}`)
   assert.deepEqual(runtime.alwaysNames, ['fixture_mutating'], '但下一个周期的名单确实换了')
 })
 

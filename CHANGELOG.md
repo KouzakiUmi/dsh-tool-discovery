@@ -184,6 +184,107 @@ the branch on `main`.
 - The frozen quality result (21 checks, 20 PASS / 1 FAIL) and the public test prerequisites are
   unchanged by this branch.
 
+## [0.2.0-functional.3] — trusted epoch baselines, and tool-churn cache consistency
+
+Branch `feat/trusted-cache-epochs`. This entry describes **source** delivered by pull request.
+The package is **not published to npm**, and no profile installation, GUI reload or application
+restart is part of this delivery. Nothing here is a product-acceptance statement; the authoritative
+per-item status is [`plugin/docs/05-current-status.md`](plugin/docs/05-current-status.md) and the
+contract is [`plugin/docs/08-trusted-epoch-baselines.md`](plugin/docs/08-trusted-epoch-baselines.md).
+
+`version` moves to `0.2.0-functional.3` because `0.2.0-functional.2` is already taken by the
+released `build-c4a111c` asset; reusing it would make two different source states indistinguishable
+to the plugin manager.
+
+### Added
+
+- **Durable epoch records replace outbound observation as the trust source.** A session's resident
+  tool names are now read from and written to a record on the host-provided storage domain. An
+  outbound `request`/`header` is an observation and is no longer treated as authorization: a model
+  that guesses a name which once appeared in a persisted header no longer executes it.
+- **A session with no epoch record stops explicitly and blocks its request.** The terminal state has
+  **no default timeout** and never degrades to a reduced request. The current configuration hash is
+  neither an epoch identity nor a trust predicate. A record that does not match its schema, and a
+  storage service that cannot be opened, are reported as two separate terminal states with separate
+  wording; a bad record is neither deleted nor overwritten by the current configuration.
+- **One real user-initiated `/compact` migrates an old session**, and only when the canonical chain
+  holds in one own session: run `compact` from `user`; `start.sourceCommandId` present with `turn`
+  null; exactly one summary, correctly ordered; `end` without error; `done` successful with
+  `sourceEventSeq == summary.seq`. Any failed condition means no migration, with no retry and no
+  inference. A historical command chain is never a migration authorisation.
+- **An already-trusted session keeps refreshing normally.** Any successful manual **or automatic**
+  compaction adopts the latest configuration, writes a new epoch record and resets. Automatic
+  compaction is a normal path and is not blocked; within one epoch the record alone is authoritative
+  and is not replaced by the current configuration; a new epoch adopts the boundary configuration
+  snapshot in full, without intersecting or inheriting the previous epoch's list.
+- **Three new real-host gate suites** cover the authorisation surface, the I/O timing and fork
+  isolation, the fourth baseline state, and the tool-churn cache path. Within one epoch, the write
+  is awaited on the post-next agent / pre-step barrier, because SDK assembly runs before automatic
+  compaction.
+
+### Fixed
+
+- **Late storage arrival could authorize a session that had to be migrated.** When the storage
+  service became available after a session had already been blocked, the retry path reused the
+  bootstrap path without checking whether the session had its own outbound history, and could write
+  an initial record for it. A missing record is not by itself a qualification to create one: only a
+  session with no outbound fact in its own segment qualifies, and the qualification now sits at the
+  single exit through which all three bootstrap entry points pass.
+- **A decided restore stopped emitting requests at all.** When the journal was sealed or
+  `readSession` failed, the session's baseline stayed pending forever, which was read as "baseline
+  not settled" and suppressed every outbound request — a hang, not the pre-existing fail-closed
+  behaviour. That state is now a distinct fourth baseline state: the request is still emitted with
+  the baseline only, the engine stays `incompatible`, and execution is still refused. Folding it into
+  a blocked state would have invented a new "must not emit" rule and misaligned the request queue of
+  other sessions in the same composition.
+- **A removed-then-re-added tool became permanently uncallable.** The host appends `request/header`
+  only when the header actually changes. After a tool was removed, re-added and loaded again, the
+  outbound wire was byte-identical, so no new header event arrived, while the invalidation and the
+  version change had both cleared its advertisement record — the tool stayed on the wire and in the
+  selection yet every call failed with `TOOL_NOT_ADVERTISED` until the session was restarted. The
+  journal now remembers the last observed header and replays the disclosure bookkeeping against it.
+  No rejection rule is loosened: the digest is still compared byte for byte and the request identity
+  is still the same header. This matters in production whenever an MCP server drops and reconnects.
+- **Tool removal had no real-host coverage at all.** The existing churn fixture only ever **added**
+  a tool, and the registry unit suite covered only the generation counter. Removal is a real
+  production shape, so it now has a fixture that is removed by disposing its entry fiber, and gates
+  asserting that a removed selection stops executing, that its old candidate reference is refused,
+  and that an unrelated tool is unaffected.
+
+### Changed (metadata only)
+
+- `dependencies.zod` (`^4.4.3`) and an **optional** peer `@deepseek-ai/dsh-storage-domain`
+  `0.2.1-alpha.1`. A production capture without that SDK blocks explicitly instead of attaching a
+  provider automatically, and no storage backend is added. `private`, `files`, `exports` and the
+  publishing policy are unchanged. The declared `zod` range is anchored to the real `4.4.3`
+  observed in the host-provided SDK; the adapter takes `zod` from the host's own storage-domain
+  dependency, so **dependency-isolated installation is still unverified** and is not claimed here.
+- `test:composition` and the explicit host-composition list in CI both name the new gate files. CI
+  installs no SDK implicitly and the portable skip list is unchanged; the portable unit and epoch
+  suites stay pure portable.
+
+### Verification boundary
+
+- Local runs, commands and exit codes: `npm test` → **283 pass / 0 fail**, exit **0**;
+  `npm run test:composition` → **103 pass / 0 fail / 0 skipped**, exit **0**. These were run by the
+  author of this round against the real DSH Core `0.2.1-alpha.1` composition.
+- One **non-author** review of the three security-boundary fixes returned **pass** on all three, and
+  added the `failed-closed` and bad-record gates. Its own evidence is an internal report and is not
+  part of this tree.
+- **A known contract-level gap remains open and is not fixed here.** On the bootstrap branch the
+  session's own-history qualification is derived from live counters without cross-checking stored
+  history; an independent reviewer demonstrated the shape in memory but could not establish that a
+  real host reports the contradictory counters it requires. It is recorded in
+  [`plugin/docs/08-trusted-epoch-baselines.md`](plugin/docs/08-trusted-epoch-baselines.md), not
+  silently closed.
+- The review also left nine items uncovered, notably the canonical `tool_load` receipt chain as a
+  positive authorisation source and the whole-domain open failure. Until those are covered this
+  feature is **not** product-accepted.
+- **Not claimed:** real-provider wire behaviour, token reduction, latency, GUI rendering and online
+  migration are unverified. No cache-saving or latency measurement is claimed. The frozen quality
+  result (21 checks, 20 PASS / 1 FAIL) is unchanged by this branch and the scoring data is still
+  not publishable.
+
 ## [0.1.0] — prepared 2026-10-06, not published
 
 > **Outcome, added after the fact:** this tree became the initial publish commit on `main`.

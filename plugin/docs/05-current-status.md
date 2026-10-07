@@ -26,6 +26,35 @@
 - 入口执行语义（基线已定案，不因本分支改变）：现读代码正确——入口 `execute` 对业务失败**返回 `ok:false` + `error.code` 的 JSON 串，不外抛**；`scopeFromExec` 的 throw 在 `execute` 内被 catch 转成外壳。历史中把 `ok:false` 改为抛错的改动已被交叉审核裁定为缺陷并**回滚**；**「execute 单点抛错」的记忆说法是错的**。代码符合冻结 `S03c` 与 [02 §10](<02-protocol-and-data-model.md>)，**非发布阻断项**。
 - **仍未验证**（不因任一基线而升级）：外部真实 provider wire、token/TTFT、检索质量门槛、**L04 compaction**、**L08 crash/fsync 窗口**、**L10 HMR**、**S12 非 native 组合**、**S13 同 session 多活动 agent**、多 scope 并发压力、回执 meta 通道、产品验收与安装生效。
 
+### 0.1 可信周期基线（**进行中 / WIP**，本地开发分支 `feat/trusted-cache-epochs`）
+
+> 分支口径：`feat/trusted-cache-epochs` 是**本地未提交、未推送**的开发分支；它携带的源码文件与本树
+> 其余文件一样，在提交后随仓库**公开**，不因此成为私有代码。文档中的 `private` 一律只指**包未发布**。
+
+- **目标**：移除冷恢复时以首请求 / `request`/`header` 内容反推常驻工具名单的授信，改为通过宿主
+  提供的 storage domain 持久化**周期记录**，记录落盘后才允许出站；缺少记录的旧会话明确报错并阻止
+  请求（旧会话仅经一次满足严格条件的真实用户 `/compact` 迁移）；已可信会话的手动与**自动**压缩
+  仍正常采最新配置并换新周期。
+- **现状**：源码侧**已初步实现**，**集成 / 测试套件验收尚未完成**；契约、判据与对应门禁见
+  [08](<08-trusted-epoch-baselines.md>)。**本行不表示缺陷已修复**，也不表示任何门禁已通过。
+- **本轮（额度刷新后继续）新增并已定位的三处缺陷**，均已修复；已获一次**非作者独立复审
+  「通过」**（报告 `plugin/audits/trusted-epoch-fix-review-20261007.md`），命令与退出码见
+  [08 §5.2](<08-trusted-epoch-baselines.md>)。**复审仍有 9 项未覆盖**，且留有一条 MEDIUM 契约
+  级缺口（[08 §2.2a](<08-trusted-epoch-baselines.md>)，本轮**未修**），因此**不得**把本项
+  整体写成「已验收」：
+  1. **迟到到位绕过迁移**（授权面 HIGH）：`retryBaseline` 复用 bootstrap 路径而**不检查 own
+     出站资格**，legacy 会话会在存储迟到时拿到一条**初始记录**并被授权 —— 反例门禁 `TE-LM`
+     先行 RED（durable 侧确有 `trigger:'initial'` 记录），修复后 GREEN。
+  2. **既有 fail-closed 被吞成 0 请求**（回归，破坏 `L11b` / `RB2`）：journal 损坏 /
+     `readSession` 失败后账本**永远停在 pending**，投影把它当成「基线尚未落定」而整轮不发请求。
+     已新增独立第四态 `failed-closed` 裁决，见 [08 §2.4b](<08-trusted-epoch-baselines.md>)。
+  3. **恢复收尾覆盖在途迁移**（`TE4b`）：缓冲重放已在 live 链上完成迁移时，收尾的一次
+     `ledger.load()` 会自增 revision 让迁移变成 superseded，并把尚未落盘的新 epoch 读成
+     `MISSING` → 一次**真实成功的用户 `/compact`** 被判成 legacy，永久 0 请求。
+- 本节**不改变**上文任何一行结论：header 授权缺陷**既未宣称已修，也不因此降级既有已验证项**；
+  `07` 的结论同样保持不变。本包**未发布到 npm**，本轮源码版本为 `0.2.0-functional.3`
+  （`0.2.0-functional.2` 已由 `build-c4a111c` 占用，不可复用）。
+
 ## 1. 状态速览
 
 | 阶段 | 状态 | 签核情况 |
@@ -38,6 +67,7 @@
 | 安装 / 发布 | **部分完成** | 源码基线已随 `main` 发布；**未安装、未启用、未构建产物、未上 npm** |
 | 文档与路径口径整理 | **已完成** | 本文件集已按迁移后布局订正；**不升级以上任何一行** |
 | 基线独立门禁（当前 `main`） | **已通过（限 §0 范围）** | unit 160/0、composition 42/0（含 `S03c`、recovery、event-seq）、质量工装 14/0/1 skip、validate 20PASS/1FAIL |
+| 可信周期基线（见 §0.1） | **已初步实现 / WIP，验收未完成** | 契约、判据与门禁见 [08](<08-trusted-epoch-baselines.md>)；三处修复已获**非作者独立复审「通过」**；另新增 2 份门禁（failclosed / badrecord）并接入 `package.json` 与 CI，unit 283/0、composition 101/0（均 exit 0）；**复审 9 项未覆盖 + 一条 MEDIUM 契约级缺口未修**，**无验收结论、不表示缺陷已修复** |
 | 恢复覆盖增强（内容已并入基线） | 已合并；源码曾经独立复审（限 3 个 code 文件） | composition 42（14 + 7 + recovery 13 + event-seq 8）；**不等于产品验收**；见 [07](<07-lifecycle-recovery-coverage.md>) |
 
 ## 2. 已验证
@@ -87,6 +117,30 @@
 **独立核验批次 1 结论**：现读代码正确——入口 `execute` 对业务失败返回外壳串、不外抛；`scopeFromExec` 的 throw 在 `execute` 内被 catch 转成同一外壳。历史中把 `ok:false` 改为抛错的改动已被交叉审核裁定为缺陷并回滚。`S03c` 在真实 composition 上通过，**符合冻结契约，非发布阻断项**。「execute 单点抛错」的旧记忆说法**不成立**。
 
 `02` §2 与 §12 第 10 条记录了这一区分，并已把「不得把 `ok:false` 当成功返回」的落点澄清为 **reducer / 恢复激活判据**（§11 第 12 条双条件），**验收标准本身未改动**。
+
+### 2.6 工具增减与缓存一致性（2026-10-07 新增）
+
+- **覆盖现状**：新增之前，工具**减少**这条路径在组合层**零覆盖** —— 既有的
+  `registry-churn` fixture 只会**增加**工具，`unit/registry.test.mjs` 的 R5 只覆盖**代次**。
+  而真实环境里减少确实发生过（[07](<07-lifecycle-recovery-coverage.md>) 与
+  `unload-diagnosis-handoff.md` 记录的实测：出站 header 工具数 28 → 26）。
+- **门禁**：[`gate-tool-churn.test.mjs`](../tests/composition/gate-tool-churn.test.mjs)
+  （`TC1` 真实移除已 selected 的工具 → 执行 body=0 / 旧 ref 失效 / 无关工具不受影响；
+  `TC2` 移除后重加 → 旧选择不得复活、必须重新 load）。fixture 为
+  [`removable-tool.mjs`](../tests/composition/fixtures/removable-tool.mjs)，通过 dispose
+  该 entry 的 fiber 取得**真实移除**，不是构造出来的边角。
+- **本轮定位并修复的真缺陷**：移除 → 重加 → 重新 `tool_load` 之后，该工具**永久**停在
+  `TOOL_NOT_ADVERTISED`。根因是宿主侧的事实：`@deepseek-ai/dsh-agent-loop` 的
+  `buildRequest` **只在 header 发生变化时**才 append `request/header`
+  （`!headerEquals(baseline, header)` 才写，外加首次 / 新请求序列）。而出站 wire 在这一段
+  **逐字未变**（`frozen` 披露缓存一直留着那份定义，实测 6 次出站全都带着它），于是宿主
+  不发事件；而 `invalidateTool`（移除时）与 `reducePair`（换版本时）都已清掉 `advertised`
+  —— 两头一夹，记账永远补不回来。修法见 [`journal.mjs`](../adapters/dsh/journal.mjs)
+  的 `applyAdvertisementPass` / `replayAdvertisements`：记住最后一次观测到的 header，
+  在 load 折叠成功后据此重放一次对账。**没有放宽任何拒绝判据**（digest 仍逐字比对，
+  `currentRequestId()` 仍指向同一 header seq）。
+- **由此确立的一条实现事实**：`request/header` **不是**「每个出站请求都有」的事件。任何依赖
+  「下一轮必然有 header 事件来刷新记账」的写法都会踩这个坑。
 
 ## 3. 未验证
 

@@ -1,7 +1,7 @@
 {
   "name": "dsh-tool-discovery",
   "description": "Progressive tool discovery for DSH: three-entry control protocol with a host-independent domain kernel and a DSH adapter (source baseline, not published to npm)",
-  "version": "0.2.0-functional.2",
+  "version": "0.2.0-functional.3",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.7.0",
@@ -42,10 +42,14 @@
     "plugin/client/",
     "cordis.patch.yml"
   ],
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
   "peerDependencies": {
     "@deepseek-ai/dsh": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-tools": "0.2.1-alpha.1",
-    "@deepseek-ai/schemastery": "3.18.5-alpha.1"
+    "@deepseek-ai/schemastery": "3.18.5-alpha.1",
+    "@deepseek-ai/dsh-storage-domain": "0.2.1-alpha.1"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh": {
@@ -56,12 +60,15 @@
     },
     "@deepseek-ai/schemastery": {
       "optional": false
+    },
+    "@deepseek-ai/dsh-storage-domain": {
+      "optional": true
     }
   },
   "license": "MIT",
   "scripts": {
     "test": "node --test plugin/tests/unit/*.test.mjs",
-    "test:composition": "node --test plugin/tests/composition/gate-adapter.test.mjs plugin/tests/composition/gate-adapter-lifecycle.test.mjs plugin/tests/composition/gate-adapter-recovery.test.mjs plugin/tests/composition/gate-adapter-event-seq.test.mjs plugin/tests/composition/gate-cache-epoch.test.mjs plugin/tests/composition/gate-settings.test.mjs plugin/tests/composition/gate-review-boundaries.test.mjs",
+    "test:composition": "node --test plugin/tests/composition/gate-adapter.test.mjs plugin/tests/composition/gate-adapter-lifecycle.test.mjs plugin/tests/composition/gate-adapter-recovery.test.mjs plugin/tests/composition/gate-adapter-event-seq.test.mjs plugin/tests/composition/gate-cache-epoch.test.mjs plugin/tests/composition/gate-settings.test.mjs plugin/tests/composition/gate-review-boundaries.test.mjs plugin/tests/composition/gate-trusted-epoch.test.mjs plugin/tests/composition/gate-trusted-epoch-io.test.mjs plugin/tests/composition/gate-trusted-epoch-fork.test.mjs plugin/tests/composition/gate-trusted-epoch-failclosed.test.mjs plugin/tests/composition/gate-trusted-epoch-badrecord.test.mjs plugin/tests/composition/gate-tool-churn.test.mjs",
     "check:quality": "node plugin/quality/validate.mjs"
   }
 }

@@ -22,6 +22,7 @@ import { createLifecycle } from './lifecycle.mjs';
 import { createProjection } from './projection.mjs';
 import { createRegistryAdapter } from './registry.mjs';
 import { buildConfig, nativeToolNamesOf, publishToolChoices, resolveAlwaysVisible } from './config.mjs';
+import { createTrustedEpochHolder, createTrustedEpochStore, TRUSTED_EPOCH_REASONS } from './trusted-epoch.mjs';
 
 /**
  * schemastery 必须在**默认工厂构造之前**就位。
@@ -150,8 +151,16 @@ export function validateConfig(raw) {
 }
 
 /**
- * 构造插件 apply。`defineTool` 与 `Schema` 由调用方注入（安装树内默认按裸包名解析）。
- * @param {{defineTool?:Function, Schema?:any}} [deps]
+ * 构造插件 apply。宿主依赖由调用方注入（安装树内默认按裸包名解析）。
+ *
+ * 注入契约（生产默认 = 裸包 dynamic import；工作区无 peer 时只降级对应能力，
+ * 绝不伪造）：
+ *   * `deps.defineTool` / `deps.Schema` —— 既有。
+ *   * `deps.storageDomainApi = { defineDomain, domainTable }`
+ *     取自 `@deepseek-ai/dsh-storage-domain`。
+ *   * `deps.z` —— zod（**不是** schemastery：domain 的记录 schema 是 zod；
+ *     schemastery 只有 Config 那一层，没有 parse/safeParse）。
+ * @param {{defineTool?:Function, Schema?:any, storageDomainApi?:{defineDomain:Function, domainTable:Function}, z?:any}} [deps]
  */
 export function createProgressiveDiscoveryAdapter(deps = {}) {
   const apply = async function apply(ctx, rawConfig) {
@@ -161,6 +170,32 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
     if (typeof resolved.defineTool !== 'function') {
       throw new DomainError('INCOMPATIBLE_COMPOSITION', 'The defineTool dependency is missing.');
     }
+    // 可信周期的存储依赖：生产按裸包名解析；解析不到就**保持 unavailable 终态**，
+    // 不伪造一套内存 domain —— 那等于把"没有权威"伪装成"有权威"。
+    let storageDomainApi = deps.storageDomainApi;
+    let zod = deps.z;
+    if (zod === undefined) {
+      try {
+        const zodModule = await import('zod');
+        // zod 既是 default 导出也可能是纯命名空间导出：取能建 schema 的那个。
+        zod = zodModule.default ?? zodModule;
+      } catch (error) {
+        if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error;
+        zod = undefined;
+      }
+    }
+    if (storageDomainApi === undefined) {
+      try {
+        const sdk = await import('@deepseek-ai/dsh-storage-domain');
+        storageDomainApi = { defineDomain: sdk.defineDomain, domainTable: sdk.domainTable };
+      } catch (error) {
+        if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error;
+        storageDomainApi = undefined;
+      }
+    }
+    const trustedEpochDepsAvailable = typeof zod === 'object' && zod !== null
+      && typeof storageDomainApi?.defineDomain === 'function'
+      && typeof storageDomainApi?.domainTable === 'function';
     const config = validateConfig(rawConfig);
     const log = (message, extra) => {
       // 诊断走 info：debug 级别默认不落盘，重启后无法据此判断激活状态。
@@ -225,6 +260,11 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
 
     const clock = { now: () => Date.now() };
     const random = { bytes: (n) => randomBytes(n) };
+    /**
+     * 可信周期的存储挂载点。**始终存在**（哪怕依赖/服务都不可用）：那样会话能拿到
+     * 一个确定的 STORAGE_UNAVAILABLE 终态，而不是挂死等一个永远不会来的服务。
+     */
+    const trustedEpoch = createTrustedEpochHolder({ log });
     /** @type {Function[]} 已创建项的 disposer，按创建顺序持有 */
     const disposers = [];
 
@@ -276,6 +316,18 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
     /** 新 runtime 建立后重发一次目录（scope 工具此时才进得来）。 */
     const onRuntimeCreated = () => { refreshToolChoices(); };
 
+    /**
+     * storageDomain 到位（或从 unavailable 变为可用）之后，把那些**只**因为存储
+     * 缺席而封住的会话重试一次。迁移类终态（MISSING / INVALID）**不**重试 ——
+     * 它们要等本次 live 的真实用户 `/compact`，不能靠重试蒙混过去。
+     */
+    const retryStorageUnavailable = (lifecycle) => {
+      for (const runtime of lifecycle.sessions.values()) {
+        if (runtime.ledger?.reason !== TRUSTED_EPOCH_REASONS.UNAVAILABLE) continue;
+        lifecycle.retryBaseline(runtime);
+      }
+    };
+
     const rollback = () => {
       for (const dispose of disposers.reverse()) {
         try {
@@ -292,9 +344,58 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
     };
 
     try {
-      const lifecycle = createLifecycle({ ctx, registry, config, clock, random, query, log, getAlwaysVisible, onRuntimeCreated });
+      const lifecycle = createLifecycle({
+        ctx,
+        registry,
+        config,
+        clock,
+        random,
+        query,
+        log,
+        getAlwaysVisible,
+        onRuntimeCreated,
+        trustedEpoch: trustedEpoch,
+      });
       lifecycleRef = lifecycle;
       own(() => lifecycle.dispose());
+
+      // ---- 8.5 可信周期存储：动态子 fiber，作用域内 open/close ----
+      //
+      // **不**把 storageDomain 放进 apply.inject：那会让宿主在整个组合里因为它而
+      // 隐性不激活本插件。`ctx.inject(['storageDomain'], cb)` 是两参动态子 fiber ——
+      // 服务到位才跑，跑在**自己的**作用域里，disposer 归它自己。
+      //
+      // 服务缺席 / open 失败都不是"降级继续"，而是会话级的确定终态
+      // STORAGE_UNAVAILABLE（0 request，见 trusted-epoch.mjs）。
+      ctx.inject(['storageDomain'], (storageCtx) => {
+        if (!trustedEpochDepsAvailable) {
+          log('trusted-epoch:deps-missing', {
+            note: 'zod / @deepseek-ai/dsh-storage-domain 不可用；会话将落 STORAGE_UNAVAILABLE 并停止发请求。',
+          });
+          return;
+        }
+        const store = createTrustedEpochStore({
+          facility: storageCtx.storageDomain,
+          defineDomain: storageDomainApi.defineDomain,
+          domainTable: storageDomainApi.domainTable,
+          z: zod,
+          log,
+        });
+        trustedEpoch.attach(store);
+        storageCtx.effect(() => {
+          // 幂等 open（并发共享同一次），失败只落终态，不重试、不挂死。
+          const opening = store.ensureOpen();
+          opening.then((outcome) => {
+            if (outcome?.ok === true) retryStorageUnavailable(lifecycle);
+            else log('trusted-epoch:unavailable', { reason: outcome?.reason, failure: store.failure });
+          });
+          return async () => {
+            trustedEpoch.detach();
+            await opening.catch(() => {});
+            await store.close();
+          };
+        }, 'trusted-epoch store');
+      });
 
       // resolve 必须在注册前可用，但 runtime 在首次 assemble 时建立
       const resolveRuntime = (exec) => {
@@ -320,6 +421,23 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       // ---- 7. session 与 registry 事件 ----
       own(ctx.on('session/event', (session, event) => lifecycle.onSessionEvent(session, event)));
       own(ctx.on('session/disposed', (session) => lifecycle.disposeSession(session.id)));
+
+      // ---- 7.5 post-next 的 agent/pre-step 屏障 ----
+      //
+      // 宿主 assemble(:907) → waterfall('agent/pre-step')(:911) → 仍返回旧 assembly
+      // (:921-923)，而 basic 的自动压缩就在这个 waterfall 内
+      // （dsh-compaction-basic:839）。所以一次成功压缩换掉的名单，会**先**被那份
+      // 尚未发送的 assembly 带出去，而新周期的可信记录可能还没 durable。
+      // 这里在 next() 之后等本次新 epoch 的 put 落定；期间尊重宿主取消信号，
+      // 不新增任何超时。
+      own(ctx.on('agent/pre-step', async (payload, next) => {
+        const decision = await next();
+        const sessionId = payload?.agent?.session?.id;
+        if (typeof sessionId === 'string') {
+          await lifecycle.awaitEpochRecord(sessionId, payload?.signal);
+        }
+        return decision;
+      }));
       // 工具集变了（MCP 接入/断开、插件热注册）→ 目录元数据跟着更新，设置面板重读。
       own(ctx.on('tools/change', () => {
         lifecycle.onRegistryChange();
@@ -356,6 +474,8 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
           lifecycle,
           /** 设置面板的目录写入由宿主 settings 服务完成，这里只提供读侧事实。 */
           currentAlwaysVisible: getAlwaysVisible,
+          /** 某会话的可信周期基线（门禁/诊断只读观测面）。 */
+          trustedBaseline: (sessionId) => lifecycle.baselineOf(sessionId),
         });
       }
     } catch (error) {
