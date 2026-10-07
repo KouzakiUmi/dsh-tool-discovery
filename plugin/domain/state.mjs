@@ -5,7 +5,7 @@
 // 而是从 canonical tool/call 重算输入路径、从当前绑定重算四字段身份后逐项比较。
 //
 // 纯函数约束:不读时钟、不读随机、不写文件、不发事件;所有外部事实由 ResolverContext 传入。
-import { deepEqualCanonical, digestOf } from './canonical.mjs';
+import { canonicalJson, deepEqualCanonical, digestOf, utf8Bytes } from './canonical.mjs';
 import { isNonEmptyString, isPlainObject } from './util.mjs';
 import { createText } from './locale.mjs';
 
@@ -26,12 +26,33 @@ export const RECEIPT_VERSION = 2;
  */
 
 /**
+ * 披露缓存条目：一次真实出站请求里**逐字**投给模型的那份 wire。
+ *
+ * 与 `selected`（执行授权）严格分离：
+ *   * `selected` 随撤权 / 定义变化 / 成功压缩**立刻**失效 —— 它决定 guard 放不放行。
+ *   * `frozen` 在正常缓存周期内**只增不改**：加载下一个工具、预算压力、无关事件都
+ *     不得让它消失，也不得让它的内容或位置被静默改写。唯一的清空点是成功压缩。
+ * @typedef {Object} FrozenTool
+ * @property {string} toolId
+ * @property {string} name
+ * @property {string} revision
+ * @property {string} schemaDigest
+ * @property {{name:string, description?:string, parameters?:object}} wire
+ * @property {number} bytes 冻结 wire 的 UTF-8 字节（预算按此核算）
+ * @property {number} order  首次披露次序（投影据此追加，不重排）
+ * @property {number} epoch  冻结时所处的缓存周期
+ */
+
+/**
  * @typedef {Object} SessionDiscoveryState
  * @property {string} sessionId
  * @property {'restoring'|'ready'|'incompatible'} mode
  * @property {Map<string, SelectionRecord>} selected
  * @property {Map<string, {toolId:string,name:string,revision:string,schemaDigest:string,requestId:string,at:number}>} advertised
  * @property {Map<string, {reason:string, at:number, revision:string|null}>} invalidated
+ * @property {Map<string, FrozenTool>} frozen 披露缓存（只增不改，成功压缩才清）
+ * @property {number} frozenOrder 追加计数
+ * @property {number} epoch 缓存周期号，每次成功压缩 +1
  * @property {number} lastAppliedSeq
  * @property {{applied:number,duplicatesIgnored:number,outOfOrderIgnored:number,gaps:number[],rejected:number,coldCandidateRestores:number}} integrity
  */
@@ -44,6 +65,9 @@ export function createState(sessionId) {
     selected: new Map(),
     advertised: new Map(),
     invalidated: new Map(),
+    frozen: new Map(),
+    frozenOrder: 0,
+    epoch: 1,
     lastAppliedSeq: 0,
     integrity: {
       applied: 0,
@@ -295,10 +319,66 @@ export function reducePair(state, pair, ctx) {
 }
 
 /**
+ * 冻结一次真实出站披露的 wire —— 披露缓存的唯一写入口。
+ *
+ * **幂等且不可更新**：已冻结的 toolId 一律原样保留，哪怕这次观测到的 wire 与
+ * 冻结值不同（宿主换版）。换版必须走一次成功压缩的 reset，而不是让模型上下文里
+ * 已披露的 schema 静默变形。调用方负责在漂移时仍按原 guard 拒绝执行。
+ *
+ * @param {SessionDiscoveryState} state
+ * @param {{toolId:string,name:string,revision:string,schemaDigest:string,wire:object}} rec
+ * @returns {SessionDiscoveryState}
+ */
+export function freezeTool(state, rec) {
+  if (state.frozen.has(rec.toolId)) return state;
+  const next = cloneState(state);
+  next.frozen.set(rec.toolId, {
+    toolId: rec.toolId,
+    name: rec.name,
+    revision: rec.revision,
+    schemaDigest: rec.schemaDigest,
+    wire: rec.wire,
+    bytes: utf8Bytes(canonicalJson(rec.wire)),
+    order: next.frozenOrder,
+    epoch: next.epoch,
+  });
+  next.frozenOrder += 1;
+  return next;
+}
+
+/**
+ * 推进缓存周期：清空披露缓存与执行授权。
+ *
+ * 唯一的合法调用方是**成功**的上下文压缩（手动 /compact 与自动压缩在宿主里同走
+ * `compactSurfaceRegion`，因此没有第二条路径需要绑定）。失败 / 取消 / no-op 的压缩
+ * 一律不得调用它 —— 否则模型会白白丢掉已披露的 schema 而没有任何对价。
+ *
+ * 常驻工具（alwaysVisible）与三入口从来不在 `selected` / `frozen` 里（受保护、
+ * 每轮请求自带），因此天然不受影响。
+ * @param {SessionDiscoveryState} state
+ * @returns {SessionDiscoveryState}
+ */
+export function resetCacheEpoch(state) {
+  const next = cloneState(state);
+  next.selected = new Map();
+  next.advertised = new Map();
+  next.invalidated = new Map();
+  next.frozen = new Map();
+  next.frozenOrder = 0;
+  next.epoch = state.epoch + 1;
+  return next;
+}
+
+/** 披露缓存按首次披露次序排列（投影据此纯追加，不重排既有项）。 */
+export function frozenWireList(state) {
+  return Array.from(state.frozen.values()).sort((a, b) => a.order - b.order);
+}
+
+/**
  * 记录一次**真实出站请求**的曝光集合(来自最终 canonical request/header)。
  * 只对 selected 中版本完全一致的项建立 advertised;调试/预览装配不算。
  * @param {SessionDiscoveryState} state
- * @param {{requestId:string, toolId:string, name:string, revision:string, schemaDigest:string, now:number}} rec
+ * @param {{requestId:string, toolId:string, name:string, revision:string, schemaDigest:string}} rec
  */
 export function recordAdvertisement(state, rec) {
   const next = cloneState(state);
@@ -406,6 +486,7 @@ function cloneState(state) {
     selected: new Map(state.selected),
     advertised: new Map(state.advertised),
     invalidated: new Map(state.invalidated),
+    frozen: new Map(state.frozen),
     integrity: { ...state.integrity, gaps: state.integrity.gaps.slice() },
   };
 }

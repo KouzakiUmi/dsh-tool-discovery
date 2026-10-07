@@ -169,7 +169,21 @@ export function createJournal(deps) {
   // 常驻工具同样出现在真实出站 header 里，必须计入 allowed。
   // 漏掉这一组会把白名单工具判成"别的 listener 泄漏"，进而把整会话标为
   // compositionBypass，此后所有非白名单工具一律 INCOMPATIBLE_COMPOSITION。
-  const alwaysVisible = new Set(deps.alwaysVisible ?? []);
+  //
+  // 名单走 provider 而非静态数组：成功压缩会重开一个周期并换上新的常驻名单，
+  // provider 读的是 runtime 上那份（由 lifecycle 在周期边界就地替换）。
+  const alwaysVisibleProvider = typeof deps.alwaysVisibleProvider === 'function'
+    ? deps.alwaysVisibleProvider
+    : () => new Set(deps.alwaysVisible ?? []);
+  const onEpochReset = typeof deps.onEpochReset === 'function' ? deps.onEpochReset : () => {};
+  /**
+   * canonical request/header 观测点：这份 tools 数组**已经发出去**了。
+   * 于是"未发送刷新"必须立刻失效 —— 否则一次事后发生的手动/空闲压缩会去改写
+   * 已经进入历史的那份数组。宿主 dsh-agent-loop 会在 pre-step 之后返回旧 assembly
+   * （lib/index.js:921-923），所以这个清理点是必需的，不是保险。
+   */
+  const onRequestHeader = typeof deps.onRequestHeader === 'function' ? deps.onRequestHeader : () => {};
+  const onEpochRestore = typeof deps.onEpochRestore === 'function' ? deps.onEpochRestore : () => {};
   const reportBypass = deps.reportBypass ?? (() => {});
 
   /** live 路径的 canonical call 缓存：callSeq → {callId, input}（只存 tool_load）。 */
@@ -192,6 +206,29 @@ export function createJournal(deps) {
   let sealed = false;
   /** fail closed 的原因；restore 不得用它把 incompatible 重新置 ready。 */
   let sealedReason = null;
+  /**
+   * 缓存周期边界。
+   *
+   * 手动 `/compact` 与自动压缩在宿主里**同走** `compactSurfaceRegion`
+   * （dsh-compaction-basic lib/index.js:450-521），因此不需要绑定 compact 命令本身，
+   * 只要旁路订阅 session 事件流即可覆盖两条路径。那条路径：
+   *   * `session.append('compaction/start', lifecycle)`（lifecycle 含 compactionId）；
+   *   * 摘要落地时 `append('compaction/summary', ...)`（commitCompactionBody）；
+   *   * 成功 → `append('compaction/end', lifecycle)`；
+   *   * 失败/取消 → 也 append end，但 data 多一个 `error: errorChain(error)`。
+   * 宿主自己的日志格式校验就是这条规则（dsh-session-format-v3-to-v4
+   * lib/index.js:723「successful compaction/end requires one summary」，持久化读路径
+   * 会据此判损坏）。本插件的"成功"判据与宿主一致：**匹配 start 的 compactionId +
+   * 恰好一次 compaction/summary + end 不带 `error`**。缺任一条都按未提交处理 ——
+   * 模型上下文原样保留，绝不白白丢掉已披露的 schema。
+   *
+   * `openCompactions` 只装"已见 start、未见 end"的 compactionId：孤立 end（无匹配
+   * start）不得重置 —— 那是损坏或不属于本会话的日志，不构成"一次成功压缩"。
+   * `lastSuccessCompactionEndSeq` 是恢复时的折叠下界：压缩之前签发的 load 回执
+   * **不得**在冷恢复时复活（新周期里模型必须重新 load）。
+   */
+  const openCompactions = new Map();
+  let lastSuccessCompactionEndSeq = -1;
 
   function failClosedUncertain(reason) {
     sealed = true;
@@ -210,11 +247,19 @@ export function createJournal(deps) {
     const headerTools = event.data?.header?.tools;
     if (!Array.isArray(headerTools)) return;
     latestHeaderSeq = event.seq;
+    // 这次出站已经发生：本次投影的"未发送刷新"到此为止。
+    onRequestHeader(event);
 
     // 披露集合的**权威**观测点：真实出站 request/header。
-    // 若这里出现三入口 / 可信框架保留 / 有效 selected 之外的工具，
+    // 若这里出现三入口 / 可信框架保留 / 有效 selected / 披露缓存之外的工具，
     // 说明有别的 listener 在我们投影之后又重加了 schema → 整会话 fail closed。
-    const allowed = new Set([...entryNames, ...frameworkRetained, ...alwaysVisible, ...activeSelectedNames()]);
+    // 披露缓存必须在白名单里：撤权/换版的工具仍按冻结 wire 继续披露（guard 另行
+    // 拒绝执行），把它当泄漏会误封整个会话。
+    const allowed = new Set([
+      ...entryNames, ...frameworkRetained, ...alwaysVisibleProvider(),
+      ...activeSelectedNames(),
+      ...frozenNames(),
+    ]);
     const leaked = headerTools.map((tool) => tool?.name).filter((name) => !allowed.has(name));
     if (leaked.length > 0) {
       reportBypass({ sessionId, names: [...new Set(leaked)] });
@@ -227,8 +272,8 @@ export function createJournal(deps) {
     for (const [toolId, selection] of state.selected) {
       const advertisedTool = byName.get(selection.name);
       if (advertisedTool === undefined) continue;
-      const digest = digestOf(wireOfSchema(advertisedTool));
-      if (digest !== selection.schemaDigest) {
+      const wire = wireOfSchema(advertisedTool);
+      if (digestOf(wire) !== selection.schemaDigest) {
         // 出站定义与选中时的定义不一致 → 不算已披露（不静默放行）
         log('advertisement:definition-drift', { sessionId, toolId, name: selection.name });
         continue;
@@ -239,6 +284,8 @@ export function createJournal(deps) {
         name: selection.name,
         revision: selection.revision,
         schemaDigest: selection.schemaDigest,
+        // 逐字冻结这一次真正投给模型的 wire：顺序与内容此后不再变。
+        wire,
       });
     }
   }
@@ -267,6 +314,38 @@ export function createJournal(deps) {
     if (buffering) buffer.push(event);
     if (event.type === 'request/header') {
       recordAdvertisements(event);
+      return;
+    }
+    // 缓存周期的唯一重置源：见 openCompactions 的口径说明。
+    if (event.type === 'compaction/start') {
+      const id = event.data?.compactionId;
+      if (typeof id === 'string' && id.length > 0) openCompactions.set(id, { summarized: false });
+      return;
+    }
+    if (event.type === 'compaction/summary') {
+      const open = typeof event.data?.compactionId === 'string' ? openCompactions.get(event.data.compactionId) : undefined;
+      if (open !== undefined && !open.summarized) open.summarized = true;
+      return;
+    }
+    if (event.type === 'compaction/end') {
+      const id = event.data?.compactionId;
+      const open = typeof id === 'string' ? openCompactions.get(id) : undefined;
+      if (open === undefined || !openCompactions.delete(id)) {
+        log('compaction:end-without-start', { sessionId, seq: event.seq });
+        return;
+      }
+      if (event.data?.error !== undefined || open.summarized !== true) {
+        // 失败 / 取消 / 无摘要的 end：压缩没有真正提交，模型上下文原样保留 —— 不重置。
+        log('compaction:not-successful-no-reset', { sessionId, seq: event.seq, summarized: open.summarized });
+        return;
+      }
+      lastSuccessCompactionEndSeq = event.seq;
+      liveCalls.clear();
+      engine.resetCacheEpoch(scope, 'compaction-end');
+      // 周期重开：此时（且仅此时）换上新的常驻名单，并刷新那份**尚未发送**的投影
+      // （见 projection.mjs 的"未发送刷新"段：宿主在 pre-step 之后会返回旧 assembly）。
+      onEpochReset('compaction-end');
+      log('compaction:cache-epoch-reset', { sessionId, seq: event.seq, compactionId: id });
       return;
     }
     if (event.type === 'tool/call') {
@@ -359,7 +438,59 @@ export function createJournal(deps) {
       }
       // own-only 折叠：只把本会话拥有的事件交给 fold（继承前缀整段滤除）
       const ownEvents = merged.filter((event) => event.seq >= ownSeqStart);
-      const pairs = foldPairs(ownEvents);
+      // 成功压缩边界：压缩之前签发的 load 回执**不复活**。只认有匹配 start 的
+      // 无 error 的 end —— 失败/取消的压缩没有提交，不能丢掉模型已有上下文。
+      for (const event of ownEvents) {
+        if (event.type === 'compaction/start') {
+          const id = event.data?.compactionId;
+          if (typeof id === 'string' && id.length > 0) openCompactions.set(id, { summarized: false });
+        } else if (event.type === 'compaction/summary') {
+          const open = typeof event.data?.compactionId === 'string' ? openCompactions.get(event.data.compactionId) : undefined;
+          if (open !== undefined && !open.summarized) open.summarized = true;
+        } else if (event.type === 'compaction/end') {
+          const id = event.data?.compactionId;
+          const open = typeof id === 'string' ? openCompactions.get(id) : undefined;
+          if (open === undefined || !openCompactions.delete(id)) continue;
+          if (event.data?.error !== undefined || open.summarized !== true) continue;
+          lastSuccessCompactionEndSeq = event.seq;
+        }
+      }
+      const pairs = foldPairs(ownEvents).filter((p) => p.seq > lastSuccessCompactionEndSeq);
+      // 该 epoch 的初始常驻名单 = 周期起点之后**第一个** request/header 实际披露的工具，
+      // 扣掉三入口与框架保留项。取"第一个"是有意的：它必然早于本周期任何 tool/call，
+      // 所以里面不含任何按需加载项，就是这一周期开始时真正常驻的东西。
+      //
+      // 用途：冷恢复一个**有历史**的会话时，不能直接用此刻的配置值 —— 用户可能在
+      // 这个周期开始之后改过设置。若照抄新配置，会把旧周期悄悄改成新周期，破坏
+      // "变更只在下一个周期生效"。有事实就以事实为准；查不到（全新周期、没发过请求）
+      // 才落回当前配置。
+      const epochStart = lastSuccessCompactionEndSeq + 1;
+      let restoredNames = null;
+      for (const event of ownEvents) {
+        if (event.seq < epochStart) continue;
+        if (event.type === 'tool/call') break;
+        if (event.type !== 'request/header') continue;
+        const headerTools = event.data?.header?.tools;
+        if (!Array.isArray(headerTools)) continue;
+        const names = [];
+        for (const tool of headerTools) {
+          const name = tool?.name;
+          if (typeof name !== 'string' || name.length === 0) continue;
+          if (entryNames.has(name) || frameworkRetained.has(name)) continue;
+          names.push(name);
+        }
+        restoredNames = [...new Set(names)];
+        break;
+      }
+      if (restoredNames !== null) {
+        onEpochRestore(restoredNames);
+        log('restore:epoch-names', {
+          sessionId,
+          epochStart,
+          count: restoredNames.length,
+          source: 'first-request-header',
+        });
+      }
       const outcome = engine.restore(pairs, scope);
       buffering = false;
       buffer = [];
@@ -368,8 +499,10 @@ export function createJournal(deps) {
         events: merged.length,
         ownEvents: ownEvents.length,
         pairs: pairs.length,
+        compactionBoundary: lastSuccessCompactionEndSeq,
         inheritedBoundary: ownSeqStart,
         outcome,
+        epochNames: restoredNames,
       });
       return outcome;
     })();
@@ -406,6 +539,14 @@ export function createJournal(deps) {
       names.push(selection.name);
     }
     return names;
+  }
+
+  /**
+   * 本会话在当前缓存周期内已逐字披露过的工具名。撤权 / 换版**不**把它移除：
+   * 披露缓存的清空点只有成功压缩（见 openCompactions 段）。
+   */
+  function frozenNames() {
+    return engine.getFrozenWire(scope).map((f) => f.name);
   }
 
   /**

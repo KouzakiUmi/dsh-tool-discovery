@@ -21,7 +21,36 @@ import { createGuard } from './guard.mjs';
 import { createLifecycle } from './lifecycle.mjs';
 import { createProjection } from './projection.mjs';
 import { createRegistryAdapter } from './registry.mjs';
-import { CORE_TOOL_NAMES } from '../../domain/core-tools.mjs';
+import { buildConfig, nativeToolNamesOf, publishToolChoices, resolveAlwaysVisible } from './config.mjs';
+
+/**
+ * schemastery 必须在**默认工厂构造之前**就位。
+ *
+ * 原因：Cordis 对 `fiber.runtime.Config` 做首次 resolveConfig 是在 fiber 建立时，
+ * 早于 apply 体。`dsh-settings` 读 `entry.fiber.runtime.Config` 时
+ * （lib/index.js:539）也只会得到已有产物，**不会**回头补建 volatile 引用
+ * （`:417` 的 ACTIVE 判断只关乎 describe 能否进行）。若在 apply 里才赋
+ * `apply.Config`，首个配置解析已经错过，`alwaysVisible` 就不是 volatile ref，
+ * 设置面板的即时写入会退化成一次 remount 式的重解析 —— 正好会打断我们最在意的
+ * 缓存稳定性。所以这里用顶层 await 在模块加载期就把 Schema 拿稳。
+ *
+ * 工作区（无 node_modules、无 peer）下这会失败。只有明确的
+ * ERR_MODULE_NOT_FOUND 被容忍并降级为"没有 Config 面板"；其余错误照抛。
+ * 降级时 **不** 给 apply 挂 Config，宿主读到 undefined 就是真的没有 ——
+ * 绝不谎称默认入口带 Config 或在线可用。
+ */
+let defaultSchema;
+/** @type {{ package: string, reason: string }|null} 默认入口拿不到 Schema 时的说明 */
+export let configSchemaUnavailable = null;
+try {
+  defaultSchema = (await import('@deepseek-ai/schemastery')).default;
+} catch (error) {
+  if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error;
+  configSchemaUnavailable = {
+    package: '@deepseek-ai/schemastery',
+    reason: 'ERR_MODULE_NOT_FOUND: install @deepseek-ai/schemastery (or pass deps.Schema) to get the settings surface; the plugin still works without it.',
+  };
+}
 
 /** 默认可信类别表（部署可用 Config 覆盖）。category 只影响可发现性，不授予资格。
  *  部署未覆盖的类别回落到 locale 表——它们是模型可见的导航文案。 */
@@ -81,10 +110,19 @@ export function validateConfig(raw) {
   if (config.budgets !== undefined) requirePlainObject(config.budgets, 'budgets');
 
   // alwaysVisible：默认放行 DSH 自带工具，使过滤只作用于后装的插件/MCP 工具。
-  if (config.alwaysVisible !== undefined && !Array.isArray(config.alwaysVisible)) {
+  //
+  // 配了 schemastery Config 时这里是 **volatile 引用**而不是数组（设置面板的即时
+  // 写入正是靠它不重挂载），所以先归一再校验。归一后拿到的是**当前**值；周期中途
+  // 的变更由 lifecycle 在周期边界自己去 fiber 上读，不靠这份快照。
+  const alwaysVisibleRaw = (config.alwaysVisible !== null
+    && typeof config.alwaysVisible === 'object'
+    && typeof config.alwaysVisible.get === 'function')
+    ? config.alwaysVisible.get()
+    : config.alwaysVisible;
+  if (alwaysVisibleRaw !== undefined && alwaysVisibleRaw !== null && !Array.isArray(alwaysVisibleRaw)) {
     throw new DomainError('INCOMPATIBLE_COMPOSITION', 'alwaysVisible must be an array of strings.');
   }
-  for (const name of config.alwaysVisible ?? []) {
+  for (const name of alwaysVisibleRaw ?? []) {
     if (typeof name !== 'string' || name.length === 0) {
       throw new DomainError('INCOMPATIBLE_COMPOSITION', 'alwaysVisible must contain non-empty strings.');
     }
@@ -97,15 +135,19 @@ export function validateConfig(raw) {
     categoryConfig,
     budgets: config.budgets,
     frameworkRetained: Object.freeze([...frameworkRetained]),
-    alwaysVisible: Object.freeze([...new Set([...CORE_TOOL_NAMES, ...(config.alwaysVisible ?? [])])]),
+    // 替换语义，不是并集：配置给出什么就是什么（CORE_TOOL_NAMES 只作 Config 默认值，
+    // 见 config.mjs）。显式 `[]` 确实清空默认项，被移除的工具之后仍可经普通
+    // tool_load 重新加载 —— engine 的 protected 判据随之放开。三个发现入口不在
+    // 这个字段里，由 ENTRY_TOOL_NAMES 单独保护，任何配置都动不了。
+    alwaysVisible: Object.freeze(resolveAlwaysVisible(alwaysVisibleRaw)),
     // 保留该键仅为兼容既有配置；缺失 sessionQuery 已不再拒绝激活。
     allowMissingSessionQuery: config.allowMissingSessionQuery === true,
   };
 }
 
 /**
- * 构造插件 apply。`defineTool` 由调用方注入（安装树内默认按裸包名解析）。
- * @param {{defineTool?:Function}} [deps]
+ * 构造插件 apply。`defineTool` 与 `Schema` 由调用方注入（安装树内默认按裸包名解析）。
+ * @param {{defineTool?:Function, Schema?:any}} [deps]
  */
 export function createProgressiveDiscoveryAdapter(deps = {}) {
   const apply = async function apply(ctx, rawConfig) {
@@ -182,6 +224,54 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
     /** @type {Function[]} 已创建项的 disposer，按创建顺序持有 */
     const disposers = [];
 
+    /**
+     * 此刻生效的常驻名单。设置面板写入后 Cordis 会 **重新 resolveConfig 并换成
+     * 一个新对象**（cordis lib/index.js:1355 `this.config = this._resolveConfig(...)`），
+     * apply 期捕获的 rawConfig 里的旧 volatile ref 就此失效。故优先读 fiber 上的
+     * 活 config，读不到才回落捕获值（首次加载时两者相同）。
+     *
+     * 只在 lifecycle 的两个**周期边界**被读（建立 runtime / 成功压缩后重开），
+     * 周期中途配置变更因此不改变任何在跑的会话。
+     */
+    const getAlwaysVisible = () => {
+      const live = ctx.fiber?.config?.alwaysVisible;
+      if (live !== undefined) return resolveAlwaysVisible(live);
+      return resolveAlwaysVisible(config.alwaysVisible);
+    };
+
+    /** lifecycle 在下方创建；刷新回调需要它，故用前向引用。 */
+    let lifecycleRef = null;
+
+    /** 把当前目录写进 Config 的 meta 并让设置面板重读。 */
+    // 注意发布目标是 **apply.Config**（已构建的 Config 树），不是 schemastery 模块
+    // 本身 —— 后者没有 dict.alwaysVisible。
+    const refreshToolChoices = () => {
+      if (apply.Config === undefined) return false;
+      // 目录 = 全局视图 ∪ **各会话 runtime 的目录**。
+      // 只看 view(undefined) 会漏掉 agent-scoped 工具（scope-tools、MCP 服务器、
+      // 插件在自己 agent.ctx 上注册的一切）—— 而那恰恰是用户最需要能勾选的第三方
+      // 工具。漏掉它们，面板就只剩"当前已选"可看，无法添加任何第三方工具。
+      const names = new Set(nativeToolNamesOf(ctx.tools.view(undefined)));
+      for (const runtime of lifecycleRef?.sessions?.values() ?? []) {
+        for (const entry of runtime.engine.getCatalog()?.entries?.values() ?? []) {
+          if (typeof entry?.name === 'string' && entry.name.length > 0) names.add(entry.name);
+        }
+      }
+      // 三入口恒定、可选集里不得出现（nativeToolNamesOf 已滤过一次，这里兜底）。
+      names.delete('tool_list');
+      names.delete('tool_search');
+      names.delete('tool_load');
+      if (!publishToolChoices(apply.Config, [...names].sort())) return false;
+      // describe() 每次都重跑 schema.toJSON() 并比对 raw（dsh-settings:421-435），
+      // meta 一变 revision 就自增并 emit settings/document-updated；invalidate()
+      // 只是把这次重算排进微任务。
+      ctx.get('settings')?.invalidate?.();
+      return true;
+    };
+
+    /** 新 runtime 建立后重发一次目录（scope 工具此时才进得来）。 */
+    const onRuntimeCreated = () => { refreshToolChoices(); };
+
     const rollback = () => {
       for (const dispose of disposers.reverse()) {
         try {
@@ -198,7 +288,8 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
     };
 
     try {
-      const lifecycle = createLifecycle({ ctx, registry, config, clock, random, query, log });
+      const lifecycle = createLifecycle({ ctx, registry, config, clock, random, query, log, getAlwaysVisible, onRuntimeCreated });
+      lifecycleRef = lifecycle;
       own(() => lifecycle.dispose());
 
       // resolve 必须在注册前可用，但 runtime 在首次 assemble 时建立
@@ -217,15 +308,25 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       }
 
       // ---- 5. 投影 ----
-      own(createProjection({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, alwaysVisible: config.alwaysVisible, log }));
+      own(createProjection({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, log }));
 
       // ---- 6. guard（只增拒绝） ----
-      own(createGuard({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, alwaysVisible: config.alwaysVisible, locale, log }));
+      own(createGuard({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, locale, log }));
 
       // ---- 7. session 与 registry 事件 ----
       own(ctx.on('session/event', (session, event) => lifecycle.onSessionEvent(session, event)));
       own(ctx.on('session/disposed', (session) => lifecycle.disposeSession(session.id)));
-      own(ctx.on('tools/change', () => lifecycle.onRegistryChange()));
+      // 工具集变了（MCP 接入/断开、插件热注册）→ 目录元数据跟着更新，设置面板重读。
+      own(ctx.on('tools/change', () => {
+        lifecycle.onRegistryChange();
+        refreshToolChoices();
+      }));
+      // 首次发布目录：此时三个入口已注册，其余可见工具就是用户能勾选的集合。
+      refreshToolChoices();
+      log('activate:config-surface', {
+        configSchema: configSchema !== undefined,
+        configSchemaUnavailable,
+      });
 
       // ---- 8. 配置语义校验（预算/类别）：非法配置必须走完整回滚 ----
       const probe = createDiscoveryEngine({
@@ -249,6 +350,8 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
           sessions: lifecycle.sessions,
           registry,
           lifecycle,
+          /** 设置面板的目录写入由宿主 settings 服务完成，这里只提供读侧事实。 */
+          currentAlwaysVisible: getAlwaysVisible,
         });
       }
     } catch (error) {
@@ -265,6 +368,22 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
   // 宿主工具表不受影响——这是良性失败；若可用，则 apply 一定在它就绪之后运行，
   // 恢复路径拿到的就是真实服务。
   apply.inject = ['tools', 'systemPrompt', 'sessionQuery'];
+
+  // Config 必须在**本工厂返回之前**挂上：宿主对 fiber.runtime.Config 的首次
+  // resolveConfig 发生在 fiber 建立时，早于 apply 体，晚一秒就拿不到 volatile
+  // 引用（见文件头 schema 解析段的说明）。
+  const configSchema = deps.Schema ?? defaultSchema;
+  if (configSchema !== undefined) {
+    apply.Config = buildConfig(configSchema);
+    publishToolChoices(apply.Config, []);
+  } else {
+    // 降级：明确记录缺依赖，但不谎称有 Config —— apply.Config 保持 undefined，
+    // 宿主读到 undefined 就是真的没有设置面板。插件其余能力不受影响。
+    apply.ConfigUnavailable = configSchemaUnavailable ?? {
+      package: '@deepseek-ai/schemastery',
+      reason: 'no schemastery Schema available',
+    };
+  }
   return apply;
 }
 

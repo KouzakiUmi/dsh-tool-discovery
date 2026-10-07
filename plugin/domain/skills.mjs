@@ -64,13 +64,14 @@ export function skillBytes(skills) {
 }
 
 /**
- * 校验一次 load 的技能总字节预算(超限 → BUDGET_EXCEEDED,不截断技能正文)。
+ * 校验一次 load 的技能总字节上限(超限 → BUDGET_EXCEEDED,不截断技能正文)。
+ * `maxSkillBytes` 为 null = 上限默认关闭，不做任何判定。
  * @param {Array<object|null>} skills
- * @param {number} maxSkillBytes
+ * @param {number|null} maxSkillBytes
  */
 export function assertSkillBudget(skills, maxSkillBytes) {
   const bytes = skillBytes(skills);
-  if (bytes > maxSkillBytes) {
+  if (maxSkillBytes !== null && bytes > maxSkillBytes) {
     throw new DomainError('BUDGET_EXCEEDED', t(['detail', 'skillResponseOverBudget']), { bytes, maxSkillBytes });
   }
   return bytes;

@@ -85,22 +85,35 @@
 |---|---|
 | `PROTOCOL_VERSION` | `2` |
 | `ENTRY_TOOL_NAMES` | `tool_list` / `tool_search` / `tool_load` |
-| `initialSchemaTargetTokens` | `2048` |
-| `maxInitialBytes` | `8192` |
-| `maxInitialCategories` | `12` |
-| `defaultListLimit` / `maxListLimit` | `20` / `20` |
-| `maxListResultBytes` | `4096` |
+| `initialSchemaTargetTokens` | `2048`（**历史目标值，当前代码路径未强制**；不是实测的初始 2K 保证） |
+| `maxInitialBytes` | `8192`（同上，历史目标值） |
+| `maxInitialCategories` | `12`（受控分类的自然总数，用于自然遍历，**不是**权限门槛） |
+| `defaultListLimit` | `20`（默认输出策略，始终有界） |
+| `defaultSearchLimit` | `5`（默认输出策略，始终有界） |
 | `listCursorTtlMs` | `900000` |
-| `maxQueryCodePoints` | `512` |
-| `defaultSearchLimit` / `maxSearchLimit` | `5` / `8` |
-| `maxSearchResultBytes` | `6144` |
-| `maxLoadBatch` | `4` |
-| `maxActiveTools` | `12` |
-| `maxActiveSchemaBytes` | `49152` |
-| `maxSkillBytesPerLoad` | `12288` |
 | `candidateTtlMs` | `900000` |
 | 展示模式 | `native-only`（非 native 报 `INCOMPATIBLE_PRESENTATION`，不静默降级） |
 | fork 选择继承 | `reset`（子会话不隐式继承父 `selected` / `ref` / `cursor` / `advertised`） |
+
+### 3.1 可选限额：默认关闭
+
+下列**硬上限默认全部关闭**（`null`），不构成本插件自带的风险阈值。`null` = 关闭；给出**显式正整数**即启用该项限额。`Infinity` 被 `resolveBudgets` 拒绝（无法进入 JSON）。
+
+| 可选限额键 | 历史默认值（**已废弃**） | 当前默认值 |
+|---|---|---|
+| `maxActiveTools` | `12` | `null` |
+| `maxActiveSchemaBytes` | `49152` | `null` |
+| `maxLoadBatch` | `4` | `null` |
+| `maxListLimit` | `20` | `null` |
+| `maxSearchLimit` | `8` | `null` |
+| `maxListResultBytes` | `4096` | `null` |
+| `maxSearchResultBytes` | `6144` | `null` |
+| `maxQueryCodePoints` | `512` | `null` |
+| `maxSkillBytesPerLoad` | `12288` | `null` |
+
+关闭硬上限**不等于**输出无界：`defaultListLimit`、`defaultSearchLimit`、分页与各项 TTL 仍然有界，只是默认策略之上没有额外天花板。
+
+启用限额是有代价的权衡而非免费的安全加成：超限时只**拒绝新增项**（任何配置下都不会卸载已披露的工具来腾位），模型必须拆批，增加轮次、延迟与总成本，也可能诱使用户提前压缩——但同样可以选择**调高或关闭自己设置的限额**，这始终是最直接的出路。限额不等同于优化：默认建议保持关闭。
 
 完整语义与逐项说明见[协议与数据模型](<02-protocol-and-data-model.md>)。
 

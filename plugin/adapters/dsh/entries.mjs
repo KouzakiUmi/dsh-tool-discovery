@@ -63,7 +63,16 @@ export function createEntryDefinitions(deps) {
   // 缺省英文表：即使调用方未注入 text，definition 仍是完整的英文文案，
   // 不会出现 undefined 泄漏到模型可见的 description。
   const text = deps.text ?? createText();
-  const d = (name, key) => text.t(['entry', name, key]) ?? '';
+  /**
+   * 按**实际存在**的键路径取值。文案表的分组是历史遗留（candidate/tool_load
+   * 的若干键放在 tool_list 下），此处逐条显式指向现存键，而不是做全表迁移：
+   * 缺失键退化为空串会静默发给模型，所以每一处都必须指对。
+   */
+  const d = (...path) => text.t(path) ?? '';
+  // tool_load 的 action/names/candidates 有自己的键；ref/revision 的说明与
+  // tool_load 无关（tool_search 也产出它们），复用 tool_list 下的现存文案。
+  const load = (key) => d('entry', 'tool_load', key);
+  const shared = (key) => d('entry', 'tool_list', key);
   return [
     definitionFor({ ...deps, toolName: 'tool_list', operation: 'list' }, {
       name: 'tool_list',
@@ -71,10 +80,10 @@ export function createEntryDefinitions(deps) {
       description:
         'Browse discoverable tool names by category in bounded pages. Returns complete native names only — no descriptions, no schemas, no parameters. Never loads anything.',
       parameters: {
-        view: { type: 'string', enum: ['available', 'loaded', 'categories', 'state'], description: d('tool_list', 'view') },
-        category: { type: 'string', description: d('tool_list', 'category') },
-        cursor: { type: 'string', description: d('tool_list', 'cursor') },
-        limit: { type: 'integer', description: d('tool_list', 'limit') },
+        view: { type: 'string', enum: ['available', 'loaded', 'categories', 'state'], description: d('entry', 'tool_list', 'view') },
+        category: { type: 'string', description: d('entry', 'tool_list', 'category') },
+        cursor: { type: 'string', description: d('entry', 'tool_list', 'cursor') },
+        limit: { type: 'integer', description: d('entry', 'tool_list', 'limit') },
       },
       run: (engine, scope, args) => engine.handleList(args, scope),
     }),
@@ -84,9 +93,9 @@ export function createEntryDefinitions(deps) {
       description:
         'Find a few candidate tools for a task described in natural language, within one controlled category. Returns candidate cards and short-lived refs only; loading happens later via tool_load.',
       parameters: {
-        category: { type: 'string', required: true, description: d('tool_search', 'category') },
-        query: { type: 'string', required: true, description: d('tool_search', 'query') },
-        limit: { type: 'integer', description: d('tool_search', 'limit') },
+        category: { type: 'string', required: true, description: d('entry', 'tool_search', 'category') },
+        query: { type: 'string', required: true, description: d('entry', 'tool_search', 'query') },
+        limit: { type: 'integer', description: d('entry', 'tool_search', 'limit') },
       },
       run: (engine, scope, args) => engine.handleSearch(args, scope),
     }),
@@ -94,23 +103,26 @@ export function createEntryDefinitions(deps) {
       name: 'tool_load',
       operation: 'load',
       description:
-        'Explicitly select tools by exact native name, or by candidate ref+revision from tool_search; also unloads previously selected tools. Takes effect on the NEXT request — it never executes a target tool.',
+        'Explicitly select tools by exact native name, or by candidate ref+revision from tool_search. Disclosed tools accumulate and stay available until the context is compacted — there is no unload. Takes effect on the NEXT request — it never executes a target tool.',
       parameters: {
-        action: { type: 'string', enum: ['load', 'unload'], description: d('tool_load', 'loadAction') },
+        action: {
+          type: 'string',
+          enum: ['load'],
+          description: [load('action'), shared('loadAction')].filter((s) => s.length > 0).join(' '),
+        },
         candidates: {
           type: 'array',
-          description: d('tool_load', 'candidates'),
+          description: load('candidates'),
           items: {
             type: 'object',
             additionalProperties: false,
             properties: {
-              ref: { type: 'string', required: true, description: d('tool_load', 'candidateRef') },
-              revision: { type: 'string', required: true, description: d('tool_load', 'candidateRevision') },
+              ref: { type: 'string', required: true, description: shared('candidateRef') },
+              revision: { type: 'string', required: true, description: shared('candidateRevision') },
             },
           },
         },
-        names: { type: 'array', description: d('tool_load', 'namesPath'), items: { type: 'string' } },
-        toolIds: { type: 'array', description: d('tool_load', 'toolIdsUnload'), items: { type: 'string' } },
+        names: { type: 'array', description: load('names'), items: { type: 'string' } },
       },
       async run(engine, scope, args, exec) {
         const outcome = await engine.handleLoad(args, scope, { operationId: `op_${exec.callId}` });

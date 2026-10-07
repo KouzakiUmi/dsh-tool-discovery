@@ -24,7 +24,7 @@ function responseToChunks (response) {
     chunks.push({ type: 'block-end', index, block: { type: 'text', text: response.text } })
     index += 1
   }
-  chunks.push({ type: 'usage', usage: { inputTokens: 4, outputTokens: 2 } })
+  chunks.push({ type: 'usage', usage: response.usage ?? { inputTokens: 4, outputTokens: 2 } })
   chunks.push({ type: 'finish', reason: { kind: 'stop' } })
   return chunks
 }

@@ -6,6 +6,8 @@ import { DomainError } from '../../domain/errors.mjs';
 import { resolveBudgets } from '../../domain/budgets.mjs';
 
 const B = resolveBudgets({});
+// 显式配置上限的预算：用于"上限仍生效"的正例/负例
+const CAPPED = resolveBudgets({ maxListLimit: 20, maxSearchLimit: 8, maxQueryCodePoints: 512, maxLoadBatch: 4 });
 
 test('list:available/loaded 需要 category', () => {
   assert.throws(() => validateListRequest({ view: 'available' }, B), (e) => e.code === 'INVALID_ARGS');
@@ -23,9 +25,13 @@ test('list:categories 只允许 view/cursor/limit', () => {
   assert.throws(() => validateListRequest({ view: 'categories', category: 'files' }, B), (e) => e.code === 'INVALID_ARGS');
 });
 
-test('list:limit 越界报错(模型不能提高硬限)', () => {
-  assert.throws(() => validateListRequest({ view: 'available', category: 'files', limit: 21 }, B), (e) => e.code === 'INVALID_ARGS');
+test('list:默认关闭 limit 硬上限,但显式配置上限后仍拒绝越界', () => {
+  // 默认：硬上限关闭 → 模型可以要更大的页，但默认输出策略仍是 20
   assert.equal(validateListRequest({ view: 'available', category: 'files' }, B).limit, 20);
+  assert.equal(validateListRequest({ view: 'available', category: 'files', limit: 21 }, B).limit, 21);
+  // 显式配置上限后照旧拒绝
+  assert.throws(() => validateListRequest({ view: 'available', category: 'files', limit: 21 }, CAPPED), (e) => e.code === 'INVALID_ARGS');
+  assert.equal(validateListRequest({ view: 'available', category: 'files' }, CAPPED).limit, 20);
 });
 
 test('list:未知字段一律 INVALID_ARGS', () => {
@@ -43,24 +49,30 @@ test('list:拒绝身份/路径/自由文本/代码类字段', () => {
   }
 });
 
-test('search:category/query 必填,limit 上限 8,默认 5', () => {
+test('search:category/query 必填;默认 5,硬上限默认关闭、显式配置后为 8', () => {
   assert.throws(() => validateSearchRequest({ query: 'x' }, B), (e) => e.code === 'INVALID_ARGS');
   assert.throws(() => validateSearchRequest({ category: 'files' }, B), (e) => e.code === 'INVALID_ARGS');
-  const d = validateSearchRequest({ category: 'files', query: 'x' }, B);
-  assert.equal(d.limit, 5);
-  assert.throws(() => validateSearchRequest({ category: 'files', query: 'x', limit: 9 }, B), (e) => e.code === 'INVALID_ARGS');
-  assert.equal(validateSearchRequest({ category: 'files', query: 'x', limit: 8 }, B).limit, 8);
+  // 默认输出策略：5（关闭硬上限不改默认策略）
+  assert.equal(validateSearchRequest({ category: 'files', query: 'x' }, B).limit, 5);
+  // 默认关闭 → 更大的 limit 被接受
+  assert.equal(validateSearchRequest({ category: 'files', query: 'x', limit: 9 }, B).limit, 9);
+  // 显式配置上限后照旧拒绝
+  assert.throws(() => validateSearchRequest({ category: 'files', query: 'x', limit: 9 }, CAPPED), (e) => e.code === 'INVALID_ARGS');
+  assert.equal(validateSearchRequest({ category: 'files', query: 'x', limit: 8 }, CAPPED).limit, 8);
 });
 
 test('search:没有 action 字段', () => {
   assert.throws(() => validateSearchRequest({ category: 'files', query: 'x', action: 'load' }, B), (e) => e.code === 'INVALID_ARGS');
 });
 
-test('search:超长 query 拒绝(按 code point)', () => {
+test('search:超长 query 默认放行,显式配置上限后按 code point 拒绝', () => {
   const long = '中'.repeat(600);
-  assert.throws(() => validateSearchRequest({ category: 'files', query: long }, B), (e) => e.code === 'INVALID_ARGS');
+  // 默认关闭长度上限
+  assert.equal(validateSearchRequest({ category: 'files', query: long }, B).query.length, 600);
+  // 显式配置上限后照旧拒绝
+  assert.throws(() => validateSearchRequest({ category: 'files', query: long }, CAPPED), (e) => e.code === 'INVALID_ARGS');
   const okQ = '中'.repeat(500);
-  assert.doesNotThrow(() => validateSearchRequest({ category: 'files', query: okQ }, B));
+  assert.doesNotThrow(() => validateSearchRequest({ category: 'files', query: okQ }, CAPPED));
 });
 
 test('load:candidates 与 names 必须二选一(F18)', () => {
@@ -71,9 +83,14 @@ test('load:candidates 与 names 必须二选一(F18)', () => {
   assert.equal(c.candidates.length, 1);
 });
 
-test('load:批次上限 4,数组非空', () => {
+test('load:数组非空;批次上限默认关闭、显式配置为 4 时生效', () => {
   const five = Array.from({ length: 5 }, (_, i) => ({ ref: `c${i}`, revision: 'r' }));
-  assert.throws(() => validateLoadRequest({ candidates: five }, B), (e) => e.code === 'INVALID_ARGS');
+  // 默认关闭 → 5 个一批放行
+  assert.equal(validateLoadRequest({ candidates: five }, B).candidates.length, 5);
+  // 显式配置上限后照旧拒绝
+  assert.throws(() => validateLoadRequest({ candidates: five }, CAPPED), (e) => e.code === 'INVALID_ARGS');
+  assert.throws(() => validateLoadRequest({ names: Array.from({ length: 5 }, (_, i) => `n${i}`) }, CAPPED), (e) => e.code === 'INVALID_ARGS');
+  // 空数组始终拒绝（这不是限额问题）
   assert.throws(() => validateLoadRequest({ names: [] }, B), (e) => e.code === 'INVALID_ARGS');
   assert.throws(() => validateLoadRequest({ candidates: [] }, B), (e) => e.code === 'INVALID_ARGS');
 });
@@ -88,13 +105,17 @@ test('load:重复 ref 的冲突 revision 是参数错误', () => {
   assert.equal(same.candidates.length, 2);
 });
 
-test('load:unload 只接受非空 toolIds', () => {
-  assert.throws(() => validateLoadRequest({ action: 'unload' }, B), (e) => e.code === 'INVALID_ARGS');
-  assert.throws(() => validateLoadRequest({ action: 'unload', toolIds: [] }, B), (e) => e.code === 'INVALID_ARGS');
-  assert.throws(() => validateLoadRequest({ action: 'unload', names: ['x'] }, B), (e) => e.code === 'INVALID_ARGS');
-  assert.throws(() => validateLoadRequest({ action: 'unload', toolIds: ['a'], names: ['x'] }, B), (e) => e.code === 'INVALID_ARGS');
-  const u = validateLoadRequest({ action: 'unload', toolIds: ['a', 'a', 'b'] }, B);
-  assert.deepEqual(u.toolIds, ['a', 'b']);
+test('load:unload 一律拒绝(模型不得自主卸载,清空点只有成功压缩)', () => {
+  for (const raw of [
+    { action: 'unload' },
+    { action: 'unload', toolIds: [] },
+    { action: 'unload', names: ['x'] },
+    { action: 'unload', toolIds: ['a'], names: ['x'] },
+    // 即使参数完全合法也不放行：契约层面没有这条路径
+    { action: 'unload', toolIds: ['a', 'a', 'b'] },
+  ]) {
+    assert.throws(() => validateLoadRequest(raw, B), (e) => e.code === 'INVALID_ARGS', JSON.stringify(raw));
+  }
 });
 
 test('load:load 不接受 toolIds;未知 action 拒绝', () => {

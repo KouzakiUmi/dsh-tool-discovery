@@ -5,7 +5,7 @@
 // 冻结的接口说明见 progressive-v2/reports/domain-api.md。
 // 签名若需变更,必须先在该文件追加 delta 并通知主代理与独立 reviewer。
 
-export { PROTOCOL_VERSION, CONTROLLED_CATEGORIES, DEFAULT_BUDGETS, ENTRY_TOOL_NAMES, ERROR_CODES, errorCodes, MATCH_REASONS, SIGNAL_WEIGHTS, SYNONYM_INDEX } from './constants.mjs';
+export { PROTOCOL_VERSION, CONTROLLED_CATEGORIES, DEFAULT_BUDGETS, OPTIONAL_LIMIT_KEYS, ENTRY_TOOL_NAMES, ERROR_CODES, errorCodes, MATCH_REASONS, SIGNAL_WEIGHTS, SYNONYM_INDEX } from './constants.mjs';
 export { createText, normalizeLocale, tableFor, SUPPORTED_LOCALES, DEFAULT_LOCALE, setDomainLocale, domainText } from './locale.mjs';
 export { detectHostLocale } from './host-locale.mjs';
 export { DomainError, isDomainError, toDomainError } from './errors.mjs';
@@ -31,6 +31,7 @@ export {
 export {
   createState, reducePair, recordAdvertisement, evaluateCall, invalidateTool,
   recomputeSelectionIdentity, parseReceiptShape, deriveInputPath,
+  freezeTool, resetCacheEpoch, frozenWireList,
   RECEIPT_KIND, RECEIPT_VERSION,
 } from './state.mjs';
 export { createDiscoveryEngine } from './engine.mjs';

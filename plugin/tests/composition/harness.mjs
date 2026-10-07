@@ -26,6 +26,8 @@ export const SHARED_FIXTURES = {
 
 export const LOCAL = {
   'adapter': path.resolve(HERE, 'adapter-entry.mjs'),
+  // 仅 gate-settings 用：额外注入 schemastery Schema，从而让 adapter 带 Config。
+  'adapter-schema': path.resolve(HERE, 'adapter-entry-schema.mjs'),
   'approval-policy': path.join(LOCAL_FIXTURES, 'approval-policy.mjs'),
   'conflict-entry': path.join(LOCAL_FIXTURES, 'conflict-entry.mjs'),
   'readd-catalog-listener': path.join(LOCAL_FIXTURES, 'readd-catalog-listener.mjs'),
@@ -34,8 +36,10 @@ export const LOCAL = {
 
 /** 组装 entry 列表：服务 → 选定 fixture → adapter（最后装配，便于观察冲突面）。
  *  extraServices：追加的安装内公共服务 entry（如 subagents / fork provider），
- *  形如 { id, name, config? }；仅测试装配用，不改 contracts/。 */
-export function planEntries ({ tmpRoot, fixtures = [], adapter = null, omitSessionQuery = false, adapterFirst = false, extraServices = [] }) {
+ *  形如 { id, name, config? }；仅测试装配用，不改 contracts/。
+ *  adapterSchema：只影响**新增**的 settings 门禁——让 adapter entry 改用注入 Schema
+ *  的那个 shim。默认 false，既有验收路径原样保留。 */
+export function planEntries ({ tmpRoot, fixtures = [], adapter = null, omitSessionQuery = false, adapterFirst = false, extraServices = [], adapterSchema = false }) {
   const services = [
     ...serviceEntries(path.join(tmpRoot, 'sessions'))
       .filter((entry) => !(omitSessionQuery && entry.id === 'session-query')),
@@ -48,7 +52,7 @@ export function planEntries ({ tmpRoot, fixtures = [], adapter = null, omitSessi
   }))
   const adapterEntry = adapter === null ? null : {
     id: 'progressive-discovery',
-    name: fixtureFileUrl(LOCAL.adapter),
+    name: fixtureFileUrl(adapterSchema ? LOCAL['adapter-schema'] : LOCAL.adapter),
     config: adapter
   }
   if (adapterEntry === null) return [...services, ...fixtureEntries]
