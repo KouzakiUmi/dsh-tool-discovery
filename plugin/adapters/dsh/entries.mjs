@@ -103,7 +103,7 @@ export function createEntryDefinitions(deps) {
       name: 'tool_load',
       operation: 'load',
       description:
-        'Explicitly select tools by exact native name, or by candidate ref+revision from tool_search. Prefer loading all tools needed for the task in a single batch to maximize cache reuse. Disclosed tools accumulate and stay available until the context is compacted — there is no unload. Takes effect on the NEXT request — it never executes a target tool.',
+        'Explicitly select tools by exact native name, or by candidate ref from tool_search — the candidate revision is optional and inferred from the version that ref is bound to. Prefer loading all tools needed for the task in a single batch to maximize cache reuse. Disclosed tools accumulate and stay available until the context is compacted — there is no unload. Takes effect on the NEXT request — it never executes a target tool.',
       parameters: {
         action: {
           type: 'string',

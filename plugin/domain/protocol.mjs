@@ -125,9 +125,11 @@ export function validateSearchRequest(raw, budgets = DEFAULT_BUDGETS) {
 
 /**
  * 校验 tool_load 请求。candidates 与 names 必须且只能提供一项。
+ * 候选的 `revision` 可选:缺省由 ref 绑定的版本推导(engine 侧 `item.revision ?? rec.revision`),
+ * 故 ref 才是版本权威——工具在 ref 签发后变化仍会 STALE_CANDIDATE,不会被静默升级。
  * @param {unknown} raw
  * @param {Readonly<import('./index.mjs').BudgetConfigDTO>} [budgets]
- * @returns {{action:'load'|'unload', candidates?:Array<{ref:string,revision:string}>, names?:string[], toolIds?:string[]}}
+ * @returns {{action:'load'|'unload', candidates?:Array<{ref:string,revision?:string}>, names?:string[], toolIds?:string[]}}
  */
 export function validateLoadRequest(raw, budgets = DEFAULT_BUDGETS) {
   const o = requireObjectRoot(raw);
@@ -156,7 +158,7 @@ export function validateLoadRequest(raw, budgets = DEFAULT_BUDGETS) {
     const arr = o.candidates;
     if (!Array.isArray(arr) || arr.length === 0) throw new DomainError('INVALID_ARGS', t(['detail', 'candidatesNotArray']));
     if (budgets.maxLoadBatch !== null && arr.length > budgets.maxLoadBatch) throw new DomainError('INVALID_ARGS', t(['detail', 'candidatesOverBatch']));
-    /** @type {Array<{ref:string,revision:string}>} */
+    /** @type {Array<{ref:string,revision?:string}>} */
     const out = [];
     /** @type {Map<string,string>} */
     const seen = new Map();
@@ -167,16 +169,22 @@ export function validateLoadRequest(raw, budgets = DEFAULT_BUDGETS) {
       if (!isNonEmptyString(item.ref)) {
         throw new DomainError('INVALID_ARGS', t(['detail', 'candidateNeedsRefRevision']));
       }
-      if (item.revision !== undefined && !isNonEmptyString(item.revision)) {
+      // 可选字段的"未给出"有三种写法:键缺失、null、''。模型对可选字段最常见的就是
+      // 后两种,而它们表达的仍是同一个意思——按 ref 绑定的版本推导。真正类型不对
+      // (数字/对象/数组/布尔)才是参数错误,不能靠"必须是字符串"把它们混为一谈。
+      const revision = item.revision === undefined || item.revision === null || item.revision === ''
+        ? undefined
+        : item.revision;
+      if (revision !== undefined && !isNonEmptyString(revision)) {
         throw new DomainError('INVALID_ARGS', t(['detail', 'candidateNeedsRefRevision']));
       }
       const prev = seen.get(item.ref);
-      if (prev !== undefined && item.revision !== undefined && prev !== item.revision) {
+      if (prev !== undefined && revision !== undefined && prev !== revision) {
         throw new DomainError('INVALID_ARGS', t(['detail', 'duplicateRefConflict']));
       }
-      if (item.revision !== undefined) seen.set(item.ref, item.revision);
+      if (revision !== undefined) seen.set(item.ref, revision);
       const cand = { ref: item.ref };
-      if (item.revision !== undefined) cand.revision = item.revision;
+      if (revision !== undefined) cand.revision = revision;
       out.push(cand);
     }
     return { action: 'load', candidates: out };
