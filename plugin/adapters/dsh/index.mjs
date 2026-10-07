@@ -107,7 +107,11 @@ export function validateConfig(raw) {
       throw new DomainError('INCOMPATIBLE_COMPOSITION', `categoryConfig.${id} 需要 title 与 capabilitySummary。`);
     }
   }
-  if (config.budgets !== undefined) requirePlainObject(config.budgets, 'budgets');
+  // budgets：null 与缺省**同义** —— Config 里 budgets 的默认值就是 null（"关闭
+  // 覆盖"，见 buildConfig），schemastery 也会把用户显式写的 null 原样交给 apply。
+  // resolveBudgets 对 undefined/null 一律回落 DEFAULT_BUDGETS，所以这里放行 null，
+  // 只把"既不是缺省也不是 null 的非对象"（字符串 / 数组 / 数字 / 布尔）当形状错误。
+  if (config.budgets !== undefined && config.budgets !== null) requirePlainObject(config.budgets, 'budgets');
 
   // alwaysVisible：默认放行 DSH 自带工具，使过滤只作用于后装的插件/MCP 工具。
   //

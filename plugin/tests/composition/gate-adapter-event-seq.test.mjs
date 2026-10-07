@@ -408,6 +408,15 @@ function deferReadSession (query) {
   return { state, release() { state.released = true; for (const w of state.waiters.splice(0)) w() } }
 }
 
+/** 轮询到真实 readSession 确实进入了 await（否则下面几条断言会空过）。 */
+async function waitUntilEntered (defer, timeoutMs = 10000) {
+  const started = Date.now()
+  while (!defer.state.entered) {
+    if (Date.now() - started > timeoutMs) throw new Error('等待 readSession 进入 await 超时')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
 test('SEQ6: fail closed / 恢复中 → 真实出站只留三入口、隐藏 schema 不外泄、body=0', async () => {
   const { store, queueResponse } = await storeOf()
   store.reset()
@@ -446,7 +455,9 @@ test('SEQ6: fail closed / 恢复中 → 真实出站只留三入口、隐藏 sch
     'fail closed 后隐藏工具的完整 schema 不得出现在真实出站里')
   assert.equal(store.bodyCount('s6-guess'), 0, 'fail closed 后隐藏工具 body 不得执行')
 
-  // (c) 恢复中（restoring，非 ready）同样不披露；恢复完成后照常披露（正控）
+  // (c) 冷恢复 **pending**：装配挂起，一条请求都不发；落定后照常披露（正控）。
+  //     旧断言在这里要求"恢复中发出只留三入口的请求"——那冻结的正是本轮修掉的缺陷
+  //     （模型上下文里已披露的工具在这一轮凭空消失）。pending 的语义是**不发**。
   await handle.dispose()
   const boot2 = await bootAdapterComposition({
     fixtures: ['mock-provider', 'inherited-tools', 'scope-tools'],
@@ -460,18 +471,25 @@ test('SEQ6: fail closed / 恢复中 → 真实出站只留三入口、隐藏 sch
     agentOptions: { provider: 'fixture-mock', model: 'fixture-model' },
   })
   handles.push(resumed)
+  const beforePending = store.requests.length
   queueResponse({ text: 'during restore' })
-  await userTurn(resumed, 'Continue while restoring.')
+  const pendingTurn = userTurn(resumed, 'Continue while restoring.')
+  await waitUntilEntered(defer)
   assert.ok(defer.state.entered, 'readSession 必须真实进入 await（否则本用例空过）')
   const restoring = runtimeOf(boot2.ctx, 'seq6-a')
+  assert.equal(restoring.restoring, true, '前置：观察点必须落在恢复 pending 的窗口内')
   assert.notEqual(restoring.engine.getState(restoring.scope).mode, 'ready',
-    '前置：出站时恢复尚未完成（mode 非 ready）')
-  assert.deepEqual(namesOfRequest(store), ['tool_list', 'tool_load', 'tool_search'],
-    `恢复中不得披露任何 selection：${namesOfRequest(store).join(', ')}`)
+    '前置：pending 不得被当成 ready')
+  await new Promise((resolve) => setTimeout(resolve, 120))
+  assert.equal(store.requests.length, beforePending,
+    `pending 期间不得发出任何请求（更不得发缩水的那一份）；实际：${JSON.stringify(store.requests.slice(beforePending).map((request) => (request.tools ?? []).map((tool) => tool.name)))}`)
 
   defer.release()
   const outcome = await restoring.journal.whenRestored()
   assert.equal(outcome.mode, 'ready', '恢复完成后会话必须 ready（正控）')
+  await pendingTurn
+  assert.ok(namesOfRequest(store).includes('fixture_hidden_inherited'),
+    `正控：恢复落定后的第一条请求就已披露恢复项：${namesOfRequest(store).join(', ')}`)
   queueResponse({ text: 'after restore' })
   await userTurn(resumed, 'Continue after restore.')
   assert.ok(namesOfRequest(store).includes('fixture_hidden_inherited'),

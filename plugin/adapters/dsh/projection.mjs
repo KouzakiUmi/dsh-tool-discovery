@@ -26,6 +26,21 @@
 //   一旦 canonical `request/header` 观测到，这份数组已经发出去，journal 立即清掉回调
 //   —— 否则一次手动空闲压缩会去改写已发送的历史数组。
 //   普通配置更新**不**调它：只有成功压缩重开周期才刷新。
+//
+// **冷恢复窗口**（本轮新增）：
+//   runtime 的冷恢复是异步的（`journal.restore()` 要 `await query.readSession`），
+//   而宿主的第一次 `preStep` 不等它 —— `systemPrompt.assemble()` 先于恢复完成跑完，
+//   于是"已加载段"整段没生成，**发出去的是一份缩水的 tools**：模型上下文里本就有的
+//   已披露工具在这一轮凭空消失，而且这条缩水 header 会成为日志里本周期最后一条 header。
+//   修法：装配时若 runtime 仍在恢复，就 `await lifecycle.whenReady(sessionId)`。
+//   **仍在恢复 = 不发请求**，没有超时降级：任何"等够久就发缩水"的兜底都只是把同一个
+//   缺陷推到若干秒之后。等待被终止的途径只有宿主本轮的取消信号（见 awaitRestore），
+//   以及恢复自己**失败** —— 那时返回 `mode:'incompatible'`，下面的门槛只留基线，
+//   guard 照旧按 `evaluateCall` 拒执行。fail closed 与"仍在 pending"是两种不同状态：
+//   前者仍会发请求（只带基线），后者根本不发。
+//   死锁证据：`whenReady` 返回的就是 `journal.restore()` 那一个 promise，它只在
+//   `await query.readSession(...)` 上让出；读盘不会回调 `system-prompt/assemble`，
+//   `ensureRuntime` 里的 `refreshToolChoices()` 也只是同步排一个微任务。无环形等待。
 import { DomainError, ENTRY_TOOL_NAMES } from '../../domain/index.mjs';
 
 /**
@@ -37,6 +52,34 @@ export function createProjection(deps) {
   // 常驻工具名单**不在**这里取用：它是 per-runtime 的（见 lifecycle.adoptEpochNames），
   // 成功压缩会重开一个周期并换上新名单，apply 期的静态快照到那时已经过期。
   const log = deps.log ?? (() => {});
+
+  /**
+   * 宿主本轮给出的全量工具 → name → schema 索引。
+   *
+   * **先查重、再建表**：`new Map(tools.map(t => [t.name, t]))` 会静默吞掉同名重复
+   * 定义并保留**最后一个**，而宿主允许多个 systemPrompt tool provider 各吐一份同名
+   * schema（`dsh-system-prompt` 的 `collected` 只是 `push(...schemas)`，`orderTools`
+   * 也不去重）。重复一旦落到「已加载段」，就会拿后一份定义去覆盖/比对冻结 wire，
+   * 漂移检测随之失真 —— 正是文件头承诺的「不得有重复名」没有兑现的那一半。
+   * 常驻基线段原本就有查重，但只覆盖 `allowed` 里的名字；这里对**整个** incoming
+   * 统一判定，基线段与已加载段同等对待。非字符串名沿用既有跳过语义，不新增限制。
+   * @param {any[]} incoming
+   * @returns {Map<string, any>}
+   */
+  function indexIncoming(incoming) {
+    const names = new Set();
+    const byName = new Map();
+    for (const tool of incoming) {
+      const name = tool?.name;
+      if (typeof name !== 'string' || name.length === 0) continue;
+      if (names.has(name)) {
+        throw new DomainError('INCOMPATIBLE_COMPOSITION', `duplicate disclosed tool "${name}"`);
+      }
+      names.add(name);
+      byName.set(name, tool);
+    }
+    return byName;
+  }
 
   /**
    * 按 runtime 的**当前**状态重算一次投影。纯读：可安全地重复调用。
@@ -53,7 +96,7 @@ export function createProjection(deps) {
     for (const name of frameworkRetained) allowed.add(name);
     for (const name of runtime.alwaysNameSet ?? []) allowed.add(name);
 
-    const byName = new Map(incoming.map((tool) => [tool.name, tool]));
+    const byName = indexIncoming(incoming);
 
     // 常驻基线段保持宿主给出的相对次序（原语义），但**不参与**加载工具的排序。
     /** @type {any[]} */
@@ -109,6 +152,45 @@ export function createProjection(deps) {
     return kept;
   }
 
+  /**
+   * 等本会话的冷恢复**落定**（仅在 `runtime.restoring` 时调用）。
+   *
+   * 没有超时降级：仍在恢复就一直等，绝不发缩水的那一份。等待只有两个出口 ——
+   *   * `whenReady` 落定：`ready` → 正常投影；`incompatible` → 只留基线（既有
+   *     fail closed 语义，本次等待没有放宽它）。
+   *   * 宿主本轮的取消信号（`context.signal`，由 `assembleContextFor` 注入）：
+   *     抛 abort reason，让这一轮沿宿主自己的取消/错误管线退出，而不是由我们
+   *     另立一个时限。
+   * @param {any} runtime
+   * @param {AbortSignal} [signal] 宿主本轮的取消信号
+   * @returns {Promise<string|undefined>} 恢复结果 mode，仅供日志
+   */
+  async function awaitRestore(runtime, signal) {
+    const sessionId = runtime.scope.sessionId;
+    const pending = Promise.resolve(lifecycle.whenReady(sessionId));
+    const report = (outcome) => {
+      log('projection:restore-wait', { sessionId, mode: outcome?.mode, restoring: runtime.restoring });
+      return outcome?.mode;
+    };
+    if (signal === undefined || signal === null || typeof signal.addEventListener !== 'function') {
+      return report(await pending);
+    }
+    if (signal.aborted === true) throw signal.reason ?? new Error(`assemble aborted before the restore of "${sessionId}" settled`);
+    /** @type {(() => void)|undefined} */
+    let onAbort;
+    try {
+      return report(await Promise.race([
+        pending,
+        new Promise((_resolve, reject) => {
+          onAbort = () => reject(signal.reason ?? new Error(`assemble aborted while the restore of "${sessionId}" is still pending`));
+          signal.addEventListener('abort', onAbort, { once: true });
+        }),
+      ]));
+    } finally {
+      if (onAbort !== undefined) signal.removeEventListener('abort', onAbort);
+    }
+  }
+
   return ctx.on('system-prompt/assemble', async (assembly, context, next) => {
     const transformed = await next();
     const agent = context?.agent;
@@ -120,8 +202,11 @@ export function createProjection(deps) {
       throw new DomainError('INCOMPATIBLE_PRESENTATION', `tools mode "${mode}" is not supported`);
     }
 
-    // 首次触达即建立本会话 runtime（可能仍处于 restoring → 只留三入口）
+    // 首次触达即建立本会话 runtime（可能仍处于 restoring）
     const runtime = lifecycle.runtimeFor(agent.session, scope);
+    // 冷恢复未落定就先等它落定：否则这一轮会把已披露工具整段丢掉（见文件头
+    //「冷恢复窗口」）。仍在恢复 = 不发请求；已决失败 = 只留基线（fail closed）。
+    if (runtime.restoring) await awaitRestore(runtime, context?.signal);
     const incoming = Array.isArray(transformed?.tools) ? transformed.tools : [];
     const kept = project(runtime, scope, incoming);
 

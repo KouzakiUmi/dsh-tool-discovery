@@ -10,7 +10,9 @@ import {
   initialSelectionView, INITIAL_TOOL_CHOICES, DEFAULT_ALWAYS_VISIBLE, FIXED_ENTRY_NAMES,
 } from '../../adapters/dsh/config.mjs'
 import * as model from '../../client/model.mjs'
+import { validateConfig } from '../../adapters/dsh/index.mjs'
 import { CORE_TOOL_NAMES } from '../../domain/core-tools.mjs'
+import { DEFAULT_BUDGETS, OPTIONAL_LIMIT_KEYS, resolveBudgets } from '../../domain/index.mjs'
 
 const Schema = (await import(dshModule('@deepseek-ai/schemastery'))).default
 
@@ -128,4 +130,79 @@ test('S-U13: model.buildRows 目录 + 选择合成面板行，固定入口不进
   assert.equal(built.rows.find((r) => r.name === 'missing_one').available, false)
   assert.equal(built.missingCount, 1)
   assert.equal(built.selectedCount, 2)
+})
+
+// --- budgets 的 null 语义：校验层与 resolveBudgets 必须同源 -------------------------
+//
+// 背景：`buildConfig` 把 budgets 的默认值定为 null（"关闭覆盖"），用户把"关闭覆盖"
+// 显式写成 null 是**文档内**的合法写法；`resolveBudgets` 也对 null 回落 DEFAULT_BUDGETS。
+// 但形状校验曾把 null 当"非对象"拒掉，于是走真实 Loader 的显式 null 会让整个
+// adapter 激活失败。下面这组断言锁定两个层面的**同一条判据**：
+//   * budgets 缺省 / null / {} / 有效显式预算 → 校验通过；
+//   * 字符串 / 数组 / 其他非对象 → 仍然拒绝（INCOMPATIBLE_COMPOSITION）；
+//   * 通过校验后 resolveBudgets 也必须能吃下同一个值（不允许两层判据漂移）。
+const BUDGETS_ACCEPTED = [
+  { label: 'undefined（缺省）', value: undefined },
+  { label: 'null（关闭覆盖）', value: null },
+  { label: '空对象', value: {} },
+  { label: '显式正整数', value: { maxActiveTools: 3 } },
+  { label: '显式 null 限额', value: { maxListLimit: null } },
+]
+const BUDGETS_REJECTED = [
+  { label: '字符串', value: '8' },
+  { label: '数组', value: [8] },
+  { label: '数字', value: 8 },
+  { label: '布尔', value: true },
+]
+
+test('S-U14: validateConfig 接受 budgets 的 undefined / null / {} / 有效显式预算', () => {
+  for (const { label, value } of BUDGETS_ACCEPTED) {
+    const raw = value === undefined ? {} : { budgets: value }
+    assert.doesNotThrow(() => validateConfig(raw), `必须接受 budgets ${label}`)
+  }
+  assert.equal(validateConfig({}).budgets, undefined, '缺省不得凭空造出 budgets')
+  assert.equal(validateConfig({ budgets: null }).budgets, null, 'null 必须原样透传给 resolveBudgets')
+  assert.deepEqual(validateConfig({ budgets: { maxActiveTools: 3 } }).budgets, { maxActiveTools: 3 })
+})
+
+test('S-U15: budgets 是字符串 / 数组 / 其他非对象时仍被拒（INCOMPATIBLE_COMPOSITION）', () => {
+  for (const { label, value } of BUDGETS_REJECTED) {
+    assert.throws(() => validateConfig({ budgets: value }),
+      (error) => error?.code === 'INCOMPATIBLE_COMPOSITION',
+      `budgets 为 ${label} 时必须拒绝`)
+  }
+})
+
+test('S-U16: 校验层与 resolveBudgets 判据同源 —— 通过校验的值都能被 resolveBudgets 吃下', () => {
+  for (const { label, value } of [...BUDGETS_ACCEPTED, ...BUDGETS_REJECTED]) {
+    const accepted = BUDGETS_ACCEPTED.some((item) => item.value === value && item.label === label)
+    let validationPassed = true
+    try {
+      validateConfig(value === undefined ? {} : { budgets: value })
+    } catch {
+      validationPassed = false
+    }
+    assert.equal(validationPassed, accepted, `validateConfig 对 budgets ${label} 的判定与预期不符`)
+
+    let resolved = true
+    try {
+      resolveBudgets(value)
+    } catch {
+      resolved = false
+    }
+    assert.equal(resolved, accepted, `resolveBudgets 对 budgets ${label} 的判定与校验层漂移`)
+  }
+})
+
+test('S-U17: budgets 为 null / {} 时硬限额仍默认关闭（不是"被清零"也不是"被启用"）', () => {
+  for (const budgets of [null, {}]) {
+    const resolved = resolveBudgets(budgets)
+    for (const key of OPTIONAL_LIMIT_KEYS) {
+      assert.equal(resolved[key], null, `budgets=${JSON.stringify(budgets)} 时 ${key} 应保持关闭`)
+    }
+    assert.deepEqual(resolved, { ...DEFAULT_BUDGETS }, '缺省覆盖必须精确回落 DEFAULT_BUDGETS')
+  }
+  // 正控制：显式正整数确实启用同一项，避免上面在空转
+  assert.equal(resolveBudgets({ maxActiveTools: 3 }).maxActiveTools, 3)
+  assert.equal(resolveBudgets({}).maxActiveTools, null)
 })
