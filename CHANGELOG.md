@@ -116,8 +116,9 @@ Commands run on this branch, with the numbers from those runs:
 - `STALE_CANDIDATE` is largely unreachable (a definition change bumps the generation and kills the ref
   first, yielding `CANDIDATE_UNAVAILABLE`); pre-existing semantics, not introduced here.
 - Not touched: dead exports, the uncleaned `registry` generation / last-seen / binding-state maps,
-  the double locale accessors in `engine.mjs`, and `docs/01 §1.3`'s claim of an inverted index that
-  does not exist.
+  and the double locale accessors in `engine.mjs`. (The `docs/01 §1.3` inverted-index wording named
+  here when this entry was written has since been aligned in the follow-up
+  `docs/align-stale-wording` branch, together with the two duplicate `SYNONYM_GROUPS` triggers.)
 
 ### Review required
 
