@@ -272,6 +272,12 @@ jobs:
             echo "::warning::no DSH Core at $root — composition suites cannot run here"
           fi
 
+      # gate-trusted-epoch*.test.mjs join this list explicitly, like every other
+      # suite here. They boot the same real Loader and additionally require the
+      # host-provided @deepseek-ai/dsh-storage-domain module, so they belong to
+      # this manual, DSH-gated job and NOT to the portable-unit host-bound skip
+      # list. That skip list stays exactly two files: this job must not install
+      # an SDK implicitly, and a host-bound file is not a reason to widen it.
       - name: Composition suites
         run: |
           set -euo pipefail
@@ -285,7 +291,13 @@ jobs:
             plugin/tests/composition/gate-adapter-event-seq.test.mjs \
             plugin/tests/composition/gate-cache-epoch.test.mjs \
             plugin/tests/composition/gate-settings.test.mjs \
-            plugin/tests/composition/gate-review-boundaries.test.mjs
+            plugin/tests/composition/gate-review-boundaries.test.mjs \
+            plugin/tests/composition/gate-trusted-epoch.test.mjs \
+            plugin/tests/composition/gate-trusted-epoch-io.test.mjs \
+            plugin/tests/composition/gate-trusted-epoch-fork.test.mjs \
+            plugin/tests/composition/gate-trusted-epoch-failclosed.test.mjs \
+            plugin/tests/composition/gate-trusted-epoch-badrecord.test.mjs \
+            plugin/tests/composition/gate-tool-churn.test.mjs
 
   quality:
     name: Quality tooling (needs private scoring data)

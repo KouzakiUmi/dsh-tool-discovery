@@ -420,13 +420,22 @@ function eventStream () {
       })
       return this
     },
-    compaction (compactionId, { summarized = false, failed = false, orphanEnd = false } = {}) {
-      if (!orphanEnd) events.push({ type: 'compaction/start', seq: events.length, data: { compactionId, turn: null } })
+    compaction (compactionId, { summarized = false, failed = false, orphanEnd = false, turn = 7, sourceCommandId = null } = {}) {
+      // 真实 SDK（@deepseek-ai/dsh-compaction-basic lib/index.js:463-498）：
+      // `compaction/start` 与 `compaction/end` 追加的是**同一个 lifecycle 对象**
+      // `{ compactionId, sourceCommandId?, turn }`；失败那次是 `{ ...lifecycle, error }`。
+      // 早先这里让 end 缺 `turn`，与宿主真实事务形状不一致。
+      const lifecycle = {
+        compactionId,
+        ...(sourceCommandId === null ? {} : { sourceCommandId }),
+        turn
+      }
+      if (!orphanEnd) events.push({ type: 'compaction/start', seq: events.length, data: { ...lifecycle } })
       if (summarized) events.push({ type: 'compaction/summary', seq: events.length, data: { compactionId, summary: 's' } })
       events.push({
         type: 'compaction/end',
         seq: events.length,
-        data: failed ? { compactionId, error: { message: 'x' } } : { compactionId }
+        data: failed ? { ...lifecycle, error: { message: 'x' } } : { ...lifecycle }
       })
       return this
     }

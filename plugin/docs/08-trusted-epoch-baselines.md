@@ -1,0 +1,289 @@
+# 08 · 可信周期基线（Trusted Epoch Baselines）
+
+> **状态：WIP / 契约与验收计划**。本文件描述的是**计划中的产品行为与边界**，以及要满足它
+> 所需的验收判据。**实现、测试与验收均未完成**，本文件不表示缺陷已修复、不表示测试已通过、
+> 不表示已部署或已生效。凡涉及源码现状的表述，只在标注「现状」处成立。
+>
+> 冻结协议常量、预算表与错误码见[02](<02-protocol-and-data-model.md>)，发布门槛见
+> [03 §11](<03-implementation-and-acceptance.md>)，总状态见[05](<05-current-status.md>)。
+
+## 1. 要解决的问题
+
+工具常驻名单（alwaysVisible 派生的 `alwaysNameSet`）在**冷恢复**时，曾被允许从**出站日志**
+反推：如果持久化历史里某一轮的 `request`/`header` 多出了一个工具名，恢复后就把它算作本会话
+的常驻项，而执行门禁对 `alwaysNameSet` 中的名字**早退放行**。于是「模型猜一个名字」就可能
+真正执行，**不经过** canonical `tool/call → tool/result` 折叠，也没有任何可信的持久记录为其
+背书。出站日志是**观测**，不是授权事实；这是本项要移除的根本授信来源。
+
+## 2. 目标行为（契约）
+
+### 2.1 授权只来自官方 storage 的周期记录
+
+- 可信事实一律读写**官方 storageDomain** 中的**周期记录（epoch record）**。记录是**常驻
+  baseline 的授权事实**。
+- **被移除的授信来源**：常驻 baseline **不得**从 `request`/`header` 的出站内容、也不得从会话
+  日志里出现过的**工具名**反推。这一条只针对**常驻 baseline**。
+- **保留的授权来源**：**canonical `tool_load` 的 `call → result` 回执链仍然是按需 selection 的
+  授权事实**，不受本项影响；事件日志在这条用途上照旧是可信的。移除的只是「把出站名字当常驻」。
+- 记录形状至少包含：本周期标识、该周期的工具名集合，以及使其可校验的上下文锚点（会话 / 周期）。
+- **新会话**（判定见 §2.2）的首个出站请求，必须在该记录**持久写入完成之后**才允许发出。
+- **已可信的会话**在后续周期更新时，同样必须**持久写入完成后**才放行出站请求。
+
+### 2.2 「新会话」的判定
+
+新会话 = **本会话自有历史中没有任何出站记录与工具状态**。它**不是**「seq === 0」，也**不是**
+「epoch 为 null」；这两者都不足以判定，因为它们在既有会话的早期阶段同样成立。
+
+#### 2.2a 已知缺口：bootstrap 分支目前只信 live 计数（**本轮未修**）
+
+独立复审（`plugin/audits/trusted-epoch-fix-review-20261007.md` F2，MEDIUM）查明：当
+`noOwnHistoryPossible(session)` 为真时，`lifecycle.mjs` 直接进 `resolveBootstrapBaseline`，
+**从不调用 `journal.restore()`**。于是两道本该兜底的检查都不跑：
+
+1. `journal.mjs` 里「扫描 own 段并置 `ownOutboundSeen`」的存储扫描；
+2. `journal.mjs` 里 `inheritedEventCount` 的 **live 值 vs `query.readSession()` 值**交叉核验。
+
+因此 `hasOwnOutboundHistory()` 退化为「本进程激活以来观测到的出站事实」，而
+`noOwnHistoryPossible` 退化为「对 live `session` 计数器的一次**信任**」。复审用内存 harness
+**实证**：一个存储里有 4 条真实 own `request/header`、而 live 报 `inheritedEventCount === seq`
+的会话，拿到 `initial` 记录并被授权（`seq === 0` 的变体同样成立）。
+
+**为什么是缺口**：恢复路径**明确不信任** live 的 `inheritedEventCount`，专门为此做了交叉
+核验；bootstrap 路径是**唯一一处单独信任 live 值**的地方。两套标准不一致。
+
+**可达性未证实**：该情形要求宿主报告一对**自相矛盾**的 `session.seq` / `inheritedEventCount`。
+真实 DSH 宿主的 `session.seq` 语义**尚未核实**，故本项目前把它记为**契约级缺口**，
+**不是**已证实的线上漏洞。
+
+**本轮不修**：修它要改 bootstrap 的授权判据本身（新增一次存储侧交叉核验），属设计变更；
+且可达性未证实，不凭推测改安全边界。倾向的修法记在审查报告 §6.3。
+
+### 2.3 持久写的时点
+
+持久写必须落在**下一轮 agent 的 pre-step 屏障**上（post-next 等待），使「写完再放行」覆盖到
+`assemble` 之后才发生的新写入。
+理由是次序：**SDK 的 `assemble` 阶段先于自动压缩发生**。若实现只在 `assemble` 处等待持久化，
+而 pre-step 随后才开启新写入，首个请求仍会在记录落盘前**抢跑**；只有把「写完再放行」的等待
+放到 pre-step / post-next 屏障上，屏障才真正拦住这个竞态。
+在**成功压缩之后**写入新周期记录是**正确**的（见 §2.6）；本节要的不是排除这个时机，而是让
+post-next 等待覆盖到 `assemble` 之后才开启的那次新写入。
+
+### 2.4 旧会话（缺少周期记录）
+
+- 缺少周期记录的既有会话：**明确报错并阻止请求**。不得猜测、不得按当前配置重建、不得默认放行。
+- 这是一个**显式错误终态**：**没有默认超时**，也不会降级为「缩水请求」（即只带发现入口的请求）。
+- 当前配置的哈希**不得**被当作 epoch 标识或可信判据。
+- **「缺失」本身不构成建立初始记录的资格。** 唯一资格判据是 **own 段没有任何真实出站/
+  工具事实**（§2.2）。own 段已经出过站的会话即使因为**存储迟到到位**而走到
+  「读 → 缺失」的路径，也**不得**被补建初始记录：那会把「观察到的存储可用性」当成
+  「用户迁移过」的替身，正是本项要移除的那类授信。它只能等本次真实用户 `/compact`。
+
+### 2.4b 与「既有 fail closed」的边界裁决（本轮补充）
+
+下面两种终态**都停止请求**，但**原因不同，处置也不同**，绝不能互相冒充：
+
+| 终态 | 触发 | 请求 | 处置 |
+|---|---|---|---|
+| `STORAGE_UNAVAILABLE` / `MISSING` / `INVALID` | **可信基线**不可授权 | **0 request** | 见 §2.4 / §2.5 |
+| `SESSION_FAILED_CLOSED` | 会话因**与可信周期无关**的既有原因 fail closed（journal 自身损坏、`readSession` 失败、严重 seq 不连续） | **请求照发，只带基线**（引擎仍 incompatible） | 既有 fail-closed 语义原样保留 |
+
+- 后者是本模块出现**之前**就有的语义（见 `L11b` / `RB2`：请求照发、只带基线、执行照拒）。
+  把它并进 `BLOCKED` 会凭空多出一条「请求不得发出」的新规则，并连带把同 composition 里
+  其它会话的请求队列错位；把它并进 `TRUSTED` 则是谎称名单已可信。因此它在账本里是**独立的
+  第四态** `failed-closed`，投影侧照常放行这一次请求，guard 侧仍按
+  `baseline !== TRUSTED` 拒绝每一次非入口调用——**出站与执行两侧的既有判据都原样保留**。
+- 落到这一态时**不写盘**，并自增 `revision` 让任何在途写变成 superseded：已经不可能发生
+  授权，就不让迟到的写事后复活它。
+
+### 2.4c 存量坏记录与 open 失败的归因（本轮补充）
+
+- **实测**（安装内 `@deepseek-ai/dsh-storage-domain` 0.2.1-alpha.1，真实 JSON backend）：
+  存量里存在一条**与 schema 不匹配**的记录时，`facility.open(spec)` 让**整个域**打开失败，
+  报 `stored record '<key>' in table 'epoch_baselines' does not match its schema`。这不是
+  「存储服务不可用」：provider 健康，只是数据里有一行读不出来。
+- 因此 open 失败被再分一层：认得出「schema 不匹配」→ 落 **`INVALID`**（其文案已明确写了
+  「不会被覆盖、不会被删除，请人工处置」）；认不出的一律落 `UNAVAILABLE`。
+  **诚实降级**：宁可少一个归因，也绝不把未知失败猜成「坏记录」。
+- **仍然不做**的事：**不自动删除、不 quarantine、不用当前配置覆盖**坏记录。
+- **仍未验证的副作用**：一条坏记录会让**整个域**打不开，因此**所有**会话（哪怕与那条记录
+  无关）都落终态。这是 SDK `loadAll` 的行为，本轮**未**改变布局去规避它。
+
+### 2.5 迁移（一次性、严格受限）
+
+只有**本次真实的用户发起的 `/compact` 成功**之后，旧会话才允许迁移为可信会话。该次压缩必须
+满足下列五条 canonical 链条件，且这些条件是**同一条链、同一会话内的一致性要求**，不是五个字段
+各自「存在」即可：
+
+1. 整条链属于**同一个 own session**（不得取自父会话或继承前缀）。链内是**两组各自一致的关联键**，
+   不是同一个值：`command/run.commandId` == `start.sourceCommandId` == `end.sourceCommandId` ==
+   `done.commandId`；`start` / `summary` / `end` 上的 `compactionId` **另成一组且彼此相同**。
+   **`compactionId` 是为本次压缩新 mint 的随机 UUID，本就不等于 `commandId`**，不得要求两者相等；
+2. 运行名为 `compact`，来源为 `user`；`start.sourceCommandId` 存在；
+3. `start` 与 `end` 的 `turn` 均为 `null`（该次压缩不挂在某个 turn 上）；
+4. 恰好产生 **1 条 summary**：其 `seq` 在链内**顺序正确**，且位于 `start` 之后、`done` 之前；
+5. `end` 中**没有 error**，链以 `done` 成功结束，且 `done.sourceEventSeq` **正好对应**该条
+   `summary.seq`（不是仅等于某个存在的 `seq`）。
+
+任一条不成立即不迁移，且**不重试、不推断**。跨会话拼接、两组关联键各自内部不一致、`turn` 非
+null、summary 多于一条或缺失、`sourceEventSeq` 与 summary 不对应，一律视为**未迁移**。
+
+### 2.6 已经可信的会话：不做迁移限制
+
+与旧迁移路径不同，**已经可信**的会话在任何**手动或自动**压缩成功后，仍然采信**最新配置**、
+`put` 一个**新周期记录**并 reset 常驻名单。
+
+- **不得**因为自动压缩而阻断正常的周期更新——自动压缩是正常路径，不是例外。
+- **同一 epoch 内**：工具名集合**只来自该 epoch 记录自身**。配置刷新**不改写**已写入的 epoch
+  记录，也**不拿当前配置去替换**记录里的名单。
+- **切换到新 epoch 时**：该新周期的工具名集合**全量采用当时配置的边界快照**，与旧 epoch 的名单
+  **不求交**、**不继承**、**不保留**其中任何项。这是一次整份换新，不是逐项合并——契约中**不存在**
+  「替换式合并」这种动作，也不允许用交集或并集去拼接两个 epoch 的名单。
+
+### 2.7 不变的既有边界
+
+- **fork 的 own-only 语义保持不变**：继承前缀不折叠、不观测、不授权。子会话要成为可信会话，
+  走 §2.2 的新会话路径，而不是继承父会话的记录。
+- **模型驱动的 unload 仍然被拒绝**（模型不能自己决定撤掉工具）。
+- **显式卸载只撤执行资格，不撤已披露的 wire 定义**：卸载后该工具在**已冻结披露的请求体**中
+  仍然保留（wire 定义在 epoch 内冻结），直至该 epoch 以**成功压缩**结束。也就是说本项**不承诺**
+  “显式卸载即让工具 schema 从请求中消失”；那不是本项的行为，也不得据此推断。
+
+### 2.8 依赖边界
+
+- 周期记录通过**宿主提供的 storageDomain 能力**读写。该能力作为 **optional peer** 声明：
+  宿主已装配 storage 三件套时使用；**未装配时明确报错阻止**，而不是自动挂载任何 provider 或
+  自动切换到本地后端。
+- 不新增 session 事件类型；**不使用 developer message 承载 storage 语义**。
+
+## 3. 现状（**已初步实现，尚未完成集成验收**）
+
+源码侧已初步落地，本节据此区分**「已实现」**与**「尚未完成集成验收」**：
+
+| 项 | 实现状态 | 验收状态 |
+|---|---|---|
+| 移除 header / 首请求授信 | **已初步实现** | **未完成集成验收** |
+| 周期记录读写（宿主 storageDomain） | **已初步实现** | **未完成集成验收** |
+| 新会话首请求前的持久屏障 | **已初步实现** | **未完成集成验收** |
+| 旧会话缺记录时明确报错 | **已初步实现** | **未完成集成验收** |
+| `/compact` canonical 链迁移 | **已初步实现** | **未完成集成验收** |
+| 可信会话的自动压缩更新 | **已初步实现** | **未完成集成验收** |
+
+**「已初步实现」不等于「缺陷已修复」**：它只表示工作区内已有对应源码。**本文件不断言修复成立**，
+不引用任何通过数，也不把作者自测结果当作验收结论；集成 / 测试套件整体仍未完成，等全验收后再
+去 WIP。
+
+相关门禁文件（均已存在，三者分工不同）：
+
+- [`gate-trusted-epoch.test.mjs`](../tests/composition/gate-trusted-epoch.test.mjs) —— 授权面：
+  污染头 / 缺记录 / 缺 provider / 手动 `/compact` 迁移 / 同 root 重启冻结 / **存储迟到
+  到位不得补建初始记录（TE-LM）**。其反例判据取自一条**声明式注入**的受污染历史，用于证伪旧实现。
+- [`gate-trusted-epoch-io.test.mjs`](../tests/composition/gate-trusted-epoch-io.test.mjs) —— I/O 时序：
+  初始 put 被挂住 / 真实自动压缩后的新 epoch put 被挂住 / put 被拒与 SDK 不可用 / pending 期间
+  dispose，以及 legacy 会话上的**真实自动**压缩**不得**迁移。
+- [`gate-trusted-epoch-fork.test.mjs`](../tests/composition/gate-trusted-epoch-fork.test.mjs) ——
+  **真实 fork** 下 baseline 记录隔离：子会话建自己的记录，绝不继承父的名单。
+
+**文件存在不等于判据已通过。** 三者都只出现在需要真实 DSH 宿主的 composition 作业里。
+
+## 4. 验收计划（判据先于实现）
+
+以下为计划中的验收项。**在集成验收完成并复跑之前，任何一项都不得写成「已通过」。**
+
+| ID | 判据 | 期望结果 | 对应套件 |
+|---|---|---|---|
+| TE-A | 新会话：无自有出站/工具状态，持久写入完成后才允许首个请求 | 首请求在记录落盘后才出站；记录缺失则请求被阻止 | `io` |
+| TE-B | 污染历史冷恢复：模型猜测历史中出现过的工具名 | **执行 body 次数为 0**；配一条正常加载路径的正控制证明判据有分辨力 | `gate-trusted-epoch` |
+| TE-C | 已可信会话 + 自动压缩成功 | 采最新配置、`put` 新周期、reset；**不被阻断** | `io`（IO2）、`gate-trusted-epoch` |
+| TE-D | 已可信会话 + 手动压缩成功 | 同 TE-C | `gate-trusted-epoch` |
+| TE-E | 同 epoch 内配置刷新；以及切到新 epoch | 同 epoch：**只读记录自身**的 names，当前配置不替换记录；新 epoch：**全量采用**配置边界快照，与旧名单不求交 | `gate-trusted-epoch`、`fork` |
+| TE-F | 旧会话缺少周期记录 | 明确错误终态、**阻止请求**；无默认超时；不发出缩水请求 | `gate-trusted-epoch`、`io`（IO3/IO5） |
+| TE-G | 当前配置哈希 | 不得被当作 epoch 标识或可信判据 | `gate-trusted-epoch` |
+| TE-H | `/compact` 迁移 | 仅当 §2.5 五条 canonical 链在**同一 own session 内一致成立**时迁移；任一条不成立即不迁移 | `gate-trusted-epoch`（真实用户 `/compact`）、`io`（IO5：legacy 上的真实自动压缩不得迁移） |
+| TE-I | fork | own-only 边界不因本项放宽；子会话不继承父记录 | `fork`（真实 fork 隔离） |
+| TE-J | 模型驱动 unload | 仍被拒绝 | `gate-trusted-epoch` |
+| TE-J2 | 显式卸载 | 只撤执行资格；**已披露 wire 定义仍保留**直到成功压缩，不得据此声称 schema 被移除 | `gate-trusted-epoch` |
+| TE-K | 未装配 storageDomain 的生产捕获 | 明确阻止，而不是自动挂载 provider | `gate-trusted-epoch`、`io`（IO3 omitStorage） |
+| TE-P | 持久写时点 | post-next agent / pre-step 屏障；**仅在 assemble 等待不足以拦住首请求抢跑**（assemble 先于自动压缩，pre-step 才开启新写） | `io`（IO1 初始 put 挂住、IO2 自动压缩后新 epoch put 挂住） |
+| TE-LM | 存储**迟到到位** + legacy 会话 | **不得**补建初始记录（durable 侧无该会话任何记录）；基线仍不可授权；再开一轮仍 0 请求 | `gate-trusted-epoch`（TE-LM） |
+| TE-FC | 会话因**与可信周期无关**的既有原因 fail closed | 请求**照发**、只带基线、引擎停 incompatible、执行照拒（既有语义不被 0-request 规则吞掉） | `gate-adapter-recovery`（L11b）、`gate-review-boundaries`（RB2） |
+| TE-BAD | 存量记录与 schema 不匹配（域整体 open 失败） | 落 **INVALID**（数据问题）而非 UNAVAILABLE；坏记录**不删不改** | 单测 TE-U18 / TE-U18b（真实 SDK 行为见 §2.4c 的实测） |
+| TE-MIG | legacy 会话在**恢复收尾**期间完成迁移 | 恢复收尾**不得**用一次 `load()` 覆盖在途的迁移写；迁移成功后正常出站并落 ready | `gate-trusted-epoch`（TE4b） |
+| TE-DP | pending 期间 dispose / 释放闸门 | 释放后**不得复活授权** | `io`（IO4） |
+| TE-R | canonical `tool_load` 回执链 | 仍为按需 selection 的授权事实；本项**不**将其移除或降级 | `gate-trusted-epoch`、`fork` |
+
+「对应套件」列只表示**该判据由哪份门禁覆盖**，**不表示该判据已通过**。
+
+**验收纪律**：
+
+- 每条前置都有独立断言，禁止「取到 undefined 就跳过」式空转；每条安全断言配正控制。
+- 与 `07` 同源，受污染历史是**声明式注入**的反例材料，**不得**表述为宿主自然产生该日志。
+- 该门禁是宿主相关的（需要真实 Loader 与宿主提供的 storage 模块），因此只在**已具备真实 DSH
+  宿主**的 composition 作业中显式列出；它**不进入** CI 的可移植跳过清单，也**不隐式安装任何 SDK**。
+- 可移植的 unit / 周期相关单测必须**纯可移植**：不解析宿主 SDK。
+
+## 5. 本项明确不声称
+
+- **不声称**授权缺陷已修复：集成验收未完成，**本文件不断言修复成立**。
+- **不声称**任何门禁或回归已通过：本文件不引用通过数，也不断言任何 pass 数字；作者自测结果
+  **不等于**验收结论。
+- **不声称**真实 provider wire、请求体、性能、GUI 呈现或在线迁移行为已验证。门禁中录到的
+  请求对象是 mock provider 侧的装配证据，不是真实 provider wire。
+- **不声称**已安装、已发布、已重启或已在产品中生效。包仍未发布到 npm。
+- 在集成验收完成之前，[07](<07-lifecycle-recovery-coverage.md>) 与
+  [05](<05-current-status.md>) 中的既有结论**保持不变**。
+
+### 5.1 独立复审结论（非作者，2026-10-07）
+
+审查者与产出方不同源，全程只读；报告见内部证据 `plugin/audits/trusted-epoch-fix-review-20261007.md`
+（**不随本文档集公开**，按 [README §2.1](<README.md>) 的约定此处只以代码字体写出路径、不建链接）。
+
+**判定：三处修复全部「通过」。** 审查者用内存 harness 直驱真实 `createLifecycle` /
+`createProjection` / `createGuard` 做了独立实证，其中最有分量的两条：
+
+- 修复 1 是**结构性**成立：`ledger.begin()` 在产品里**只有一个**调用点，且位于新判据**之后**；
+  三个进入 bootstrap 的入口全部经它收口 —— 不变量在唯一的出口上。
+- 修复 3 **可证是承重的**：审查者复现了修复前的原始失败（`blocked/MISSING`、**0** 条
+  durable 记录、pre-step 抛错），所以它不是空门禁；并额外尝试在 `load()` 的 await 窗口注入
+  压缩，**未**复现（`load()` 在入口同步自增 revision，后来的写一律压过它）。
+
+**留下的发现**：F1（门禁未接线，MEDIUM）**是快照过期**，已在审查窗口内由主代理关闭 —— 当前
+`package.json` 与 `ci.yml` 都已列入，实跑 101/0 证明接线生效；F2（bootstrap 分支的判据看不见
+存储历史，MEDIUM）**维持原判并已写入 §2.2a，本轮不修**；F3 / F4 为 LOW，未复现、不凭推测改。
+
+**仍未覆盖**（审查报告 §4 共 9 项）：其中最值得优先补的是 **TE-R**（canonical `tool_load`
+回执链作为**正向**授权源）与 `§2.4c` 的整域 open 失败。真实 provider wire、token/TTFT、
+性能、GUI 生效、在线迁移仍**未验证**。
+
+### 5.2 工作区复跑记录（**不是验收结论**）
+
+以下是**本轮改动者**在工作区内的独立复跑记录。按 §4 的验收纪律，**作者自测结果不等于验收
+结论**：这些都是**产出方本人**跑的，因此**不得**据此把任何一条判据写成「已通过」，也**不**
+解除任何一项待办的独立复审。
+
+| 范围 | 命令 | 结果 |
+|---|---|---|
+| 单元 | `npm test` | **283 pass / 0 fail / 0 skipped**，退出码 **0**（`.probe/final4-unit.log`） |
+| 组合（13 份门禁） | `npm run test:composition` | **103 pass / 0 fail / 0 skipped**，退出码 **0**（`.probe/final4-comp.log`） |
+| 质量验证器 | `node plugin/quality/validate.mjs` | **20 PASS / 1 FAIL**，退出码 **1**（冻结数据的既有类别资格项，**与本项无关、未改动**） |
+
+**仍未完成、不得上抬的部分**：
+
+- **三处修复已获一次非作者独立复审「通过」**（见 §5.1）。但复审**仍有 9 项未覆盖**，且
+  `TE-R` 与 `§2.4c` 整域 open 失败在优先补齐之前，**不得**把本项整体写成「已验收」。
+- 真实 provider wire、token/TTFT、检索质量门槛、L04 compaction、L08 crash/fsync 窗口、
+  L10 HMR、S12/S13、GUI 生效与在线迁移：仍**未验证**。
+- §2.4c 末段那条「一条坏记录拖垮整个域」的副作用**未修**，只是被如实记录并给了诚实归因。
+- 本轮源码**已提交并以 PR 形式提交评审**；**未安装、未发布到 npm、未重启**，任何宿主
+  profile 与 GUI 生效状态均未变。本轮源码版本为 `0.2.0-functional.3`。
+
+## 6. 相关文件
+
+- 门禁：[`gate-trusted-epoch.test.mjs`](../tests/composition/gate-trusted-epoch.test.mjs)、
+  [`gate-trusted-epoch-io.test.mjs`](../tests/composition/gate-trusted-epoch-io.test.mjs)、
+  [`gate-trusted-epoch-fork.test.mjs`](../tests/composition/gate-trusted-epoch-fork.test.mjs)
+- 改动面：[`adapters/dsh/journal.mjs`](../adapters/dsh/journal.mjs)、
+  [`adapters/dsh/lifecycle.mjs`](../adapters/dsh/lifecycle.mjs)、
+  [`adapters/dsh/guard.mjs`](../adapters/dsh/guard.mjs)、
+  [`adapters/dsh/projection.mjs`](../adapters/dsh/projection.mjs)
+- 协议与状态口径：[02](<02-protocol-and-data-model.md>)、[05](<05-current-status.md>)、
+  [07](<07-lifecycle-recovery-coverage.md>)
