@@ -171,7 +171,6 @@ export const SYNONYM_GROUPS = Object.freeze([
   Object.freeze([
     'web-search',
     '搜网', '搜索结果', '搜索引擎', '搜一下', 'web search', 'search engine', 'search results',
-    'search engine',
   ]),
   Object.freeze([
     'browser-control',
@@ -191,7 +190,7 @@ export const SYNONYM_GROUPS = Object.freeze([
   Object.freeze([
     'office-docs',
     '文档表格', '表格文件', '办公文档', 'excel', 'word', 'spreadsheet', 'office document',
-    'office', 'spreadsheet', 'document',
+    'office', 'document',
   ]),
   Object.freeze([
     'subagent',
