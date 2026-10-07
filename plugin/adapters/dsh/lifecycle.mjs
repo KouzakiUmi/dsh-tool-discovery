@@ -232,7 +232,28 @@ export function createLifecycle(deps) {
       const runtime = sessions.get(sessionId);
       if (runtime === undefined) return Promise.resolve({ mode: 'unknown' });
       if (!runtime.restoring) return Promise.resolve({ mode: runtime.engine.getState(runtime.scope).mode });
-      return runtime.restorePromise ?? Promise.resolve({ mode: 'restoring' });
+      const pending = runtime.restorePromise;
+      if (pending === undefined) return Promise.resolve({ mode: 'restoring' });
+      // 「已决失败」与「仍在 pending」必须可区分：等待方（system-prompt/assemble 的
+      // 冷恢复等待）据此决定"发只带基线的请求"还是"继续等、不发"。所以恢复被 reject
+      // 时**不**归一成 restoring —— 那是把一次已决失败伪装成还在恢复。
+      // 这里按既有 fail closed 语义收口：引擎置 incompatible、runtime 落定（restoring
+      // 归 false）、journal 的缓冲停止累积，然后如实返回 incompatible。
+      return pending.then(
+        (outcome) => (outcome === undefined || outcome === null ? { mode: 'restoring' } : outcome),
+        (error) => {
+          log('lifecycle:restore-rejected', { sessionId, error: String(error) });
+          try {
+            runtime.engine.failClosed(runtime.scope);
+          } catch (failClosedError) {
+            log('lifecycle:fail-closed-failed', { sessionId, error: String(failClosedError) });
+          }
+          // journal 对这个会话已无用途（恢复永远不会再完成）：释放它的缓冲。
+          try { runtime.journal.dispose(); } catch { /* 已释放 */ }
+          runtime.restoring = false;
+          return { mode: 'incompatible', reason: 'restore-rejected', error: String(error) };
+        },
+      );
     },
     dispose() {
       for (const sessionId of [...sessions.keys()]) disposeSession(sessionId);

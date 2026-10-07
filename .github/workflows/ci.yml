@@ -284,7 +284,8 @@ jobs:
             plugin/tests/composition/gate-adapter-recovery.test.mjs \
             plugin/tests/composition/gate-adapter-event-seq.test.mjs \
             plugin/tests/composition/gate-cache-epoch.test.mjs \
-            plugin/tests/composition/gate-settings.test.mjs
+            plugin/tests/composition/gate-settings.test.mjs \
+            plugin/tests/composition/gate-review-boundaries.test.mjs
 
   quality:
     name: Quality tooling (needs private scoring data)

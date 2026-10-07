@@ -208,7 +208,10 @@ test('L01: load 后重开 composition → 从 jsonl 冷恢复 selected（强断�
   })
   handles.push(handle2)
 
-  // 恢复期首请求：restoring 期间刻意只留三入口（fail-safe 正控制），不立即触发执行断言
+  // 恢复期首请求：装配会等公开的 lifecycle.whenReady(sessionId) 落定，因此**不得**
+  // 再发出只留三入口的缩水 tools —— 崩溃前已披露的工具必须原样出现在这一轮。
+  // （旧行为：restore() 还没读完盘，投影因 restoring 只留三入口，模型上下文里的
+  //  已披露工具在这一轮凭空消失。）
   queueResponse({ text: 'R pre-recovery turn' })
   await userTurn(handle2, 'Continue after restart.')
 
@@ -227,10 +230,10 @@ test('L01: load 后重开 composition → 从 jsonl 冷恢复 selected（强断�
   assert.deepEqual([...engState.selected.values()].map((s) => s.name).sort(), ['fixture_hidden_inherited'],
     'restored selected must contain exactly the previously loaded tool')
 
-  // 5) 披露与执行正控制：恢复落定后下一请求披露恢复项，合法调用真的执行一次
+  // 5) 披露与执行正控制：恢复后的**第一条**请求就已披露恢复项（不再有缩水窗口）
   const restoringFirst = (store.requests[2]?.tools ?? []).map((t) => t.name).sort()
-  assert.deepEqual(restoringFirst, ['tool_list', 'tool_load', 'tool_search'],
-    `restoring-window request must stay at three entries: ${restoringFirst}`)
+  assert.deepEqual(restoringFirst, ['fixture_hidden_inherited', 'tool_list', 'tool_load', 'tool_search'],
+    `冷恢复后的首请求必须已披露恢复项，不得缩水：${restoringFirst}`)
   queueResponse({
     toolCalls: [
       { id: 'r-legit', name: 'fixture_hidden_inherited', arguments: { text: 'legit' } },

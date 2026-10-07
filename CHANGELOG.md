@@ -50,6 +50,60 @@ Functional build on `fix/discovery-functionality`; not an online GUI acceptance 
 - Commandcode interruption anomalies and unfinished browser probes are deferred, not shipped
   as fixes or used to block this functional build.
 
+## [0.2.0-functional.2] — reload and cold-recovery hotfix
+
+Branch `fix/review-cache-boundaries`. The package is **not published to npm**.
+This entry describes the source fix. Installation state and any online status are recorded
+separately, elsewhere. Nothing here is a product-acceptance statement.
+
+### Fixed
+
+- **A truncated outbound request was sent while cold restore was still pending.** When the runtime
+  was still `restoring`, system-prompt assembly went ahead and emitted a request carrying less than
+  the tools the session had already loaded. Assembly now waits for the public
+  `lifecycle.whenReady(sessionId)` to settle and only then projects, so a pending restore never
+  produces a short request.
+- **The restore wait had no cancellation path.** The wait has **no new default timeout**: there is
+  no fixed deadline that would eventually downgrade to a truncated request. Its only exits are the
+  settled restore and the host's own per-turn cancellation signal (`context.signal`, injected by
+  `assembleContextFor`), which aborts that turn through the host's cancellation/error pipeline
+  instead of a locally imposed limit.
+- **A decided restore error could be turned into a pass by waiting.** Adding the wait did not
+  loosen the existing fail-closed rule: when restore settles as an error/incompatible state, the
+  request is still emitted **without** the previously loaded tools, the engine stays `incompatible`,
+  and a guessed tool name executes nothing.
+- **Budget override `null` was rejected.** `validateConfig` now accepts `budgets: null` and treats
+  it as covered by `DEFAULT_BUDGETS`, consistently with the native Config and the domain defaults.
+  The defaults themselves are unchanged, existing limits still apply, and a malformed non-object
+  budget value is still rejected.
+- **Duplicate definitions in the real incoming array.** System-prompt assembly now checks the full
+  incoming tool array for same-name duplicate definitions and reports
+  `INCOMPATIBLE_COMPOSITION`, with a single-definition positive control. The previous duplicate
+  check covered the initial baseline allowed set only, not the loaded tools, so a duplicate among
+  loaded tools was not detected.
+
+### Changed
+
+- `version` is `0.2.0-functional.2`. `test:composition` additionally runs
+  `plugin/tests/composition/gate-review-boundaries.test.mjs`; `plugin/tests/unit/projection.test.mjs`
+  is already covered by the existing `test` glob. Dependencies, `private`, publishing policy, and
+  publishing policy are unchanged. The host-composition CI command also includes the new boundary
+  suite. **No new storage SDK peer dependency is added.**
+
+### Not claimed by this work
+
+- The trusted-baseline / storage-migration task was interrupted and is **not** part of this
+  delivery. Nothing here says the trusted baseline is fixed.
+- No GUI verification or online acceptance was performed, and **no cache saving, token reduction,
+  or latency improvement is measured or claimed.**
+- The historical header authorization defect discussed in
+  [`plugin/docs/07-lifecycle-recovery-coverage.md`](plugin/docs/07-lifecycle-recovery-coverage.md)
+  **remains outstanding for later work**; it is not fixed by this round. This round also **does not
+  enable any old-session migration** for it.
+- The timing counterexample is driven by a monotonic-clock loop with `finally` cleanup rather than
+  a single wall-clock sample, so the assertion does not depend on one `Date.now()` reading.
+- No pass counts are asserted in this entry.
+
 ## [Unreleased]
 
 Direction branch `fix/lifecycle-recovery-coverage`. **Not merged.** The implementation and the code

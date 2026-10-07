@@ -15,6 +15,7 @@ import assert from 'node:assert/strict'
 import { dshModule } from '../../contracts/install-resolver.mjs'
 import { bootAdapterComposition } from './harness.mjs'
 import { CORE_TOOL_NAMES } from '../../domain/core-tools.mjs'
+import { DEFAULT_BUDGETS, OPTIONAL_LIMIT_KEYS } from '../../domain/index.mjs'
 
 const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write')
 const handles = []
@@ -249,4 +250,56 @@ test('SG7: 已发送的数组不再被后来的压缩改写（canonical header �
 
   assert.deepEqual(pending.map((t) => t.name), namesAtSend, '事后压缩不得改写已发送的历史数组')
   assert.deepEqual(runtime.alwaysNames, ['fixture_mutating'], '但下一个周期的名单确实换了')
+})
+
+// --- budgets 的 null：真实 Schema + 真实 Loader 下缺省与显式 null 都必须激活 --------
+//
+// 这里不造假 Schema：`buildConfig` 的 budgets 字段默认值就是 null（"关闭覆盖"），
+// schemastery 解析时该键缺省不落到值上（`config({}).budgets === undefined`），
+// 但**显式写 null 会真的把 null 交给 apply**。因此真实 Loader 下：
+//   缺省 Config        → budgets 缺省 → 激活
+//   显式 budgets: null → budgets 为 null → 必须同样激活
+// 形状校验曾把 null 当"非对象"拒掉，于是后一条会让整个 adapter 激活失败。
+
+/** 断言该 composition 里 adapter 已激活且 budgets 按预期生效。 */
+function budgetsOf (comp, sessionId) {
+  const entry = adapterEntry(comp)
+  assert.equal(entry.fiber._error, undefined, `adapter 必须激活: ${entry.fiber._error}`)
+  const lifecycle = serviceOf(comp.ctx).lifecycle
+  const runtime = lifecycle.ensureRuntime(fakeSession(sessionId), { id: 'a1' })
+  return { resolved: entry.fiber.config.budgets, budgets: runtime.engine.getBudgets() }
+}
+
+test('SG8: 缺省 Config 与显式 budgets: null 都激活，且硬限额保持默认关闭', async () => {
+  const omitted = await boot({})
+  const a = budgetsOf(omitted, 's-budget-omitted')
+  assert.equal(a.resolved, undefined, '缺省时 Loader 不产出 budgets 键（正控制：这里确实没配置）')
+  assert.deepEqual(a.budgets, { ...DEFAULT_BUDGETS }, '缺省即冻结默认值')
+
+  const explicitNull = await boot({ budgets: null })
+  const b = budgetsOf(explicitNull, 's-budget-null')
+  assert.equal(b.resolved, null, '显式 null 必须真的落到 apply 的 rawConfig 上（正控制）')
+  assert.deepEqual(b.budgets, { ...DEFAULT_BUDGETS }, 'null = 不覆盖，与缺省同解')
+  for (const key of OPTIONAL_LIMIT_KEYS) {
+    assert.equal(b.budgets[key], null, `${key} 在显式 null 下仍应是关闭`)
+  }
+})
+
+test('SG9: 显式有效预算正常生效，其余硬限额仍默认关闭', async () => {
+  const comp = await boot({ budgets: { maxActiveTools: 3 } })
+  const { resolved, budgets } = budgetsOf(comp, 's-budget-explicit')
+  assert.deepEqual(resolved, { maxActiveTools: 3 })
+  assert.equal(budgets.maxActiveTools, 3, '显式正整数启用该限额')
+  for (const key of OPTIONAL_LIMIT_KEYS.filter((k) => k !== 'maxActiveTools')) {
+    assert.equal(budgets[key], null, `未给出的 ${key} 必须保持关闭`)
+  }
+})
+
+test('SG10: budgets 为非对象（字符串）仍被拒 —— 不得因修 null 而放宽形状校验', async () => {
+  const comp = await boot({ budgets: '8' })
+  const entry = adapterEntry(comp)
+  assert.notEqual(entry.fiber._error, undefined, '非对象 budgets 必须拒绝激活')
+  assert.match(comp.activationErrors().join('\n'), /budgets|budget/i,
+    `拒绝必须指名 budgets：${comp.activationErrors().join('\n')}`)
+  assert.equal(comp.ctx.get('progressiveDiscovery'), undefined, '被拒的组合不得留下半激活服务')
 })
