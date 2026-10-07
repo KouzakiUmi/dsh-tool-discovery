@@ -700,3 +700,140 @@ test('TE-U17c: failClosed 的 reason 带独立前缀，误用可信基线文案�
   // 三种可信基线终态的文案不得被复用到这里：/compact / 人工处置 那些提示只对它们成立。
   assert.equal(/compact/.test(ledger.reason), false, 'failClosed 不是缺记录，不该提 /compact 迁移');
 });
+
+// ---------------------------------------------------------------------------
+// TE-U19 —— 记录键隔离 / 迟到 resolve 不覆盖 runtime / 按最新 identity 恢复。
+//
+// **范围声明（读断言之前必须先读这段）**
+// 本例用的是**声明式注入的测试存储（fixture）**，不是真宿主：
+//   * fixture 刻意允许"旧写已经生效、但它的 promise 迟到 resolve"这种时序 —— 这正是
+//     单元测试要能稳定复现的那个窗口；真实 storage-domain 内部的提交/排队时点
+//     **不在本例的断言范围内，本例也不声称任何一种**；
+//   * `records` 是 fixture 的**记录视图**（一个 Map），**不是物理介质**，更不是宿主快照；
+//   * 时序由 `entered`（真的进了 `store.put` 的记录，按进入次序）与逐个 `releaseNth`
+//     显式钉死，全程零定时器、可确定性重放。
+//
+// 因此本例证明的**只有**这三条：
+//   (1) **冻结的 record key 隔离**：写出去的键由该记录**构造时冻结的身份**编码而来，
+//       键 ↔ 名单严格一一对应，两条记录不得串到对方的键上；
+//   (2) 迟到 resolve 的旧写**不得**改写 runtime 当前授权（`identity` / `names`）；
+//   (3) 冷恢复**按最新 identity** 取名单：新账本对齐到最新 compacted identity 后
+//       只读到那一份，不选旧记录。
+//
+// **本例不证明**：宿主自然 crash 的时序；也**不**代表"旧 F4 整 scope 关闭"——
+// 刻意不断言"旧 put 绝不落盘"，那是**非承诺**（revision 在 put 进入后已无法撤回那次写）；
+// 同样也不反向断言"旧 put 一定落盘"。第 (4) 步的键集合断言描述的是**本 fixture
+// 自己确定会保存这两条记录**这一事实，不是对真实 SDK 行为的任何泛称。
+
+/** TE-U19 的 fixture 存储：写立即记入 `records`，promise 的 resolve 由测试逐个放行。
+ *  `records` = fixture 的记录视图（Map，非物理介质）；`entered` = 真的进了 `store.put`
+ *  的记录（按进入次序）。键按记录自己的四元组展开构造，与产品 `store.put` 同一条编码。 */
+function fixtureGatedLedger () {
+  const records = new Map();
+  const entered = [];
+  const releases = [];
+  const waiters = [];
+  const holder = createTrustedEpochHolder({ log: () => {} });
+  holder.attach({
+    ensureOpen: async () => ({ ok: true }),
+    get: (key) => records.get(key),
+    put: (record) => {
+      // fixture 语义：写立即记入记录视图（键由这条记录自己的身份编码），resolve 可迟到。
+      records.set(epochKeyOf({
+        sessionId: record.sessionId,
+        ownSeqStart: record.ownSeqStart,
+        epochId: record.epochId,
+        compactionEndSeq: record.compactionEndSeq,
+      }), record);
+      entered.push(record);
+      for (const waiter of waiters.splice(0)) waiter();
+      return new Promise((resolve) => { releases.push(resolve); });
+    },
+    close: async () => {},
+  });
+  const build = () => createEpochLedger({
+    storeHolder: holder, sessionId: SESSION, ownSeqStart: OWN_START, log: () => {},
+  });
+  /** 显式事件：等到"第 n 次 put 真的进入"为止 —— 不靠采样猜它发生了。 */
+  const nthEntered = (n) => (entered.length >= n
+    ? Promise.resolve(entered)
+    : new Promise((resolve) => waiters.push(() => resolve(entered))));
+  const releaseNth = (n) => releases[n - 1]();
+  const releaseAll = () => { while (releases.length > 0) releases.shift()(); };
+  return { ledger: build(), build, records, entered, nthEntered, releaseNth, releaseAll };
+}
+
+test('TE-U19: 记录键隔离 —— 迟到 resolve 的旧写不覆盖 runtime，冷恢复按最新 identity 取名单', async () => {
+  // 两份**完全不同**的名单：任何一处串名单都会被下面的交叉断言立刻抓到。
+  const OLD_NAMES = ['old_alpha', 'old_bravo'];
+  const NEW_NAMES = ['new_charlie', 'new_delta'];
+  const OLD = compactedEpochIdentity('cid-old', 10);
+  const NEW = compactedEpochIdentity('cid-new', 20);
+  // 键的编码**字面量钉死**：这样"键构造被改坏"由本例自己发现，而不是让同一个函数
+  // 既当被测又当判据、两边一起错却看不出来。
+  const oldKey = epochKeyOf({ sessionId: SESSION, ownSeqStart: OWN_START, epochId: 'cid-old@10', compactionEndSeq: 10 });
+  const newKey = epochKeyOf({ sessionId: SESSION, ownSeqStart: OWN_START, epochId: 'cid-new@20', compactionEndSeq: 20 });
+  assert.equal(oldKey, '["sess-1",4,"cid-old@10",10]', '旧 epoch 的键必须逐字段编码 (sessionId, ownSeqStart, epochId, endSeq)');
+  assert.equal(newKey, '["sess-1",4,"cid-new@20",20]', '新 epoch 的键必须逐字段编码 (sessionId, ownSeqStart, epochId, endSeq)');
+  assert.notEqual(oldKey, newKey, '两个 epoch 必须落在两个不同的键上');
+
+  const { ledger, build, records, entered, nthEntered, releaseNth, releaseAll } = fixtureGatedLedger();
+  try {
+    // (1) 旧 epoch 的写**真的进入** store.put（fixture 已记入记录视图），resolve 被闸门扣住。
+    const oldWrite = ledger.adopt({ identity: OLD, names: OLD_NAMES, trigger: 'auto' });
+    await nthEntered(1);
+    assert.equal(entered.length, 1, '旧写必须真的进入 store.put —— 否则本例什么也证明不了');
+    assert.equal(recordKey(entered[0]), oldKey, '旧写进入时用的键必须由**它自己的**身份编码');
+    assert.equal(ledger.state, BASELINE_STATE.PENDING, '旧写未 resolve 前不得授权');
+
+    // (2) 第二个 compacted identity / 名单：这次写必须**真的生效**（fixture 记录视图里可见）。
+    const newWrite = ledger.adopt({ identity: NEW, names: NEW_NAMES, trigger: 'manual' });
+    await nthEntered(2);
+    assert.equal(entered.length, 2, '新写也必须真的进入 store.put（不是被 put 前的复检挡掉）');
+    assert.equal(recordKey(entered[1]), newKey);
+    assert.equal(ledger.state, BASELINE_STATE.PENDING, '新写未 resolve 前不得授权');
+    assert.deepEqual(ledger.names, null, 'pending 期间没有任何可授权的常驻名单');
+    releaseNth(2);
+    await newWrite;
+    assert.equal(ledger.state, BASELINE_STATE.TRUSTED);
+    assert.deepEqual(ledger.names, NEW_NAMES, '新 epoch 落定后，授权就是它的名单');
+
+    // (3) 旧写此刻才 resolve（迟到的 promise）：runtime **不得**被它盖回去。
+    releaseNth(1);
+    await oldWrite;
+    assert.equal(ledger.state, BASELINE_STATE.TRUSTED);
+    assert.deepEqual(ledger.names, NEW_NAMES, '迟到的旧写不得把当前授权改回旧名单');
+    assert.deepEqual(ledger.identity, { epochId: NEW.epochId, compactionEndSeq: NEW.compactionEndSeq },
+      '运行时身份必须仍是最新的 compacted identity');
+
+    // (4) fixture 记录视图：本 fixture 确定保存了这两条记录，键集合恰为两个 epoch 的键，
+    //     且键 ↔ 名单严格一一对应（这是**本 fixture 的事实**，不是对真实 SDK 的泛称）。
+    assert.deepEqual([...records.keys()].sort(), [oldKey, newKey].sort(),
+      '记录视图的键集合必须恰为旧/新两个 epoch 的键（构造时冻结的 record key 隔离）');
+    for (const [key, record] of records) {
+      assert.equal(recordKey(record), key, '记录必须落在由它自己身份编码的键上（键 ↔ 记录不得错配）');
+      if (key === newKey) assert.deepEqual(record.names, NEW_NAMES, '新 epoch 的键上只能是新名单');
+      if (key === oldKey) assert.deepEqual(record.names, OLD_NAMES, '旧 epoch 的键上只能是旧名单');
+    }
+    // 交叉污染是这里唯一被禁止的方向：无论旧写最终是否被记入记录视图，都不得串到对方 epoch 的键上。
+    assert.equal([...records.values()].some((r) => r.names.includes('old_alpha') && recordKey(r) === newKey), false,
+      '旧名单绝不得出现在新 epoch 的键上');
+    assert.equal([...records.values()].some((r) => r.names.includes('new_charlie') && recordKey(r) === oldKey), false,
+      '新名单绝不得出现在旧 epoch 的键上');
+
+    // (5) 冷恢复：新建账本，按 journal 报告的**最新** compacted identity 对齐读取键。
+    const restored = build();
+    restored.setIdentity(NEW);
+    const verdict = await restored.load();
+    assert.equal(verdict.state, BASELINE_STATE.TRUSTED);
+    assert.deepEqual(restored.names, NEW_NAMES, '冷恢复只读当前 epoch 的键，取得最新名单');
+    assert.equal(restored.names.includes('old_alpha'), false, '冷恢复不得选中旧 epoch 的记录');
+    assert.deepEqual(restored.identity, { epochId: NEW.epochId, compactionEndSeq: NEW.compactionEndSeq },
+      '读操作不得改写当前身份');
+    // 原会话的运行时仍是最新身份/名单：冷恢复是另一个账本的读，不影响它。
+    assert.deepEqual(ledger.names, NEW_NAMES);
+    assert.deepEqual(ledger.identity, { epochId: NEW.epochId, compactionEndSeq: NEW.compactionEndSeq });
+  } finally {
+    releaseAll();
+  }
+});

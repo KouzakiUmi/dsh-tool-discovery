@@ -355,6 +355,78 @@ export function createLifecycle(deps) {
     return boundary !== null && boundary >= session.seq;
   }
 
+  /**
+   * 跟随**最新**的在途工作把基线推进到一个终态，并在该终态上同步应用 `decide`。
+   *
+   * ## 为什么需要它（F3 的承重点）
+   *
+   * 一次 `load()` / `begin()` 在它自己的 await 窗口里可能又被一次 **live 用户
+   * `/compact`** 的 `adopt` 推进了 revision，于是它在 `trusted-epoch.mjs` 的
+   * `!isCurrent(rev)` 处提前返回 `{state: PENDING, reason: null}` —— 那**不是**失败，
+   * 而是「又来了一次正在成功的迁移写」。过去调用方只判一次 `state !== TRUSTED` 就执行
+   * `blockBaseline(runtime, null)`：名单被清空、引擎 fail closed、`restoring` 提前归
+   * false，而真实状态会在下一次 put 落定时翻转回来。归因（`null`）与状态双双反转。
+   *
+   * ## 四条硬纪律（缺一就不成立）
+   *
+   * 1. **不设轮数上限、不设超时。** pending 的既有语义就是"不可授权"（0 request），
+   *    跟随它落定是唯一正确处置。给它安一个次数封顶，会在**连续健康**的 supersession
+   *    之后把一次正在成功的迁移判成失败 —— 那正是本函数要消除的东西。
+   * 2. **每一轮只在**真正的工作**上让出控制权，绝不空转。** 有在途**写**就
+   *    `whenSettled()`（真等它落定）；没有在途写就**启动/重启一次真正的 `load()`** 来
+   *    重新核验。若在 PENDING 时反复 `await whenSettled()`，它在没有在途写时会**立即
+   *    resolve**，于是一个 `while (PENDING)` 就变成占满微任务的忙轮询，把 timer 与真实
+   *    I/O 饿死 —— 那比原来的 bug 更糟。
+   * 3. **有在途写时绝不 `load()`。** `load()` 会自增 revision，把那条正在落盘的 adopt
+   *    变成 superseded，记录永远写不出去（TE4b 修复的既有理由，必须保持）。
+   * 4. **读状态与用它裁决必须在同一个同步块里，中间不得有 `await`。** 任何"先返回
+   *    一个终态快照、外层再 await、然后拿快照去用"的写法都会重蹈 F3：外层 await 的
+   *    间隙里又一轮 adopt 会把账本翻回 PENDING、`names` 翻成 `null`，于是拿着过期的
+   *    `TRUSTED` 去 `adoptNames(runtime, ledger.names)` 就是 TypeError，被外层 catch
+   *    吞成一条**伪 UNAVAILABLE**。因此 `decide` 必须同步，且调用点与读取之间无 await。
+   *
+   * 注意 `inFlight` 在这里只用于**选择等哪一个工作**（纪律 2/3），**不**用于推断
+   * "永远不会落定"：它只跟写、不跟 `load`，PENDING 且当前无写时可能正有另一次
+   * `load()` 在途。因此本函数在 PENDING 时从不自行 block —— 那会凭空新增失败原因。
+   *
+   * ## mustRead：区分"必须先读"与"跟随已有工作"
+   *
+   * * `true`（冷恢复入口 / `retryBaseline`）：**必须**读一次 durable 记录，即使账本已经
+   *   是终态 —— 这正是"冷崩重放"与"存储迟到后重试"的既有语义。
+   * * `false`（`begin()` 之后 / 恢复收尾）：**跟随已有工作**。先同步看当前状态：已终态
+   *   就直接裁决，**不再多读一次**。`begin()` 刚落定时若还强制 load，会自增 revision
+   *   并凭空多给一次 IO 失败机会 —— 而那次读没有任何信息量。
+   *
+   * @param {any} runtime
+   * @param {(state: string, reason: string|null) => any} decide 同步裁决；只在终态上调用。
+   *   **裁决的全部副作用必须发生在这个同步回调内部**：helper 返回快照、外层再 `await`
+   *   然后用快照，就是纪律 4 要消除的 TOCTOU。
+   * @param {boolean} [mustRead] 见上；默认 false（跟随已有工作）
+   * @returns {Promise<any>} decide 的返回值
+   */
+  async function settleBaselineWith(runtime, decide, mustRead = false) {
+    let readRequired = mustRead;
+    for (;;) {
+      // ---- 唯一的 await 点：只等真正的工作（纪律 2/3） ----
+      if (runtime.ledger.inFlight) {
+        // 有在途写：真等它落定。**绝不在此刻 load** —— load 会自增 revision、supersede
+        // 掉正在落盘的 adopt，让那条记录永远写不出去（TE4b 修复的既有理由）。
+        await runtime.ledger.whenSettled();
+      } else if (readRequired || runtime.ledger.state === BASELINE_STATE.PENDING) {
+        // 没有在途写：用一次真正的读工作推进并重新核验。`readRequired` 覆盖"已终态也
+        // 必须重读"；PENDING 覆盖"还没读过"。两者都不成立时不读，直接进下面的同步裁决。
+        readRequired = false;
+        await runtime.ledger.load();
+      }
+      // ---- 同步块：读与用之间不得有 await（纪律 4） ----
+      const state = runtime.ledger.state;
+      if (state !== BASELINE_STATE.PENDING) {
+        return decide(state, runtime.ledger.reason);
+      }
+      // 仍是 PENDING：跟到最新工作（下一轮），不在这里下任何结论。
+    }
+  }
+
   /** 冷恢复折叠落定后，再按"可信记录"落定基线。 */
   async function settleRestoreBaseline(runtime, outcome) {
     if (runtime.journal.isSealed()) {
@@ -383,32 +455,32 @@ export function createLifecycle(deps) {
       // 有 own 出站事实却**没有**可信记录：这是必须迁移的老会话。
       // 判据里绝不包含"从历史扫描出的命令链"——迁移只认 live 的那一次用户 /compact。
       //
-      // **先等在途的写**：缓冲重放（ensureRuntime 在 restore 之前重放 buffered 事件）
-      // 可能已经在 live 链上把那次手动 /compact 走完了，此时账本正处在 adopt 的
-      // 在途途中。若此处直接 load()：① load 会自增 revision，让那次 adopt 变成
-      // superseded（记录永远不落盘）；② load 读的是**新 epoch** 的键，而那条记录还没
-      // durable → 必然 MISSING。两者叠加 = 一次**真实成功的用户迁移**被自己的恢复收尾
-      // 判成 missing，会话永久 0 request。所以这里先让在途写落定，再读状态。
-      await runtime.ledger.whenSettled();
-      if (runtime.ledger.state === BASELINE_STATE.TRUSTED) {
-        // 迁移已经完成：权威就是那份刚落盘的记录，不读也不重建。
-        adoptNames(runtime, runtime.ledger.names);
+      // 裁决交给 settleBaselineWith，它逐轮跟随**最新**的在途工作直到落定：
+      //   * 有在途写（缓冲重放已在 live 链上把那次手动 /compact 走完了）→ 先等它落定，
+      //     **不**在此刻 load（load 会自增 revision，让那次 adopt 永远 superseded，
+      //     记录永远写不出去 —— TE4b 的既有理由）；
+      //   * 没有在途写 → 读一次 durable 记录；这一次读的 await 窗口里若又抵达一次
+      //     live 用户 /compact（F3 的形态），它返回的 PENDING/null 不再被当成失败，
+      //     而是跟到那次正在成功的写上。
+      // decide 是**同步**的：读状态与用它裁决在同一个同步块里完成，中间没有 await。
+      return await settleBaselineWith(runtime, (state, reason) => {
+        if (state === BASELINE_STATE.TRUSTED) {
+          // 迁移已经完成：权威就是那份刚落盘的记录，不读也不重建。
+          adoptNames(runtime, runtime.ledger.names);
+          runtime.restoring = false;
+          log('lifecycle:migrated-during-restore', {
+            sessionId: runtime.scope.sessionId,
+            epochId: runtime.ledger.identity.epochId,
+            count: runtime.ledger.names.length,
+          });
+          return outcome;
+        }
+        blockBaseline(runtime, reason);
+        // 终态必须把 restoring 归 false：留在 true 会被投影当成"基线尚未落定"而
+        // 永远不发请求，并让同 composition 里别的会话的请求队列错位。
         runtime.restoring = false;
-        log('lifecycle:migrated-during-restore', {
-          sessionId: runtime.scope.sessionId,
-          epochId: runtime.ledger.identity.epochId,
-          count: runtime.ledger.names.length,
-        });
-        return outcome;
-      }
-      const verdict = await runtime.ledger.load();
-      runtime.restoring = false;
-      if (verdict.state !== BASELINE_STATE.TRUSTED) {
-        blockBaseline(runtime, verdict.reason);
-        return { mode: 'incompatible', reason: verdict.reason };
-      }
-      adoptNames(runtime, runtime.ledger.names);
-      return outcome;
+        return { mode: 'incompatible', reason };
+      });
     }
     // own 出站历史为空：仍然先读同 identity 的记录（冷崩重放）。
     return resolveBootstrapBaseline(runtime, outcome);
@@ -421,58 +493,87 @@ export function createLifecycle(deps) {
    * @param {any} [restoreOutcome] 冷恢复的折叠结果（透传给调用方）
    */
   async function resolveBootstrapBaseline(runtime, restoreOutcome) {
-    const loaded = await runtime.ledger.load();
-    if (loaded.state === BASELINE_STATE.TRUSTED) {
-      adoptNames(runtime, runtime.ledger.names);
-      runtime.engine.ready(runtime.scope);
-      runtime.restoring = false;
-      log('lifecycle:baseline-reused', {
-        sessionId: runtime.scope.sessionId,
-        epochId: runtime.ledger.identity.epochId,
-        count: runtime.ledger.names.length,
-        source: 'durable-record',
-      });
-      return restoreOutcome ?? { mode: 'ready' };
-    }
-    if (loaded.reason !== TRUSTED_EPOCH_REASONS.MISSING) {
-      // 存储不可用 / 坏记录：**不**建立初始记录（那会用当前配置覆盖一条可能还在的记录）。
-      blockBaseline(runtime, loaded.reason);
-      runtime.restoring = false;
-      return { mode: 'incompatible', reason: loaded.reason };
-    }
-    // 记录确实缺失 —— 但"缺失"本身**不**构成建立初始记录的资格。
+    // F3 同型，而且这里有**两处**裁决点（读记录之后、建立初始记录之后），两处都会被
+    // live 用户 /compact 的 adopt 推进 revision 而提前返回 PENDING/null。
+    // `retryBaseline`（index.mjs 的存储迟到重试）复用本函数，所以这两道收口是
+    // 三个调用点共同的。
     //
-    // 唯一的资格判据是 **own 段没有任何真实出站/工具事实**（docs/08 §2.2 的新会话定义）。
-    // own 段已经出过站的会话是 legacy：它必须等**本次真实的用户 `/compact`** 才允许迁移，
-    // 任何其它路径替它补建记录，都是把时序当授权——本函数正是被 `retryBaseline`
-    // （storage 迟到到位时由 index.mjs 触发）复用得到的那条路径，所以这道判据必须
-    // 落在这里：它是三个调用点共同的、不变量级的出口。
-    if (runtime.journal.hasOwnOutboundHistory()) {
-      blockBaseline(runtime, TRUSTED_EPOCH_REASONS.MISSING);
+    // 1) 必须先读一次同 identity 的 durable 记录（`mustRead = true`：冷崩重放与
+    //    "存储迟到后重试"都要求即使账本已是终态也重读）。
+    //    **三条出口全部在这个同步 decide 内部完成**：复用 durable 记录、拒绝（存储不可用
+    //    / 坏记录）、以及"缺失"的资格判断。若先返回 `{state, reason}` 快照、外层再
+    //    `await` 然后 `adoptNames(runtime, ledger.names)`，就是 F3 的 TOCTOU 原样重演
+    //    （外层 await 的间隙里又一轮 adopt 会把 names 翻成 null）。
+    const gate = await settleBaselineWith(runtime, (state, reason) => {
+      if (state === BASELINE_STATE.TRUSTED) {
+        // 冷崩复用：权威是那份已落盘的记录，不与当前配置取交集。
+        adoptNames(runtime, runtime.ledger.names);
+        runtime.engine.ready(runtime.scope);
+        runtime.restoring = false;
+        log('lifecycle:baseline-reused', {
+          sessionId: runtime.scope.sessionId,
+          epochId: runtime.ledger.identity.epochId,
+          count: runtime.ledger.names.length,
+          source: 'durable-record',
+        });
+        return { done: true, outcome: restoreOutcome ?? { mode: 'ready' } };
+      }
+      if (reason !== TRUSTED_EPOCH_REASONS.MISSING) {
+        // 存储不可用 / 坏记录：**不**建立初始记录（那会用当前配置覆盖一条可能还在的记录）。
+        blockBaseline(runtime, reason);
+        runtime.restoring = false;
+        return { done: true, outcome: { mode: 'incompatible', reason } };
+      }
+      // 记录确实缺失 —— 但"缺失"本身**不**构成建立初始记录的资格。
+      //
+      // 唯一的资格判据是 **own 段没有任何真实出站/工具事实**（docs/08 §2.2 的新会话定义）。
+      // own 段已经出过站的会话是 legacy：它必须等**本次真实的用户 `/compact`** 才允许迁移，
+      // 任何其它路径替它补建记录，都是把时序当授权——本函数正是被 `retryBaseline`
+      // （storage 迟到到位时由 index.mjs 触发）复用得到的那条路径，所以这道判据必须
+      // 落在这里：它是三个调用点共同的、不变量级的出口。
+      if (runtime.journal.hasOwnOutboundHistory()) {
+        blockBaseline(runtime, TRUSTED_EPOCH_REASONS.MISSING);
+        runtime.restoring = false;
+        log('lifecycle:bootstrap-refused-legacy', {
+          sessionId: runtime.scope.sessionId,
+          reason: TRUSTED_EPOCH_REASONS.MISSING,
+          note: 'own 段已有真实出站事实：不得因记录缺失而补建初始记录，只能由本次真实用户 /compact 迁移',
+        });
+        return { done: true, outcome: { mode: 'incompatible', reason: TRUSTED_EPOCH_REASONS.MISSING } };
+      }
+      // 确有资格 → **在本同步块内启动** `begin()`，并把它自己的 promise 交外层等待。
+      // 资格判定与初始记录的同步启动/名单捕获之间**不得有 await 间隙**：若这里只交出
+      // `{done:false}` 这个资格快照、外层再 `await` 之后才 `begin()`，那段间隙里抵达的
+      // live 用户 `/compact`（它的 adopt 会推进 revision 并捕获自己的边界名单）就会被这条
+      // 过期的初始记录 supersede 掉 —— 手动迁移被回退成 `initial` + 当时的当前配置名单。
+      // 「决定同步 + 启动同步」在这里是**同一件事**；启动之后把 promise 交出去，等待
+      // （可能被更晚的 adopt supersede）仍由外层与下面那段跟随负责。
+      return { done: false, begun: runtime.ledger.begin(currentAlwaysNames(), 'initial') };
+    }, true);
+    if (gate.done) return gate.outcome;
+    // 建立初始记录的那次写的落定：可能已被更晚的 adopt 取代，那不是失败。
+    await gate.begun;
+    // 2) `begin()` 同样会被更晚的 adopt supersede 并返回 PENDING/null —— 过去这里
+    //    只判一次 `!== TRUSTED` 就 `blockBaseline(runtime. ledger.reason)`，于是又是
+    //    一次 reason=null 的过度反应。这里用 `mustRead = false` **跟随已有工作**：
+    //    `begin()` 已落定就**不再多读一次**（那次读没有信息量，却会自增 revision
+    //    并凭空多给一次 IO 失败机会）；有在途写就等它；无在途写而仍 pending 才读。
+    return await settleBaselineWith(runtime, (state, reason) => {
+      if (state === BASELINE_STATE.TRUSTED) {
+        adoptNames(runtime, runtime.ledger.names);
+        runtime.engine.ready(runtime.scope);
+        runtime.restoring = false;
+        log('lifecycle:baseline-created', {
+          sessionId: runtime.scope.sessionId,
+          epochId: runtime.ledger.identity.epochId,
+          count: runtime.ledger.names.length,
+        });
+        return restoreOutcome ?? { mode: 'ready' };
+      }
+      blockBaseline(runtime, reason);
       runtime.restoring = false;
-      log('lifecycle:bootstrap-refused-legacy', {
-        sessionId: runtime.scope.sessionId,
-        reason: TRUSTED_EPOCH_REASONS.MISSING,
-        note: 'own 段已有真实出站事实：不得因记录缺失而补建初始记录，只能由本次真实用户 /compact 迁移',
-      });
-      return { mode: 'incompatible', reason: TRUSTED_EPOCH_REASONS.MISSING };
-    }
-    // 确实缺失且确有资格 → 建立初始记录。名单在**这一刻**同步捕获。
-    await runtime.ledger.begin(currentAlwaysNames(), 'initial');
-    if (runtime.ledger.state !== BASELINE_STATE.TRUSTED) {
-      blockBaseline(runtime, runtime.ledger.reason);
-      runtime.restoring = false;
-      return { mode: 'incompatible', reason: runtime.ledger.reason };
-    }
-    adoptNames(runtime, runtime.ledger.names);
-    runtime.engine.ready(runtime.scope);
-    runtime.restoring = false;
-    log('lifecycle:baseline-created', {
-      sessionId: runtime.scope.sessionId,
-      epochId: runtime.ledger.identity.epochId,
-      count: runtime.ledger.names.length,
+      return { mode: 'incompatible', reason };
     });
-    return restoreOutcome ?? { mode: 'ready' };
   }
 
   /** session/event：已建 runtime 直接折叠；否则进有界缓冲。 */

@@ -51,6 +51,10 @@ git clone https://github.com/KouzakiUmi/dsh-tool-discovery
 cd dsh-tool-discovery
 ```
 
+当前源码版本为 **`0.2.0-functional.6`**。每一次 `main` 绿跑都会自动产出 GitHub Release 资产；它是
+**构建产物，不是验收结论**——本版本覆盖什么、以及明确**不**宣称什么，见
+[当前状态](plugin/docs/05-current-status.md)。
+
 纯 JavaScript，无构建步骤，自身不依赖任何包——这些由宿主提供。
 
 ## 自行验证
