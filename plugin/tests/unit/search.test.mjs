@@ -66,6 +66,90 @@ test('正文检索与路径枚举可区分(易混淆对)', () => {
   assert.equal(hits[0].entry.name, 'grep');
 });
 
+// --- 排序回归:有效词覆盖 / 停用词 -------------------------------------------------
+// 纯能力目录:去掉技能文本与入口/框架项,只剩能力条目本身。
+// 这样"每字段一个词固定分"的缺陷才暴露为可观测的排序错误。
+/** @type {Array<[string, string, string|null, string]>} */
+const CAPABILITIES = [
+  ['glob', 't_files_glob', 'files', 'enumerate file entries by path pattern'],
+  ['grep', 't_files_grep', 'files', 'search text inside file contents'],
+  ['read_file', 't_files_read', 'files', 'read a file body'],
+  ['edit_file', 't_files_edit', 'files', 'modify a located file region'],
+  ['run_shell', 't_shell_run', 'shell', 'execute a shell command'],
+  ['web_fetch', 't_web_fetch', 'web', 'fetch a web page over http'],
+  ['web_search', 't_web_search', 'web', 'query a web search engine'],
+  ['browser_click', 't_browser_click', 'browser', 'click an element on a page'],
+  ['desktop_type', 't_desktop_type', 'desktop', 'type text on the desktop'],
+  ['github_list_pr', 't_github_pr', 'github', 'list pull requests'],
+  ['docx_read', 't_doc_read', 'documents', 'read an office document'],
+  ['xlsx_write', 't_xls_write', 'documents', 'write a spreadsheet'],
+  ['unit_convert', 't_data_convert', 'data', 'convert numeric units'],
+  ['spawn_agent', 't_agents_spawn', 'agents', 'spawn a subagent'],
+  ['view_image', 't_images_view', 'images', 'view an image file'],
+  ['generate_image', 't_images_gen', 'images', 'generate an image'],
+  ['mcp_bridge', 't_int_bridge', 'integrations', 'bridge to an external integration'],
+  ['misc_thing', 't_other_thing', null, 'a capability with no structural hint'],
+];
+
+const capabilityIdx = () => {
+  const bindings = CAPABILITIES.map(([name, toolId, namespace, description]) =>
+    binding({ name, toolId, namespace, description, skill: null }));
+  const c = buildCatalog(bindings, { now: 0, generation: 'gC' });
+  return buildSearchIndex(Array.from(c.entries.values()));
+};
+
+test('回归:正文内容检索应排第一,不被"名字里带 file"的工具压过', () => {
+  const hits = search(capabilityIdx(), { query: 'search text inside file contents', category: 'all', limit: 5 });
+  assert.ok(hits.length > 0);
+  assert.equal(hits[0].entry.name, 'grep', `实际第一: ${hits.map((h) => h.entry.name).join(',')}`);
+});
+
+test('回归:自然改写("请帮我…"前缀)不改变目标工具排序', () => {
+  const hits = search(capabilityIdx(), { query: 'please help me search inside files', category: 'all', limit: 5 });
+  assert.ok(hits.length > 0);
+  assert.equal(hits[0].entry.name, 'grep', `实际第一: ${hits.map((h) => h.entry.name).join(',')}`);
+});
+
+test('回归:按路径查找文件应排第一(与正文检索易混淆)', () => {
+  const hits = search(capabilityIdx(), { query: 'find files by path pattern', category: 'all', limit: 5 });
+  assert.ok(hits.length > 0);
+  assert.equal(hits[0].entry.name, 'glob', `实际第一: ${hits.map((h) => h.entry.name).join(',')}`);
+});
+
+test('回归:目的性查询(非描述原文)仍把对应能力排第一', () => {
+  // 描述是 'convert numeric units';查询是另一种说法,不照抄描述。
+  const hits = search(capabilityIdx(), { query: 'convert a numeric measurement from one unit to another', category: 'all', limit: 5 });
+  assert.ok(hits.length > 0);
+  assert.equal(hits[0].entry.name, 'unit_convert', `实际第一: ${hits.map((h) => h.entry.name).join(',')}`);
+});
+
+test('回归:只由停用词/寒暄构成的查询不产生无关命中', () => {
+  const i = capabilityIdx();
+  for (const q of [
+    'please to the of and in on for me',
+    'please help me to calculate quantum hedging',
+  ]) {
+    const hits = search(i, { query: q, category: 'all', limit: 5 });
+    assert.equal(hits.length, 0, `"${q}" 应零命中,实际 ${hits.map((h) => h.entry.name).join(',')}`);
+  }
+});
+
+test('回归:剔除停用词不影响真实意图查询', () => {
+  const hits = search(capabilityIdx(), { query: 'read a file body', category: 'all', limit: 5 });
+  assert.ok(hits.length > 0);
+  assert.equal(hits[0].entry.name, 'read_file', `实际第一: ${hits.map((h) => h.entry.name).join(',')}`);
+});
+
+test('停用词去噪不得吞掉精确名称匹配', () => {
+  // 名叫 'to' 的条目:查询本身全是停用词,但精确名称仍必须可发现。
+  const c = buildCatalog([binding({ name: 'to', toolId: 't_stop_named', skill: null })], { now: 0, generation: 'gS' });
+  const i = buildSearchIndex(Array.from(c.entries.values()));
+  const hits = search(i, { query: 'to', category: 'all', limit: 5 });
+  assert.equal(hits.length, 1, `实际 ${hits.map((h) => h.entry.name).join(',')}`);
+  assert.equal(hits[0].entry.name, 'to');
+  assert.ok(hits[0].reasons.includes(MATCH_REASONS.EXACT_NAME));
+});
+
 test('category 是查询约束,不是授权条件', () => {
   const hits = search(idx(), { query: 'grep', category: 'shell', limit: 5 });
   assert.equal(hits.length, 0, '不相关类别内不得返回命中');

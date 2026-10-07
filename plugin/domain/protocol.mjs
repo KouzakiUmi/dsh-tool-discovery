@@ -47,16 +47,20 @@ function requireObjectRoot(raw) {
 }
 
 /**
+ * 页大小归一。
+ *
+ * `max` 为 null = 该硬上限**默认关闭**：仍然要求正整数（避免 0 / 负数 / 小数这类
+ * 明显错误的请求），但不再有上界 —— 模型可以显式要更大的 limit。
  * @param {number} value
  * @param {number} def
- * @param {number} max
+ * @param {number|null} max
  */
 function normalizeLimit(value, def, max) {
   if (value === undefined) return def;
   if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
     throw new DomainError('INVALID_ARGS', t(['detail', 'limitNotPositive']));
   }
-  if (value > max) throw new DomainError('INVALID_ARGS', t(['detail', 'limitOverMax']), { max });
+  if (max !== null && value > max) throw new DomainError('INVALID_ARGS', t(['detail', 'limitOverMax']), { max });
   return value;
 }
 
@@ -112,7 +116,7 @@ export function validateSearchRequest(raw, budgets = DEFAULT_BUDGETS) {
   const query = o.query;
   if (!isNonEmptyString(query)) throw new DomainError('INVALID_ARGS', t(['detail', 'queryRequired']));
   const codePoints = Array.from(query).length;
-  if (codePoints > budgets.maxQueryCodePoints) {
+  if (budgets.maxQueryCodePoints !== null && codePoints > budgets.maxQueryCodePoints) {
     throw new DomainError('INVALID_ARGS', t(['detail', 'queryOverMax']), { codePoints, max: budgets.maxQueryCodePoints });
   }
   const limit = normalizeLimit(o.limit, budgets.defaultSearchLimit, budgets.maxSearchLimit);
@@ -132,21 +136,10 @@ export function validateLoadRequest(raw, budgets = DEFAULT_BUDGETS) {
   if (action !== 'load' && action !== 'unload') throw new DomainError('INVALID_ARGS', t(['detail', 'unknownAction']));
 
   if (action === 'unload') {
-    if (o.candidates !== undefined || o.names !== undefined) {
-      throw new DomainError('INVALID_ARGS', t(['detail', 'unloadRejectsCandidates']));
-    }
-    const toolIds = o.toolIds;
-    if (!Array.isArray(toolIds) || toolIds.length === 0) {
-      throw new DomainError('INVALID_ARGS', t(['detail', 'unloadNeedsToolIds']));
-    }
-    for (const t of toolIds) {
-      if (!isNonEmptyString(t)) throw new DomainError('INVALID_ARGS', t(['detail', 'toolIdsNotStrings']));
-    }
-    const dedup = Array.from(new Set(toolIds));
-    if (dedup.length > budgets.maxActiveTools) {
-      throw new DomainError('INVALID_ARGS', t(['detail', 'unloadOverActiveLimit']));
-    }
-    return { action: 'unload', toolIds: dedup };
+    // 模型不得自主卸载：两次成功上下文压缩之间，已披露的 schema 只增不减。
+    // 缓存周期的清空点只有成功压缩（`/unloadtool` 暂缓）。
+    // state.reducePair 仍保留 unload 折叠分支，仅供旧历史回放兼容。
+    throw new DomainError('INVALID_ARGS', t(['detail', 'modelUnloadDisabled']));
   }
 
   if (o.toolIds !== undefined) throw new DomainError('INVALID_ARGS', t(['detail', 'loadRejectsToolIds']));
@@ -162,7 +155,7 @@ export function validateLoadRequest(raw, budgets = DEFAULT_BUDGETS) {
   if (hasCandidates) {
     const arr = o.candidates;
     if (!Array.isArray(arr) || arr.length === 0) throw new DomainError('INVALID_ARGS', t(['detail', 'candidatesNotArray']));
-    if (arr.length > budgets.maxLoadBatch) throw new DomainError('INVALID_ARGS', t(['detail', 'candidatesOverBatch']));
+    if (budgets.maxLoadBatch !== null && arr.length > budgets.maxLoadBatch) throw new DomainError('INVALID_ARGS', t(['detail', 'candidatesOverBatch']));
     /** @type {Array<{ref:string,revision:string}>} */
     const out = [];
     /** @type {Map<string,string>} */
@@ -186,7 +179,7 @@ export function validateLoadRequest(raw, budgets = DEFAULT_BUDGETS) {
 
   const names = o.names;
   if (!Array.isArray(names) || names.length === 0) throw new DomainError('INVALID_ARGS', t(['detail', 'namesNotArray']));
-  if (names.length > budgets.maxLoadBatch) throw new DomainError('INVALID_ARGS', t(['detail', 'namesOverBatch']));
+  if (budgets.maxLoadBatch !== null && names.length > budgets.maxLoadBatch) throw new DomainError('INVALID_ARGS', t(['detail', 'namesOverBatch']));
   for (const n of names) {
     if (!isNonEmptyString(n)) throw new DomainError('INVALID_ARGS', t(['detail', 'namesNotStrings']));
   }

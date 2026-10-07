@@ -279,7 +279,7 @@ test('L03: 真实 fork → 父 selected 不继承（own-only 折叠），子 own
 // ---------------------------------------------------------------------------
 // R5 / F08×L01：unload×恢复（load A+B → unload A → 重开 → A 不恢复、B 恢复可用）
 // ---------------------------------------------------------------------------
-test('F08xL01: unload 后冷恢复：已卸项不恢复且 body=0，仍选中项恢复且可执行', async () => {
+test('F08xL01: 模型不得 unload → 冷恢复照旧重放全部 load，两者都恢复且可执行', async () => {
   const { store, queueResponse } = await storeOf()
   store.reset()
   const boot1 = await bootAdapterComposition({
@@ -288,15 +288,16 @@ test('F08xL01: unload 后冷恢复：已卸项不恢复且 body=0，仍选中项
   })
   queueResponse({ toolCalls: [{ id: 'u-load-a', name: 'tool_load', arguments: { names: ['fixture_hidden_inherited'] } }] })
   queueResponse({ toolCalls: [{ id: 'u-load-b', name: 'tool_load', arguments: { names: ['fixture_mutating'] } }] })
+  // unload 已不是模型可用路径：宿主 schema 校验（enum 里没有 unload）会先挡一道
   queueResponse({ toolCalls: [{ id: 'u-unload', name: 'tool_load', arguments: { action: 'unload', toolIds: ['global::fixture_hidden_inherited'] } }] })
   queueResponse({ text: 'u setup done' })
   const h1 = await drive(boot1.ctx, boot1.tmpRoot, 'rec-unload-1')
-  await userTurn(h1, 'Load two tools and unload one.')
+  await userTurn(h1, 'Load two tools and try to unload one.')
   // 回执交叉核对：unload 目标 id 与登记事实一致（不盲信硬编码）
   const events1 = await rawEvents(boot1.ctx, 'rec-unload-1')
   const loadAShell = JSON.parse(resultTextOf(toolResultFor(events1, 'u-load-a')))
   assert.equal(loadAShell.data.receipt.selected[0].toolId, 'global::fixture_hidden_inherited')
-  assert.equal(JSON.parse(resultTextOf(toolResultFor(events1, 'u-unload'))).ok, true)
+  assert.equal(toolResultFor(events1, 'u-unload').data.message.isError, true, 'unload 必须被拒')
   await h1.dispose()
 
   const boot2 = await bootAdapterComposition({
@@ -312,32 +313,30 @@ test('F08xL01: unload 后冷恢复：已卸项不恢复且 body=0，仍选中项
   const runtime = runtimeOf(boot2.ctx, 'rec-unload-1')
   const outcome = await runtime.journal.whenRestored()
   assert.equal(outcome.mode, 'ready', `restore must settle: ${JSON.stringify(outcome)}`)
-  assert.equal(outcome.applied, 3, 'load A + load B + unload A 全部按序重放')
+  assert.equal(outcome.applied, 2, 'load A + load B 全部按序重放（unload 未提交，不产生 canonical 对）')
   assert.equal(outcome.rejected, 0, `clean journal must reject nothing: ${JSON.stringify(outcome)}`)
   const eng = runtime.engine.getState(runtime.scope)
-  assert.deepEqual([...eng.selected.values()].map((s) => s.name).sort(), ['fixture_mutating'],
-    'restore must end with exactly the non-unloaded selection')
+  assert.deepEqual([...eng.selected.values()].map((s) => s.name).sort(),
+    ['fixture_hidden_inherited', 'fixture_mutating'],
+    '没有任何一次成功压缩，两个选择都必须恢复')
 
   // 历史保留 + 披露/执行正负控制
   const historyEvents = await rawEvents(boot2.ctx, 'rec-unload-1')
-  assert.ok(historyEvents.some((e) => e.type === 'tool/result' && resultTextOf(e).includes('unload')),
-    'unload receipt must remain in restored history')
+  assert.ok(historyEvents.some((e) => e.type === 'tool/result' && resultTextOf(e).includes('"tool_load"')),
+    'load 回执必须仍在恢复后的历史中')
   queueResponse({
     toolCalls: [
       { id: 'u-legit', name: 'fixture_mutating', arguments: { text: 'legit' } },
-      { id: 'u-guess', name: 'fixture_hidden_inherited', arguments: { text: 'after unload' } }
+      { id: 'u-legit-2', name: 'fixture_hidden_inherited', arguments: { text: 'legit2' } }
     ]
   })
   queueResponse({ text: 'u done' })
-  await userTurn(h2, 'Use the surviving tool.')
-  const events2 = await rawEvents(boot2.ctx, 'rec-unload-1')
+  await userTurn(h2, 'Use the restored tools.')
   const disclosed = namesOf(store.requests[store.requests.length - 1])
   assert.ok(disclosed.includes('fixture_mutating'), `restored selection must be disclosed: ${disclosed}`)
-  assert.equal(disclosed.includes('fixture_hidden_inherited'), false, 'unloaded tool must never be disclosed')
-  assert.equal(store.bodyCount('u-legit'), 1, 'restored tool must execute exactly once (未误伤正控)')
-  assert.equal(store.bodyCount('u-guess'), 0, 'unloaded tool body must not run (负控)')
-  const guess = toolResultFor(events2, 'u-guess')
-  assert.equal(guess.data.message.isError, true, 'unloaded tool call must be rejected')
+  assert.ok(disclosed.includes('fixture_hidden_inherited'), '未被卸载的第二个选择同样必须恢复')
+  assert.equal(store.bodyCount('u-legit'), 1, 'restored tool must execute exactly once（未误伤正控）')
+  assert.equal(store.bodyCount('u-legit-2'), 1, '未误伤正控：被拒的 unload 不得牵连另一个选择')
 })
 
 // ---------------------------------------------------------------------------

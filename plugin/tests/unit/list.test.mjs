@@ -27,9 +27,20 @@ test('F11 available:不预展开 description/schema', async () => {
   assert.ok(!text.includes('r_sha256'), '不得出现 revision');
 });
 
-test('F11 available:默认/最大 20 个名称', async () => {
+test('F11 available:默认页 20;页大小硬上限默认关闭、显式配置为 20 时生效', async () => {
   const many = Array.from({ length: 40 }, (_, i) => binding({ name: `file_tool_${String(i).padStart(2, '0')}`, toolId: `t_ft_${i}`, namespace: 'files' }));
-  const { engine } = await makeEngine({ bindings: many });
+
+  // 默认：页大小硬上限关闭 → 可以要更大的一页，默认策略仍是 20
+  const open = await makeEngine({ bindings: many });
+  const openDef = open.engine.handleList({ view: 'available', category: 'files' }, SCOPE_A);
+  assert.equal(openDef.data.names.length, 20, '默认 20');
+  assert.ok(openDef.data.truncated);
+  assert.ok(openDef.data.nextCursor);
+  const openBig = open.engine.handleList({ view: 'available', category: 'files', limit: 25 }, SCOPE_A);
+  assert.equal(openBig.data.names.length, 25, '默认关闭时更大的页被接受');
+
+  // 显式配置 maxListLimit=20：照旧拒绝越界
+  const { engine } = await makeEngine({ bindings: many, engineConfig: { budgets: { maxListLimit: 20 } } });
   const def = engine.handleList({ view: 'available', category: 'files' }, SCOPE_A);
   assert.equal(def.data.names.length, 20, '默认 20');
   assert.equal(def.data.truncated, true);
@@ -146,11 +157,20 @@ test('F12 state 视图返回 selected/advertised/invalidated 与预算', async (
   assert.deepEqual(r.data.selected, []);
   assert.deepEqual(r.data.advertised, []);
   assert.deepEqual(r.data.invalidated, []);
-  assert.equal(r.data.budgets.maxActiveTools, 12);
-  assert.equal(r.data.budgets.maxActiveSchemaBytes, 49152);
+  // 默认关闭 → 回显 null（JSON 可表达，不出现 Infinity/NaN）
+  assert.equal(r.data.budgets.maxActiveTools, null);
+  assert.equal(r.data.budgets.maxActiveSchemaBytes, null);
   assert.equal(r.data.budgets.tokenEstimation, 'estimate');
+  assert.equal(JSON.stringify(r.data).includes('Infinity'), false);
+  assert.equal(JSON.stringify(r.data).includes('NaN'), false);
   // 不得枚举隐藏目录
   assert.ok(!JSON.stringify(r.data).includes('glob'));
+
+  // 显式配置后回显真实数字
+  const capped = await makeEngine({ engineConfig: { budgets: { maxActiveTools: 12, maxActiveSchemaBytes: 49152 } } });
+  const cr = capped.engine.handleList({ view: 'state' }, SCOPE_A);
+  assert.equal(cr.data.budgets.maxActiveTools, 12);
+  assert.equal(cr.data.budgets.maxActiveSchemaBytes, 49152);
 });
 
 test('state 视图不因 selected 变化泄漏 schema', async () => {

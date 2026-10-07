@@ -5,14 +5,22 @@ import { makeEngine, SCOPE_A, SCOPE_B, nextOpId, commitLoad, binding, sampleBind
 import { navigationFootprint } from '../../domain/list.mjs';
 import { DEFAULT_BUDGETS } from '../../domain/constants.mjs';
 
-test('F10 单工具 schema 超预算 → 明确失败,schema 未截断', async () => {
+test('F10 **显式配置** schema 字节上限 → 单个超限工具明确失败,schema 未截断', async () => {
   const fat = binding({
     name: 'fat_tool',
     toolId: 't_files_fat',
     namespace: 'files',
     params: { type: 'object', properties: { blob: { type: 'string', description: 'x'.repeat(60000) } } },
   });
-  const { engine } = await makeEngine({ bindings: [...sampleBindings(), fat] });
+  // 默认关闭 → 不因单个大 schema 就阻断
+  const open = await makeEngine({ bindings: [...sampleBindings(), fat] });
+  const openRes = await commitLoad(open.engine, SCOPE_A, { names: ['fat_tool'] });
+  assert.equal(openRes.response.ok, true, '默认不得粗暴阻断单个大 schema');
+
+  const { engine } = await makeEngine({
+    bindings: [...sampleBindings(), fat],
+    engineConfig: { budgets: { maxActiveSchemaBytes: 49152 } },
+  });
   const res = await engine.handleLoad({ names: ['fat_tool'] }, SCOPE_A, { operationId: nextOpId() });
   assert.equal(res.response.ok, false);
   assert.equal(res.response.error.code, 'BUDGET_EXCEEDED');
@@ -44,9 +52,22 @@ test('schema 永不被截断:完整保留 required/enum', async () => {
   assert.deepEqual(entry.wire.parameters.properties.b.enum, ['x', 'y', 'z']);
 });
 
-test('活跃工具数量上限 12', async () => {
+test('**显式配置**活跃工具数量上限 12 时生效;默认不限制', async () => {
   const many = Array.from({ length: 15 }, (_, i) => binding({ name: `m_${i}`, toolId: `t_m_${i}`, namespace: 'files', params: { type: 'object' } }));
-  const { engine } = await makeEngine({ bindings: many });
+
+  // 默认：关闭 → 不卡在 12
+  const open = await makeEngine({ bindings: many });
+  for (let i = 0; i < 14; i += 5) {
+    const names = Array.from({ length: Math.min(5, 14 - i) }, (_, k) => `m_${i + k}`);
+    assert.equal((await commitLoad(open.engine, SCOPE_A, { names })).response.ok, true, '默认不得阻断');
+  }
+  assert.equal(open.engine.getState(SCOPE_A).selected.size, 14);
+
+  // 显式配置 12：照旧生效，且不得隐式淘汰
+  const { engine } = await makeEngine({
+    bindings: many,
+    engineConfig: { budgets: { maxActiveTools: 12 } },
+  });
   for (let i = 0; i < 12; i += 4) {
     const res = await commitLoad(engine, SCOPE_A, { names: [`m_${i}`, `m_${i + 1}`, `m_${i + 2}`, `m_${i + 3}`] });
     assert.equal(res.response.ok, true, `第 ${i / 4} 批应成功`);
@@ -148,9 +169,9 @@ test('导航体积有界:类别卡片带 estimate 标注', async () => {
   assert.ok(r.data.categories.length <= DEFAULT_BUDGETS.maxInitialCategories);
 });
 
-test('B 会话独立预算:超限不影响 A', async () => {
+test('**显式配置**上限时 B 会话独立预算:超限不影响 A', async () => {
   const many = Array.from({ length: 13 }, (_, i) => binding({ name: `m_${i}`, toolId: `t_m_${i}`, namespace: 'files', params: { type: 'object' } }));
-  const { engine } = await makeEngine({ bindings: many });
+  const { engine } = await makeEngine({ bindings: many, engineConfig: { budgets: { maxActiveTools: 12 } } });
   for (let i = 0; i < 12; i += 4) {
     const res = await commitLoad(engine, SCOPE_B, { names: [`m_${i}`, `m_${i + 1}`, `m_${i + 2}`, `m_${i + 3}`] });
     assert.equal(res.response.ok, true);

@@ -15,25 +15,62 @@ export const CONTROLLED_CATEGORIES = Object.freeze([
   'documents', 'data', 'agents', 'images', 'integrations', 'other',
 ]);
 
-/** 02 §9 预算冻结值。模型不可修改。 */
+/**
+ * 预算默认值。
+ *
+ * **默认不粗暴限制**：所有「数量 / 批次 / 字节 / 查询长度」这类**硬上限**默认
+ * 为 `null`（关闭），而不是某个拍脑袋的整数。限额可以作为配置保留，但默认关闭
+ * 是更安全的默认值 —— 见本文件末尾「设置上限的代价」一节。
+ *
+ * 编码约定（重要）：
+ *   * `null` = 关闭。null 是 JSON 可表达的，不会静默变成别的语义。
+ *   * 显式正整数 = 启用该上限。
+ *   * **绝不用 `Infinity`**：它进不了协议 JSON，`JSON.stringify` 会把它写成 null，
+ *     于是"关闭"与"配置缺失"在出站面上变得不可区分，而且错误详情里会出现无效值。
+ *
+ * 未被关闭的键分两类：
+ *   * `defaultListLimit` / `defaultSearchLimit`：**默认输出策略**。它们决定"一页/
+ *     一次搜索默认给多少"，本身就是有界的，且模型可以逐次翻页或显式要更大的 limit。
+ *     关闭硬上限**不会**让输出变得无界。
+ *   * `listCursorTtlMs` / `candidateTtlMs`：TTL，本轮不改。
+ *   * `maxInitialCategories`：等于受控分类的自然总数（12），用于自然遍历导航，
+ *     **不是**权限门槛。
+ *   * `initialSchemaTargetTokens` / `maxInitialBytes`：**历史目标值**，生产路径当前
+ *     未使用（初始导航不预热任何 schema）。不得对外宣称为"实测保证的初始 2K"。
+ */
 export const DEFAULT_BUDGETS = Object.freeze({
+  // 历史目标值（未接线）：仅供部署参考，不是任何实测保证。
   initialSchemaTargetTokens: 2048,
   maxInitialBytes: 8192,
+  // 受控分类的自然总数：自然遍历，不是门槛。
   maxInitialCategories: 12,
+  // 默认输出策略：保持有界。
   defaultListLimit: 20,
-  maxListLimit: 20,
-  maxListResultBytes: 4096,
-  listCursorTtlMs: 900_000,
-  maxQueryCodePoints: 512,
   defaultSearchLimit: 5,
-  maxSearchLimit: 8,
-  maxSearchResultBytes: 6144,
-  maxLoadBatch: 4,
-  maxActiveTools: 12,
-  maxActiveSchemaBytes: 49_152,
-  maxSkillBytesPerLoad: 12_288,
+  // TTL：本轮不变。
+  listCursorTtlMs: 900_000,
   candidateTtlMs: 900_000,
+  // 以下全部是可选硬上限，默认关闭（null = 不限制）。
+  maxListLimit: null,
+  maxListResultBytes: null,
+  maxSearchLimit: null,
+  maxSearchResultBytes: null,
+  maxQueryCodePoints: null,
+  maxLoadBatch: null,
+  maxActiveTools: null,
+  maxActiveSchemaBytes: null,
+  maxSkillBytesPerLoad: null,
 });
+
+/**
+ * 可以用 `null` 关闭的硬上限键。其余键必须始终是正整数。
+ * resolveBudgets 依赖这张表区分「可关闭的限额」与「必须为数字的策略/TTL」。
+ */
+export const OPTIONAL_LIMIT_KEYS = Object.freeze([
+  'maxListLimit', 'maxListResultBytes', 'maxSearchLimit', 'maxSearchResultBytes',
+  'maxQueryCodePoints', 'maxLoadBatch', 'maxActiveTools', 'maxActiveSchemaBytes',
+  'maxSkillBytesPerLoad',
+]);
 
 /**
  * 错误码元数据。message 面向模型,保持稳定且不泄漏存在性。
@@ -52,7 +89,10 @@ export function errorCodes (locale) {
     CANDIDATE_UNAVAILABLE: { message: text.t(['error', 'CANDIDATE_UNAVAILABLE']), retryable: true, recovery: 'search_again' },
     STALE_CANDIDATE: { message: text.t(['error', 'STALE_CANDIDATE']), retryable: true, recovery: 'select_again' },
     SELECTION_CHANGED: { message: text.t(['error', 'SELECTION_CHANGED']), retryable: true, recovery: 'select_again' },
-    BUDGET_EXCEEDED: { message: text.t(['error', 'BUDGET_EXCEEDED']), retryable: false, recovery: 'reduce_or_unload' },
+    // 模型不得自主 unload：超预算是**拒绝新增**，已披露集合不会被淘汰腾位。
+    // 恢复指引只能是"减少本次新增"或"等待用户/DSH 的一次成功压缩"，
+    // 绝不能引导模型自行压缩或伪造 compaction 事件。
+    BUDGET_EXCEEDED: { message: text.t(['error', 'BUDGET_EXCEEDED']), retryable: false, recovery: 'reduce_batch_or_wait_for_compaction' },
     STATE_NOT_READY: { message: text.t(['error', 'STATE_NOT_READY']), retryable: true, recovery: 'retry_when_ready' },
     TOOL_NOT_LOADED: { message: text.t(['error', 'TOOL_NOT_LOADED']), retryable: false, recovery: 'call_tool_load_first' },
     TOOL_NOT_ADVERTISED: { message: text.t(['error', 'TOOL_NOT_ADVERTISED']), retryable: true, recovery: 'wait_for_next_request' },

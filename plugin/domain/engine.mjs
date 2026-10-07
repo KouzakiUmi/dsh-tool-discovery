@@ -19,7 +19,8 @@ import {
 } from './protocol.mjs';
 import { buildSearchIndex, search as runSearch } from './search.mjs';
 import {
-  createState, evaluateCall as evalCall, invalidateTool, recordAdvertisement, reducePair,
+  createState, evaluateCall as evalCall, freezeTool, frozenWireList,
+  invalidateTool, recordAdvertisement, reducePair, resetCacheEpoch,
 } from './state.mjs';
 import { clampCodePoints, createMutex, isNonEmptyString, isPlainObject } from './util.mjs';
 import { createText } from './locale.mjs';
@@ -341,12 +342,9 @@ export function createDiscoveryEngine(config) {
      */
     async handleLoad(raw, scope, ctx) {
       const requestedAction = isPlainObject(raw) && raw.action === 'unload' ? 'unload' : 'load';
-      /** @param {any} req @param {any} st */
       const runLocked = (req, st) => {
         try {
-          return req.action === 'unload'
-            ? this.runUnload(req, st, scope, ctx, raw)
-            : this.handleLoadLocked(req, st, scope, ctx, raw);
+          return this.handleLoadLocked(req, st, scope, ctx, raw);
         } catch (e) {
           return { response: errorEnvelope('tool_load', requestedAction, toDomainError(e)), operation: null };
         }
@@ -357,6 +355,11 @@ export function createDiscoveryEngine(config) {
       try {
         requireReady(scope);
         req = validateLoadRequest(raw, budgets);
+        // 模型不得自主 unload:缓存周期的清空点只有成功压缩(`/unloadtool` 暂缓)。
+        // protocol 已拒,此处再兜一层,保证 engine 不存在第二条卸载路径。
+        if (req.action !== 'load') {
+          throw new DomainError('INVALID_ARGS', t(['detail', 'modelUnloadDisabled']));
+        }
       } catch (e) {
         return { response: errorEnvelope('tool_load', requestedAction, toDomainError(e)), operation: null };
       }
@@ -380,8 +383,9 @@ export function createDiscoveryEngine(config) {
      * @param {unknown} raw
      */
     handleLoadLocked(req, st, scope, ctx, raw) {
-      const operation = req.action === 'load' ? 'load' : 'unload';
-      if (req.action === 'unload') return this.runUnload(req, st, scope, ctx, raw);
+      if (req.action !== 'load') {
+        throw new DomainError('INVALID_ARGS', t(['detail', 'modelUnloadDisabled']));
+      }
 
       /** @type {Array<{entry:any, source:'candidate'|'name'}>} */
       const resolved = [];
@@ -429,15 +433,45 @@ export function createDiscoveryEngine(config) {
         schemaDigest: r.entry.schemaDigest,
       }));
 
-      // 幂等:已以同版本选中 → 不重复计费
+      // 预算占用面 = 已冻结披露 ∪ 已选未披露 ∪ **本 scope 未决 load 回执预留的新增**。
+      // 少了最后一项时,同一会话里先后两次 handleLoad 在 canonical 折叠前都只看到旧的
+      // selected,各自都判定"放得下",合计却突破显式设置的上限。默认 null 关闭时这无关
+      // 紧要,但**显式设置必须真的生效**。
+      // 预留沿用既有 pending(applyCanonicalPair 折叠、cancelOperation 取消、resetCacheEpoch
+      // 清空三条既有路径自然收口),不新增 TTL 或存储。
+      /** @type {Set<string>} 本 scope 未决回执已预留的 toolId */
+      const reserved = new Set();
+      for (const op of pending.values()) {
+        if (op.sessionId !== scope.sessionId || op.action !== 'load') continue;
+        for (const s of op.expectedReceipt?.selected ?? []) reserved.add(s.toolId);
+      }
+
+      // 尚未走到真实出站披露的 selected(还没冻结)按其选中时的 catalog 条目计字节,
+      // 否则"加载成功但本轮还没发出去"的窗口会被免费。
+      const alreadyActive = frozenWireList(st).map((f) => ({ wireBytes: f.bytes }));
+      for (const [toolId, selection] of st.selected) {
+        if (st.frozen.has(toolId)) continue;
+        const entry = resolveByToolId(catalog, toolId);
+        if (entry === undefined || entry.revision !== selection.revision) continue;
+        alreadyActive.push({ wireBytes: entry.wireBytes });
+      }
+      // 已被未决回执预留、但尚未进入 selected/frozen 的工具:按预留时的当前定义计字节。
+      /** @type {Set<string>} 已预留,本次再请求同一工具时应视为幂等而非新增 */
+      const reservedOnly = new Set();
+      for (const toolId of reserved) {
+        if (st.frozen.has(toolId) || st.selected.has(toolId)) continue;
+        const entry = resolveByToolId(catalog, toolId);
+        if (entry === undefined) continue;
+        alreadyActive.push({ wireBytes: entry.wireBytes });
+        reservedOnly.add(toolId);
+      }
+
+      // 幂等:已以同版本选中、或已被本 scope 未决回执预留 → 不重复计费
       const fresh = resolved.filter((r) => {
         const sel = st.selected.get(r.entry.toolId);
-        return !(sel && sel.revision === r.entry.revision);
+        if (sel && sel.revision === r.entry.revision) return false;
+        return !reservedOnly.has(r.entry.toolId);
       });
-      const alreadyActive = Array.from(st.selected.values())
-        .map((s) => resolveByToolId(catalog, s.toolId))
-        .filter(Boolean);
-
       assertActiveBudget(fresh.map((r) => r.entry), alreadyActive, budgets);
       const skills = resolved.map((r) => projectSkill(r.entry));
       assertSkillBudget(skills, budgets.maxSkillBytesPerLoad);
@@ -482,42 +516,10 @@ export function createDiscoveryEngine(config) {
 
       const op = {
         operationId: ctx.operationId,
+        // 预算需要按会话隔离统计未决预留（pending 本身是 engine 全局的），故带上归属会话。
+        sessionId: scope.sessionId,
         action: /** @type {const} */ ('load'),
         selectionSource,
-        input: raw,
-        expectedReceipt: receipt,
-      };
-      pending.set(ctx.operationId, op);
-      return { response, operation: op };
-    },
-
-    /**
-     * @param {any} req @param {any} st @param {any} scope @param {{operationId:string}} ctx @param {unknown} raw
-     */
-    runUnload(req, st, scope, ctx, raw) {
-      const toolIds = /** @type {string[]} */ (req.toolIds);
-      for (const id of toolIds) {
-        if (protectedToolIdsNow().has(id) || protectedNames.has(resolveByToolId(catalog, id)?.name ?? '')) {
-          throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotUnloadable']));
-        }
-      }
-      // 未激活 ID 幂等 no-op;不推断其它 scope 是否存在
-      const deselected = toolIds.filter((id) => st.selected.has(id));
-      const receipt = {
-        kind: 'tool-discovery.selection',
-        version: PROTOCOL_VERSION,
-        operationId: ctx.operationId,
-        operation: 'unload',
-        deselected,
-      };
-      const response = okEnvelope('tool_load', 'unload', {
-        receipt,
-        takesEffect: 'next_request',
-      }, text.t(['nextAction', 'unloadNext']));
-      const op = {
-        operationId: ctx.operationId,
-        action: /** @type {const} */ ('unload'),
-        selectionSource: /** @type {const} */ ('name'),
         input: raw,
         expectedReceipt: receipt,
       };
@@ -578,13 +580,60 @@ export function createDiscoveryEngine(config) {
 
     // ---- 曝光 / guard ---------------------------------------------------
     /**
+     * 一次真实出站披露：既登记 advertised（执行面的"已披露"凭据），
+     * 也把**逐字 wire** 冻结进披露缓存（顺序固化，只增不改）。
      * @param {any} scope
-     * @param {{requestId:string, toolId:string, name:string, revision:string, schemaDigest:string}} rec
+     * @param {{requestId:string, toolId:string, name:string, revision:string, schemaDigest:string, wire:object}} rec
      */
     recordAdvertisement(scope, rec) {
       const st = requireState(scope);
-      const next = recordAdvertisement(st, { ...rec, now: clock.now() });
+      let next = recordAdvertisement(st, { ...rec, now: clock.now() });
+      next = freezeTool(next, rec);
       sessions.set(scope.sessionId, next);
+    },
+
+    // ---- 缓存周期 -------------------------------------------------------
+    /** 披露缓存（按首次披露次序）：projection 纯追加它，永不重排既有项。 */
+    getFrozenWire(scope) {
+      return frozenWireList(requireState(scope));
+    },
+
+    /**
+     * 推进缓存周期。**只允许成功压缩调用**（adapter 侧绑定 session 的
+     * compaction/start + 无 error 的 compaction/end）。清空披露缓存与执行授权，
+     * 丢弃全部未决 pending（边界之前的回执不再有对价）。
+     * @param {any} scope
+     * @param {string} reason
+     */
+    resetCacheEpoch(scope, reason) {
+      const st = requireState(scope);
+      sessions.set(scope.sessionId, resetCacheEpoch(st));
+      pending.clear();
+      void reason;
+      return { epoch: resetCacheEpoch(st).epoch };
+    },
+
+    /**
+     * 换掉本引擎的常驻（alwaysVisible）名单。**只在缓存周期边界调用**
+     * （新会话 runtime 建立 / 成功压缩后的周期重开），绝不在周期中途调用 ——
+     * 中途换名会让已披露 schema 与白名单不一致，等于把一次稳定的 prefix 打断。
+     *
+     * 名单是替换而非并集：被移除的工具离开 protectedNames 后，handleLoad /
+     * handleUnload 的 protected 判据（protectedNotLoadable）随之放开，
+     * 用户可以经普通 tool_load 把它重新加回来。
+     * @param {readonly string[]} names 本周期生效的完整常驻名单
+     */
+    setAlwaysVisibleNames(names) {
+      const next = names === undefined || names === null ? [] : [...new Set(
+        names.filter((name) => typeof name === 'string' && name.length > 0),
+      )];
+      alwaysNames.clear();
+      for (const name of next) alwaysNames.add(name);
+      protectedNames.clear();
+      for (const name of entryNames) protectedNames.add(name);
+      for (const name of frameworkNames) protectedNames.add(name);
+      for (const name of alwaysNames) protectedNames.add(name);
+      return { alwaysToolNames: [...alwaysNames] };
     },
 
     /**

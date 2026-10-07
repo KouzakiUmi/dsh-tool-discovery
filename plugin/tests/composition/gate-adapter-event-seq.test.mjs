@@ -121,10 +121,10 @@ test('boot SEQ: 真实 composition 产出真实 load/unload 对与出站 request
 
   queueResponse({ toolCalls: [{ id: 'seq-search', name: 'tool_search', arguments: { category: 'all', query: 'hidden inherited tool' } }] })
   queueResponse({ toolCalls: [{ id: 'seq-load', name: 'tool_load', arguments: { names: ['fixture_hidden_inherited'] } }] })
-  queueResponse({ toolCalls: [{ id: 'seq-unload', name: 'tool_load', arguments: { action: 'unload', toolIds: ['global::fixture_hidden_inherited'] } }] })
+  queueResponse({ toolCalls: [{ id: 'seq-load-2', name: 'tool_load', arguments: { names: ['fixture_mutating'] } }] })
   queueResponse({ text: 'material done' })
   const handle = await drive(boot.ctx, boot.tmpRoot, 'seq-mat-1')
-  await userTurn(handle, 'Search, then load, then unload the hidden tool.')
+  await userTurn(handle, 'Search, then load the hidden tool, then load the mutating tool.')
 
   const { events } = await boot.ctx.sessionQuery.readSession('seq-mat-1')
   const realCall = (id) => events.find((e) => e.type === 'tool/call' && e.data?.callId === id)
@@ -139,8 +139,8 @@ test('boot SEQ: 真实 composition 产出真实 load/unload 对与出站 request
   const searchResult = realResult('seq-search')
   const loadCall = realCall('seq-load')
   const loadResult = realResult('seq-load')
-  const unloadCall = realCall('seq-unload')
-  const unloadResult = realResult('seq-unload')
+  const secondCall = realCall('seq-load-2')
+  const secondResult = realResult('seq-load-2')
   const header = events.find((e) => e.type === 'request/header'
     && (e.data?.header?.tools ?? []).some((t) => t.name === 'fixture_hidden_inherited'))
   // 真实的**非 canonical** tool/result：tool_search 的回执外壳 tool !== 'tool_load'
@@ -149,7 +149,7 @@ test('boot SEQ: 真实 composition 产出真实 load/unload 对与出站 request
   // 材料真实性：形状取自真实宿主，不允许退化为 undefined 后静默跳过
   for (const [label, material] of [['searchCall', searchCall], ['searchResult', searchResult],
     ['loadCall', loadCall], ['loadResult', loadResult],
-    ['unloadCall', unloadCall], ['unloadResult', unloadResult],
+    ['secondCall', secondCall], ['secondResult', secondResult],
     ['outboundHeader', header]]) {
     assert.ok(material !== undefined && material !== null, `真实材料 ${label} 必须存在（不得 undefined 跳过）`)
   }
@@ -158,7 +158,7 @@ test('boot SEQ: 真实 composition 产出真实 load/unload 对与出站 request
   assert.equal(JSON.parse(textOf(loadResult)).tool, 'tool_load')
   assert.equal(JSON.parse(textOf(loadResult)).data.receipt.operationId, 'op_seq-load',
     '真实回执 operationId 遵循 entries.mjs 的 op_<callId> 绑定')
-  assert.equal(JSON.parse(textOf(unloadResult)).data.receipt.operationId, 'op_seq-unload')
+  assert.equal(JSON.parse(textOf(secondResult)).data.receipt.operationId, 'op_seq-load-2')
   assert.deepEqual(loadResult.sourceEventSeqs, [loadCall.seq], 'result 必须绑定其 canonical call 的 seq')
   assert.ok(Number.isSafeInteger(loadCall.seq) && loadCall.seq >= 0, '真实事件 seq 是非负安全整数')
 
@@ -166,13 +166,15 @@ test('boot SEQ: 真实 composition 产出真实 load/unload 对与出站 request
   SYN.engine = boot.ctx.get('progressiveDiscovery').sessions.get('seq-mat-1').engine
   SYN.search = { call: searchCall, result: searchResult }
   SYN.load = { call: loadCall, result: loadResult }
-  SYN.unload = { call: unloadCall, result: unloadResult }
+  SYN.second = { call: secondCall, result: secondResult }
   SYN.header = header
   SYN.ordinaryResult = ordinaryResult
   assert.deepEqual(boot.activationErrors(), [], 'composition 必须收敛')
 })
 
-/** 真实撤销失败链：建立 selection → 真实登记 pending unload → 喂 unload call → 喂畸形 result → 下一轮真实 header。 */
+/** 真实"第二次提交"失败链：建立 selection → 真实登记 pending load → 喂 call → 喂畸形 result → 下一轮真实 header。
+ *  （模型已无 unload 路径，第二次状态提交改用第二个 load；判据——畸形 seq 必须 fail
+ *  closed 且不得静默生效，合法 seq 必须照常提交——与操作种类无关，保持原门禁强度。） */
 async function revokeChain (sessionId, badSeq) {
   const engine = SYN.engine
   const journal = freshJournal(engine, sessionId)
@@ -184,29 +186,29 @@ async function revokeChain (sessionId, badSeq) {
     `${sessionId}: 畸形注入前必须先建立真实 selection，否则断言会空转`)
 
   await engine.handleLoad(
-    { action: 'unload', toolIds: ['global::fixture_hidden_inherited'] },
+    { names: ['fixture_mutating'] },
     scopeOf(sessionId),
-    { operationId: `op_${sessionId}-unload` },
+    { operationId: `op_${sessionId}-second` },
   )
-  const unload = makePair(SYN.unload.call, SYN.unload.result, `${sessionId}-unload`, 20, 21)
-  journal.onEvent(unload.call)
-  journal.onEvent(withBadSeq(unload.result, badSeq))
+  const second = makePair(SYN.second.call, SYN.second.result, `${sessionId}-second`, 20, 21)
+  journal.onEvent(second.call)
+  journal.onEvent(withBadSeq(second.result, badSeq))
   const afterBad = engine.getState(scopeOf(sessionId))
 
-  // 下一轮真实出站 request/header：撤销是否真正生效由此判定
+  // 下一轮真实出站 request/header：第二次提交是否真正生效由此判定
   const headerSeq = 30
   journal.onEvent({ ...SYN.header, seq: headerSeq, data: SYN.header.data })
   const verdict = engine.evaluateCall(scopeOf(sessionId), {
-    name: 'fixture_hidden_inherited',
+    name: 'fixture_mutating',
     requestId: `${sessionId}#${headerSeq}`,
   })
   return { journal, established, afterBad, verdict }
 }
 
 // ---------------------------------------------------------------------------
-// 1) 畸形 result seq → fail closed，且宿主已确认的撤销**不得**静默失效
+// 1) 畸形 result seq → fail closed，且宿主已确认的第二次提交**不得**静默失效
 // ---------------------------------------------------------------------------
-test('SEQ1: 畸形 canonical result 的 seq → fail closed，撤销不生效即不可执行', async () => {
+test('SEQ1: 畸形 canonical result 的 seq → fail closed，未生效的提交不得被绕过', async () => {
   for (const [label, badSeq] of MALFORMED_SEQ) {
     const sessionId = `seq1-${label}`
     const { established, afterBad, verdict } = await revokeChain(sessionId, badSeq)
@@ -215,20 +217,21 @@ test('SEQ1: 畸形 canonical result 的 seq → fail closed，撤销不生效即
       `${label}: 状态提交点的 seq 不确定必须 fail closed，不得静默丢弃`)
     assert.equal(afterBad.integrity.rejected, established.integrity.rejected,
       `${label}: fail closed 是"不确定"而非"安全拒绝"，不得伪造 rejected 计数`)
-    // 分类取证：selection 确实还在（不是"没新增授权"的空过），但已不可执行
+    // 分类取证：既有 selection 确实还在（不是"没新增授权"的空过），但不可执行
     assert.deepEqual(namesOf(afterBad), ['fixture_hidden_inherited'],
       `${label}: 旧 selection 仍留存 —— 证明本断言不是靠"没有授权"空过`)
     assert.equal(verdict.allowed, false,
-      `${label}: fail closed 后宿主已确认的撤销不得被绕过，工具不可执行`)
+      `${label}: fail closed 后畸形提交不得被绕过，新工具不可执行`)
     assert.equal(verdict.code, 'TOOL_NOT_LOADED', `${label}: 拒绝码`)
   }
 
-  // 正控制：同一条撤销链，seq 合法 → 必须照常撤销、会话保持 ready
+  // 正控制：同一条链，seq 合法 → 必须照常提交、会话保持 ready
   const control = await revokeChain('seq1-control', 21)
-  assert.equal(control.afterBad.mode, 'ready', '合法 seq 的撤销不得被误 fail closed')
-  assert.deepEqual(namesOf(control.afterBad), [], '合法撤销必须真正移除 selection（未被误伤）')
-  assert.equal(control.verdict.allowed, false, '合法撤销后不可执行')
-  assert.equal(control.verdict.code, 'TOOL_NOT_LOADED')
+  assert.equal(control.afterBad.mode, 'ready', '合法 seq 的提交不得被误 fail closed')
+  assert.deepEqual(namesOf(control.afterBad), ['fixture_hidden_inherited', 'fixture_mutating'],
+    '合法提交必须真正生效（未被误伤）')
+  assert.equal(control.verdict.allowed, false, '这条合成 header 只披露了第一个工具，第二个仍属"已加载未披露"')
+  assert.equal(control.verdict.code, 'TOOL_NOT_ADVERTISED', '合法提交后是披露时序问题，不是授权问题')
 })
 
 // ---------------------------------------------------------------------------
@@ -495,9 +498,9 @@ function doubleCorrupt (result) {
 test('SEQ7: 双重损坏的 result → fail closed；已知普通 result 不误封；迟到重复 result 不复活', async () => {
   const engine = SYN.engine
 
-  // (1) 负控：既有真实 selection + pending unload + 双重损坏 result → 不得放行撤销失败
+  // (1) 负控：既有真实 selection + pending 第二次提交 + 双重损坏 result → 不得放行
   for (const [label, badSeq] of [['undefined', undefined], ['NaN', Number.NaN], ['negative--1', -1]]) {
-    const sessionId = `seq7-unload-${label}`
+    const sessionId = `seq7-second-${label}`
     const journal = freshJournal(engine, sessionId)
     const load = makePair(SYN.load.call, SYN.load.result, `${sessionId}-load`, 10, 11)
     journal.onEvent(load.call)
@@ -505,23 +508,23 @@ test('SEQ7: 双重损坏的 result → fail closed；已知普通 result 不误�
     assert.deepEqual(namesOf(engine.getState(scopeOf(sessionId))), ['fixture_hidden_inherited'],
       `${label}: 前置必须先建立真实 selection`)
 
-    await engine.handleLoad({ action: 'unload', toolIds: ['global::fixture_hidden_inherited'] },
-      scopeOf(sessionId), { operationId: `op_${sessionId}-unload` })
-    const unload = makePair(SYN.unload.call, SYN.unload.result, `${sessionId}-unload`, 20, 21)
-    journal.onEvent(unload.call)
-    const corrupted = { ...doubleCorrupt(unload.result), seq: badSeq }
+    await engine.handleLoad({ names: ['fixture_mutating'] },
+      scopeOf(sessionId), { operationId: `op_${sessionId}-second` })
+    const second = makePair(SYN.second.call, SYN.second.result, `${sessionId}-second`, 20, 21)
+    journal.onEvent(second.call)
+    const corrupted = { ...doubleCorrupt(second.result), seq: badSeq }
     if (badSeq === undefined) delete corrupted.seq
     journal.onEvent(corrupted)
 
     const after = engine.getState(scopeOf(sessionId))
     assert.equal(after.mode, 'incompatible',
-      `${label}: 双重损坏（外壳改名 + sourceEventSeqs 清空）时不得放行撤销失败`)
+      `${label}: 双重损坏（外壳改名 + sourceEventSeqs 清空）时不得放行失败的提交`)
     assert.deepEqual(namesOf(after), ['fixture_hidden_inherited'], `${label}: 保守残留仍在`)
     assert.equal(engine.evaluateCall(scopeOf(sessionId), { name: 'fixture_hidden_inherited' }).allowed, false,
       `${label}: fail closed 后不得可执行`)
 
     // 迟到重复的**合法** result 不得让状态复活
-    journal.onEvent(unload.result)
+    journal.onEvent(second.result)
     journal.onEvent(load.result)
     const revived = engine.getState(scopeOf(sessionId))
     assert.equal(revived.mode, 'incompatible', `${label}: 迟到重复 result 不得解除 fail closed`)

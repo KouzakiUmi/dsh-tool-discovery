@@ -8,14 +8,20 @@
 //     runtime 建立后按 seq 合并快照再折叠（journal 负责 merge）。
 //   * 全部注册项（三个定义、投影、guard、session 监听、恢复订阅、缓存）都持有 disposer；
 //     任一步失败由 index.mjs 逆序回滚。
+//   * **常驻名单是 per-runtime 的一份快照**，取自"建立 runtime 的那一刻"的配置值。
+//     设置面板改动配置只影响**未来**的 runtime：正在跑的周期绝不改 schema，
+//     否则一次已经稳定的出站 prefix 会被中途打断。成功压缩是本周期内唯一的
+//     换名点（重开一个周期），换名不重建 runtime、不动任何协议状态。
 import { createDiscoveryEngine } from '../../domain/index.mjs';
 import { createJournal } from './journal.mjs';
+import { resolveAlwaysVisible } from './config.mjs';
 
 /** 每个会话在 runtime 建立前缓存的最大事件数（有界，防泄漏）。 */
 const MAX_BUFFERED_EVENTS = 4096;
 
 /**
- * @param {{ctx:any, registry:any, config:any, clock:any, random:any, query:any, log?:Function}} deps
+ * @param {{ctx:any, registry:any, config:any, clock:any, random:any, query:any, log?:Function,
+ *          getAlwaysVisible?:() => readonly string[]}} deps
  */
 export function createLifecycle(deps) {
   const { ctx, registry, config, clock, random, query, log = () => {} } = deps;
@@ -25,7 +31,43 @@ export function createLifecycle(deps) {
   /** sessionId → runtime 建立前的事件缓冲 */
   const buffers = new Map();
 
-  function engineConfigFor(scope, sessionId, bindings) {
+  /**
+   * 此刻配置的常驻名单。只有在**建立 runtime** 或**成功压缩重开周期**时读它；
+   * 周期中途的设置变更不经过这里。
+   */
+  function currentAlwaysNames() {
+    if (typeof deps.getAlwaysVisible === 'function') {
+      return resolveAlwaysVisible([...deps.getAlwaysVisible()]);
+    }
+    return resolveAlwaysVisible(config.alwaysVisible);
+  }
+
+  /**
+   * 周期边界换名：把新名单交给 runtime 持有的引用、engine 的 protected 判据、
+   * 以及 journal 读名单的 provider。三者同步换，不重建 runtime。
+   *
+   * 换完若本轮**还有一个尚未发送的投影**（宿主在 pre-step 里跑完了自动压缩，却仍会
+   * 返回压缩前那份 assembly），就地把它刷成新周期的样子。只在没有未发送投影时静默。
+   * @param {any} runtime
+   * @param {string} reason
+   */
+  function adoptEpochNames(runtime, reason) {
+    const names = currentAlwaysNames();
+    runtime.alwaysNames = names;
+    runtime.alwaysNameSet = new Set(names);
+    runtime.engine.setAlwaysVisibleNames(names);
+    const refreshed = typeof runtime.refreshPendingProjection === 'function'
+      ? runtime.refreshPendingProjection()
+      : false;
+    log('lifecycle:epoch-names', {
+      sessionId: runtime.scope.sessionId,
+      reason,
+      count: names.length,
+      pendingProjectionRefreshed: refreshed,
+    });
+  }
+
+  function engineConfigFor(scope, sessionId, bindings, alwaysNames) {
     return {
       protocolVersion: 2,
       categoryConfig: config.categoryConfig,
@@ -33,7 +75,7 @@ export function createLifecycle(deps) {
       locale: config.locale,
       entryToolNames: [...registry.entryNames],
       frameworkToolNames: [...registry.frameworkRetained],
-      alwaysToolNames: [...(config.alwaysVisible ?? [])],
+      alwaysToolNames: [...alwaysNames],
       budgets: config.budgets,
       newSessionMode: 'restoring',
       bindings,
@@ -42,6 +84,9 @@ export function createLifecycle(deps) {
       generation: `${registry.generationFor(registry.scopeKeyOf(scope))}:${sessionId}`,
     };
   }
+
+  /** 新 runtime 建立后的回调（新目录里的 scope 工具此时才可见）。 */
+  const onRuntimeCreated = typeof deps.onRuntimeCreated === 'function' ? deps.onRuntimeCreated : () => {};
 
   /**
    * 取得（必要时建立）某会话 runtime。
@@ -54,7 +99,9 @@ export function createLifecycle(deps) {
     if (runtime !== undefined) return runtime;
 
     const view = registry.bindingsFor(scope);
-    const engine = createDiscoveryEngine(engineConfigFor(scope, sessionId, view.bindings));
+    // 建立这一刻的名单快照：新会话从这里开始，之后设置变更不再影响本周期。
+    const alwaysNames = currentAlwaysNames();
+    const engine = createDiscoveryEngine(engineConfigFor(scope, sessionId, view.bindings, alwaysNames));
     registry.remember(view.scopeKey, view.bindings);
     const discoveryScope = { sessionId, actorId: String(scope.id) };
     const journal = createJournal({
@@ -66,7 +113,23 @@ export function createLifecycle(deps) {
       log,
       entryNames: registry.entryNames,
       frameworkRetained: registry.frameworkRetained,
-      alwaysVisible: config.alwaysVisible ?? [],
+      // provider 而非静态数组：成功压缩时 lifecycle 会就地换掉 runtime 上的名单，
+      // journal 无需重建也无需知道配置从哪来。
+      alwaysVisibleProvider: () => runtime.alwaysNameSet,
+      onEpochReset: (reason) => adoptEpochNames(runtime, reason),
+      onRequestHeader: () => { runtime.refreshPendingProjection = null; },
+      onEpochRestore: (names) => {
+        // 冷恢复以日志事实为准，覆盖"此刻配置值"。这是"配置变更只影响下一个周期"
+        // 在重启路径上的落点：有历史就不许被新设置悄悄改写。
+        runtime.alwaysNames = [...names];
+        runtime.alwaysNameSet = new Set(names);
+        runtime.engine.setAlwaysVisibleNames(runtime.alwaysNames);
+        log('lifecycle:epoch-names-restored', {
+          sessionId: runtime.scope.sessionId,
+          reason: 'cold-restore',
+          count: runtime.alwaysNames.length,
+        });
+      },
       reportBypass: (details) => {
         runtime.compositionBypass = details;
         log('lifecycle:composition-bypass', details);
@@ -74,9 +137,24 @@ export function createLifecycle(deps) {
     });
 
     const buffered = buffers.get(sessionId) ?? [];
-    runtime = { session, agentScope: scope, scope: discoveryScope, engine, journal, restoring: true, compositionBypass: null };
+    runtime = {
+      session,
+      agentScope: scope,
+      scope: discoveryScope,
+      engine,
+      journal,
+      restoring: true,
+      compositionBypass: null,
+      alwaysNames,
+      alwaysNameSet: new Set(alwaysNames),
+      // 本轮"已组装但尚未发送"的投影刷新入口；projection 挂上、canonical
+      // request/header 观测后由 journal 清掉。见 projection.mjs 的"未发送刷新"段。
+      refreshPendingProjection: null,
+    };
     sessions.set(sessionId, runtime);
     buffers.delete(sessionId);
+    // 该 runtime 目录里的 scope 工具此刻才可枚举 → 通知宿主重发设置面板目录。
+    onRuntimeCreated();
 
     // 缓冲期到达的事件先重放（去重由 domain 的 seq 判据保证）
     for (const event of buffered) journal.onEvent(event);
@@ -143,6 +221,8 @@ export function createLifecycle(deps) {
     onSessionEvent,
     onRegistryChange,
     disposeSession,
+    /** 此刻配置的常驻名单（只供 UI/日志观测；周期中途调用不改变任何 runtime）。 */
+    currentAlwaysNames,
     /** 取 runtime；不存在时用当前 agent scope 建立一个（投影/guard 首次触达时）。 */
     runtimeFor(session, scope) {
       return sessions.get(session.id) ?? ensureRuntime(session, scope);

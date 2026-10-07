@@ -13,6 +13,9 @@ Thumbs.db
 target-repo/
 .probe/
 .tool-measurement.json
+/.functional-dist/
+# Unfinished local browser probes are not part of the functional release.
+/plugin/tests/browser/
 
 # =============================================================================
 # 私有：根目录内部设计材料

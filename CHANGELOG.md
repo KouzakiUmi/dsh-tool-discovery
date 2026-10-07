@@ -9,15 +9,46 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 The source baseline is published on `main` as its single initial-publish commit. This repository
 was rebuilt on 2026-10-06: the earlier history — including the `2a1f9c0` and `257ddc0` commits,
-which are quoted in older entries below — was rewritten away and **no longer resolves**. Nothing
-here has been tagged or released on GitHub, **not** published to npm, **not** installed into a DSH
-profile or DSH GUI, and has never been loaded by a running DSH. Publishing a source commit,
-releasing a package, and accepting a product are three different events, and none of them
-substitutes for another.
+which are quoted in older entries below — was rewritten away and **no longer resolves**. Entries
+below the functional-build entry are historical source-baseline records, not claims about current
+release availability. The package remains **not published to npm**. This functional-build round
+performs no profile installation, GUI reload, or application restart. Publishing a source commit,
+releasing a package, and accepting an online product are three different events.
 
 Nothing in this file is a product-acceptance statement. For the authoritative per-item status —
 what is verified, what is unverified, and what this version refuses to support — see
 [`plugin/docs/05-current-status.md`](plugin/docs/05-current-status.md).
+
+## [0.2.0-functional.1] — 2026-10-07
+
+Functional build on `fix/discovery-functionality`; not an online GUI acceptance or npm publication.
+
+### Added
+
+- Initial-tool settings panel with searchable live tool choices, add/remove selection, and restore
+  DSH defaults. Explicit `alwaysVisible` replaces the default list; changes take effect in a new
+  session or after a successful compaction, not midway through the current cache epoch.
+- Real-host regression gates for cache epochs, manual/automatic compaction, restart recovery,
+  and the native Config/settings metadata boundary.
+
+### Changed
+
+- Tool disclosure is append-only with frozen wire definitions within an epoch. Only a successful
+  manual or automatic compaction resets on-demand disclosure; model-driven unload is rejected.
+- Nine optional hard caps default to `null` (disabled). Explicit caps reject new work without
+  evicting disclosed tools; their latency, extra-turn and context-rebuild trade-offs are documented.
+- The client bundle declares its web platform and ships in the validated release payload.
+- Native Config requires the tested `@deepseek-ai/schemastery` 3.18.5-alpha.1 peer.
+
+### Verification boundary
+
+- Local verification: 250 unit checks and 64 real-host composition checks passed against Core
+  0.2.1-alpha.1. Hosted CI runs the portable subset and explicitly reports the two host-bound
+  test files it cannot run without that SDK.
+- Rendered DOM, online settings activation, real-provider cache savings and latency are not
+  claimed. No profile installation, reload, or restart was performed in this release round.
+- Commandcode interruption anomalies and unfinished browser probes are deferred, not shipped
+  as fixes or used to block this functional build.
 
 ## [Unreleased]
 

@@ -123,7 +123,7 @@ test('S03c: 跨会话 ref → CANDIDATE_UNAVAILABLE', async () => {
 })
 
 // ---------------------------------------------------------------------------
-// 场景 U：unload（F08）
+// 场景 U：模型不得自主 unload（缓存周期的清空点只有成功压缩）
 // ---------------------------------------------------------------------------
 let U
 
@@ -136,38 +136,33 @@ test('boot U: 真实 Loader + adapter（unload 场景）', async () => {
   U = boot
 })
 
-test('F08: load → unload → 下一请求移除 + 新调用拒绝 + 历史保留', async () => {
+test('F08: action=unload 被拒；已加载工具保持披露且可继续执行', async () => {
   const { store, queueResponse } = await storeOf()
   store.reset()
   // 1) load hidden_inherited
   queueResponse({ toolCalls: [{ id: 'u-load', name: 'tool_load', arguments: { names: ['fixture_hidden_inherited'] } }] })
   // 2) 正控制：加载后合法调用
   queueResponse({ toolCalls: [{ id: 'u-legit', name: 'fixture_hidden_inherited', arguments: { text: 'legit' } }] })
-  // 3) unload
+  // 3) 试图 unload（模型可见 schema 里已无 unload，宿主参数校验会先挡一道）
   queueResponse({ toolCalls: [{ id: 'u-unload', name: 'tool_load', arguments: { action: 'unload', toolIds: ['global::fixture_hidden_inherited'] } }] })
-  // 4) 尝试调用已卸载工具（必须拒）
-  queueResponse({ toolCalls: [{ id: 'u-guess', name: 'fixture_hidden_inherited', arguments: { text: 'after unload' } }] })
+  // 4) unload 被拒后，工具仍然可执行
+  queueResponse({ toolCalls: [{ id: 'u-after', name: 'fixture_hidden_inherited', arguments: { text: 'after' } }] })
   queueResponse({ text: 'U done' })
 
   const handle = await drive(U.ctx, U.tmpRoot, 'adapter-u-unload-1')
-  await userTurn(handle, 'Load, use, unload, try again.')
+  await userTurn(handle, 'Load, use, try to unload, use again.')
 
   const events = await rawEvents(U.ctx, 'adapter-u-unload-1')
-  // load 成功
-  const loadResult = toolResultFor(events, 'u-load')
-  assert.equal(JSON.parse(resultTextOf(loadResult)).ok, true)
+  assert.equal(JSON.parse(resultTextOf(toolResultFor(events, 'u-load'))).ok, true)
   // 正控制：合法调用执行
   assert.equal(store.bodyCount('u-legit'), 1)
-  // unload 成功
+  // unload 被拒（宿主 schema 校验层，enum 里已无 unload）
   const unloadResult = toolResultFor(events, 'u-unload')
-  const unloadEnvelope = JSON.parse(resultTextOf(unloadResult))
-  assert.equal(unloadEnvelope.ok, true, `unload must succeed: ${resultTextOf(unloadResult)}`)
-  // 卸载后调用被拒，body=0
-  assert.equal(store.bodyCount('u-guess'), 0, 'after unload body must be 0')
-  const guessResult = toolResultFor(events, 'u-guess')
-  assert.equal(guessResult.data.message.isError, true, 'guess after unload must be rejected')
-  // 历史保留：卸载回执仍在 events 中
-  assert.ok(events.some((e) => e.type === 'tool/result' && resultTextOf(e).includes('unload')), 'unload receipt must remain in history')
+  assert.equal(unloadResult.data.message.isError, true, 'unload 必须被拒')
+  // 披露缓存与执行授权都未被这次失败的卸载影响
+  assert.equal(store.bodyCount('u-after'), 1, '被拒的 unload 不得影响已加载工具的执行')
+  const disclosed = (store.requests[store.requests.length - 1].tools ?? []).map((t) => t.name)
+  assert.ok(disclosed.includes('fixture_hidden_inherited'), '被拒的 unload 不得移除已披露工具')
 })
 
 // ---------------------------------------------------------------------------

@@ -11,10 +11,10 @@
 // that register no tool (dsh-tool-workflow, dsh-tool-call-timeout-policy) and
 // aliases of the same name across packages (bash / pwsh) are folded in once.
 //
-// This is the *baseline*, not a closed set: `alwaysVisible` in the plugin config
-// is merged on top of it, so a deployment can add its own without editing this
-// file. Names here that a given host does not have are harmless — the projection
-// only ever keeps tools the host already put in the assembly.
+// This is the default, not a mandatory set: an explicit `alwaysVisible` replaces
+// it entirely (including []), so a deployment can add or remove initial tools
+// without editing this file. Names absent from a particular host are harmless:
+// the projection keeps only the tools that host actually offers.
 export const CORE_TOOL_NAMES = Object.freeze([
   // shell
   'bash', 'pwsh',

@@ -195,21 +195,18 @@ test('F19 同名已加载的新显式 load 重新验证,不复用 stale 版本',
   assert.equal(engine.getState(SCOPE_A).selected.size, 1);
 });
 
-test('F08 unload 后 selected 移除;未激活 ID 幂等 no-op', async () => {
+test('F08 模型不得自主 unload:action=unload 被拒且不改变任何状态', async () => {
   const { engine } = await makeEngine();
   await doLoad(engine, SCOPE_A, { names: ['glob'] }, 1);
   assert.equal(engine.getState(SCOPE_A).selected.size, 1);
   const { response, applied } = await doLoad(engine, SCOPE_A, { action: 'unload', toolIds: ['t_files_glob'] }, 2);
-  assert.equal(response.ok, true);
-  assert.equal(applied, true);
-  assert.equal(engine.getState(SCOPE_A).selected.size, 0);
-
-  const noop = await doLoad(engine, SCOPE_A, { action: 'unload', toolIds: ['t_files_glob'] }, 3);
-  assert.equal(noop.response.ok, true, '未激活 ID 是幂等 no-op');
-  assert.deepEqual(noop.response.data.receipt.deselected, []);
+  assert.equal(response.ok, false, 'unload 不再是模型可用路径');
+  assert.equal(response.error.code, 'INVALID_ARGS');
+  assert.equal(applied, false, '被拒的调用不得产生 canonical 折叠');
+  assert.equal(engine.getState(SCOPE_A).selected.size, 1, '已加载的工具保持加载');
 });
 
-test('F20 入口与框架保留项不可 load/unload', async () => {
+test('F20 入口与框架保留项不可 load', async () => {
   const { engine } = await makeEngine();
   for (const n of ['tool_list', 'tool_search', 'tool_load', 'final_answer']) {
     const res = await engine.handleLoad({ names: [n] }, SCOPE_A, { operationId: nextOpId() });
@@ -363,7 +360,7 @@ test('D1 折叠侧 reducePair 拒选中入口项(冷恢复路径)', async () => 
   assert.equal(out.state.selected.size, 0);
 });
 
-test('D2 refreshCatalog 后新绑定的框架项 unload 仍被拒', async () => {
+test('D2 refreshCatalog 后新绑定的框架项仍受保护(unload 路径已关闭)', async () => {
   const { engine } = await makeEngine();
   // 刷新目录,框架项换新 toolId
   engine.refreshCatalog([
@@ -373,11 +370,8 @@ test('D2 refreshCatalog 后新绑定的框架项 unload 仍被拒', async () => 
     binding({ name: 'tool_search', toolId: 't_entry_search_v2', description: 'entry point search' }),
     binding({ name: 'tool_load', toolId: 't_entry_load_v2', description: 'entry point load' }),
   ]);
-  const res = await engine.handleLoad(
-    { action: 'unload', toolIds: ['t_fw_final_v2'] },
-    SCOPE_A,
-    { operationId: nextOpId() },
-  );
+  // 新绑定的框架项换了 toolId,仍不得被当成可加载目标(D2 的保护口径)。
+  const res = await engine.handleLoad({ names: ['final_answer'] }, SCOPE_A, { operationId: nextOpId() });
   assert.equal(res.response.ok, false);
-  assert.equal(res.response.error.code, 'INVALID_ARGS', '新绑定的框架项不可被 unload');
+  assert.equal(res.response.error.code, 'INVALID_ARGS', '新绑定的框架项不可被 load');
 });

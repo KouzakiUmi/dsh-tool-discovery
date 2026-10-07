@@ -1,7 +1,7 @@
 {
   "name": "dsh-tool-discovery",
   "description": "Progressive tool discovery for DSH: three-entry control protocol with a host-independent domain kernel and a DSH adapter (source baseline, not published to npm)",
-  "version": "0.1.0",
+  "version": "0.2.0-functional.1",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.7.0",
@@ -20,22 +20,32 @@
   "exports": {
     ".": "./plugin/adapters/dsh/index.mjs",
     "./domain": "./plugin/domain/index.mjs",
+    "./client": "./plugin/client/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "id": "dsh-tool-discovery",
+      "platform": "web",
+      "external": [
+        "react"
+      ]
     }
   },
   "files": [
     "plugin/adapters/",
     "plugin/domain/",
+    "plugin/client/",
     "cordis.patch.yml"
   ],
   "peerDependencies": {
     "@deepseek-ai/dsh": "0.2.1-alpha.1",
-    "@deepseek-ai/dsh-tools": "0.2.1-alpha.1"
+    "@deepseek-ai/dsh-tools": "0.2.1-alpha.1",
+    "@deepseek-ai/schemastery": "3.18.5-alpha.1"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh": {
@@ -43,12 +53,15 @@
     },
     "@deepseek-ai/dsh-tools": {
       "optional": false
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": false
     }
   },
   "license": "MIT",
   "scripts": {
     "test": "node --test plugin/tests/unit/*.test.mjs",
-    "test:composition": "node --test plugin/tests/composition/gate-adapter.test.mjs plugin/tests/composition/gate-adapter-lifecycle.test.mjs plugin/tests/composition/gate-adapter-recovery.test.mjs plugin/tests/composition/gate-adapter-event-seq.test.mjs",
+    "test:composition": "node --test plugin/tests/composition/gate-adapter.test.mjs plugin/tests/composition/gate-adapter-lifecycle.test.mjs plugin/tests/composition/gate-adapter-recovery.test.mjs plugin/tests/composition/gate-adapter-event-seq.test.mjs plugin/tests/composition/gate-cache-epoch.test.mjs plugin/tests/composition/gate-settings.test.mjs",
     "check:quality": "node plugin/quality/validate.mjs"
   }
 }
