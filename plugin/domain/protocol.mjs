@@ -164,15 +164,20 @@ export function validateLoadRequest(raw, budgets = DEFAULT_BUDGETS) {
       if (!isPlainObject(item)) throw new DomainError('INVALID_ARGS', t(['detail', 'candidateNotObject']));
       assertNoForbiddenFields(item);
       assertOnlyKeys(item, ['ref', 'revision']);
-      if (!isNonEmptyString(item.ref) || !isNonEmptyString(item.revision)) {
+      if (!isNonEmptyString(item.ref)) {
+        throw new DomainError('INVALID_ARGS', t(['detail', 'candidateNeedsRefRevision']));
+      }
+      if (item.revision !== undefined && !isNonEmptyString(item.revision)) {
         throw new DomainError('INVALID_ARGS', t(['detail', 'candidateNeedsRefRevision']));
       }
       const prev = seen.get(item.ref);
-      if (prev !== undefined && prev !== item.revision) {
+      if (prev !== undefined && item.revision !== undefined && prev !== item.revision) {
         throw new DomainError('INVALID_ARGS', t(['detail', 'duplicateRefConflict']));
       }
-      seen.set(item.ref, item.revision);
-      out.push({ ref: item.ref, revision: item.revision });
+      if (item.revision !== undefined) seen.set(item.ref, item.revision);
+      const cand = { ref: item.ref };
+      if (item.revision !== undefined) cand.revision = item.revision;
+      out.push(cand);
     }
     return { action: 'load', candidates: out };
   }

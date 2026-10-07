@@ -2,7 +2,7 @@
 // schema 身份、版本与不可变目录快照。
 // 不依赖宿主:schema 身份由"有效 wire 字段"的无损 canonical JSON 完全重算。
 import { classifyBinding } from './categories.mjs';
-import { deepFreeze, deepEqualCanonical, digestOf, utf8Bytes } from './canonical.mjs';
+import { canonicalJson, deepFreeze, deepEqualCanonical, digestOf, utf8Bytes } from './canonical.mjs';
 import { DomainError } from './errors.mjs';
 import { isNonEmptyString, isPlainObject, sortBy } from './util.mjs';
 
@@ -70,7 +70,7 @@ export function validateBinding(b) {
   }
   for (const key of ['providerNamespace', 'bindingGeneration', 'shadowOf', 'trustedCategoryOverride']) {
     if (key in b && b[key] !== null && typeof b[key] !== 'string') {
-      throw new DomainError('INCOMPATIBLE_COMPOSITION', `${key} 必须是字符串或 null。`);
+      throw new DomainError('INCOMPATIBLE_COMPOSITION', text.format(['detail', 'bindingFieldNotStringOrNull'], { key }));
     }
   }
   if ('skill' in b && b.skill !== null) {
@@ -127,7 +127,7 @@ export function buildEntry(b) {
     shadowOf: b.shadowOf ?? null,
     bindingGeneration: b.bindingGeneration ?? null,
     wire,
-    wireBytes: utf8Bytes(JSON.stringify(wire)),
+    wireBytes: utf8Bytes(canonicalJson(wire)),
     skill: b.skill ? { ...b.skill, limitations: b.skill.limitations.slice() } : null,
   };
 }
@@ -148,7 +148,7 @@ export function buildCatalog(rawBindings, opts) {
 
   for (const raw of rawBindings) {
     const b = validateBinding(raw);
-    if (seen.has(b.toolId)) throw new DomainError('INCOMPATIBLE_COMPOSITION', `重复 toolId: ${b.toolId}`);
+    if (seen.has(b.toolId)) throw new DomainError('INCOMPATIBLE_COMPOSITION', text.format(['detail', 'duplicateToolId'], { toolId: b.toolId }));
     seen.add(b.toolId);
     const entry = buildEntry(b);
     entries.set(entry.toolId, entry);

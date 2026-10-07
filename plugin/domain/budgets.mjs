@@ -39,7 +39,7 @@ export function resolveBudgets(partial) {
   /** @type {Record<string, number|null>} */
   const out = { ...DEFAULT_BUDGETS };
   for (const k of Object.keys(partial)) {
-    if (!NUMERIC_KEYS.includes(k)) throw new DomainError('INCOMPATIBLE_COMPOSITION', `未知预算项: ${k}`);
+    if (!NUMERIC_KEYS.includes(k)) throw new DomainError('INCOMPATIBLE_COMPOSITION', text.format(['detail', 'unknownBudgetKey'], { key: k }));
     const v = partial[k];
     // 可选限额：null 明确表示"关闭这项上限"
     if (OPTIONAL.has(k) && v === null) {
@@ -48,9 +48,7 @@ export function resolveBudgets(partial) {
     }
     if (typeof v !== 'number' || !Number.isInteger(v) || v <= 0) {
       throw new DomainError('INCOMPATIBLE_COMPOSITION',
-        OPTIONAL.has(k)
-          ? `可选限额 ${k} 必须是正整数或 null（null = 关闭）。`
-          : `预算项 ${k} 必须是正整数。`);
+        text.format(['detail', OPTIONAL.has(k) ? 'optionalLimitInvalid' : 'budgetKeyInvalid'], { key: k }));
     }
     out[k] = v;
   }
@@ -89,7 +87,7 @@ export function estimatedTokenCount(text) {
 export function assertBytes(text, maxBytes, what) {
   const bytes = utf8Bytes(text);
   if (maxBytes !== null && bytes > maxBytes) {
-    throw new DomainError('BUDGET_EXCEEDED', `${what} 超过字节预算。`, { bytes, maxBytes });
+    throw new DomainError('BUDGET_EXCEEDED', text.format(['detail', 'bytesOverBudget'], { what }), { bytes, maxBytes });
   }
   return bytes;
 }

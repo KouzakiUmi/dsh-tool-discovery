@@ -26,7 +26,7 @@ export function validateSkill(entry) {
   if (!s) return;
   for (const k of Object.keys(s)) {
     if (FORBIDDEN_SKILL_KEYS.includes(k)) {
-      throw new DomainError('INCOMPATIBLE_COMPOSITION', `技能载荷包含禁止字段: ${k}`);
+      throw new DomainError('INCOMPATIBLE_COMPOSITION', text.format(['detail', 'skillForbiddenField'], { field: k }));
     }
   }
   if (s.skillRevision !== entry.skillRevision) {
