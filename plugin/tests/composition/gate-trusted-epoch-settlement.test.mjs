@@ -312,7 +312,7 @@ test('TS1: 迁移写 PENDING 期间收尾不得提前终态，释放最新 manua
   // ===================== 段一：真实父会话历史 ==============================
   const boot1 = await bootAdapterComposition({
     fixtures: FIXTURES,
-    adapter: { alwaysVisible: [HIDDEN] },
+    adapter: { requireTrustedEpoch: true, alwaysVisible: [HIDDEN] },
     extraServices: COMPACTION_SERVICES,
   })
   cleanup.push(() => boot1.dispose())
@@ -364,7 +364,7 @@ test('TS1: 迁移写 PENDING 期间收尾不得提前终态，释放最新 manua
   // TS2 的注册一致（TS2 注册的本来就是释放闭包）。
   barriers.push(() => barrier.releaseAll())
   cleanup.push(() => barrier.restore())
-  await mountAdapterLate(boot2, { alwaysVisible: INITIAL_NAMES }, { adapterSchema: true })
+  await mountAdapterLate(boot2, { requireTrustedEpoch: true, alwaysVisible: INITIAL_NAMES }, { adapterSchema: true })
   const svc = boot2.ctx.get('progressiveDiscovery')
   assert.ok(svc !== undefined, '前置：产品 adapter 必须已激活')
 
@@ -762,7 +762,7 @@ test('TS2: legacy 冷恢复的 load 被迁移写 supersede 后不得提前终态
   const sdkBarrier = installTrustedEpochSdkBarrier(boot2.ctx)
   barriers.push(() => { sdkBarrier.releaseOpening(); sdkBarrier.releaseAllPuts() })
   cleanup.push(() => sdkBarrier.restore())
-  await mountAdapterLate(boot2, { alwaysVisible: TS2_INITIAL_NAMES }, { adapterSchema: true })
+  await mountAdapterLate(boot2, { requireTrustedEpoch: true, alwaysVisible: TS2_INITIAL_NAMES }, { adapterSchema: true })
   const svc = boot2.ctx.get('progressiveDiscovery')
   assert.ok(svc !== undefined, '前置：产品 adapter 必须已激活')
   assert.equal(sdkBarrier.held.length, 0,

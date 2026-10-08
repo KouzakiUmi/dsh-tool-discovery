@@ -48,7 +48,7 @@ const FIXTURES = ['mock-provider', 'inherited-tools', 'scope-tools']
  * 这样「授权从哪来」在本例里**唯一**的可能来源就是被污染的 request/header，
  * 不会与 Core 默认常驻名单混淆。
  */
-const ADAPTER_CONFIG = { alwaysVisible: [] }
+const ADAPTER_CONFIG = { requireTrustedEpoch: true, alwaysVisible: [] }
 
 const handles = []
 const cleanup = []
@@ -250,7 +250,7 @@ test('TE1x: 正控制 —— 可信 alwaysVisible 基线下，直连 ctx.tools.e
   store.reset()
   const boot = await bootAdapterComposition({
     fixtures: FIXTURES,
-    adapter: { alwaysVisible: [HIDDEN] }
+    adapter: { requireTrustedEpoch: true, alwaysVisible: [HIDDEN] }
   })
   cleanup.push(() => boot.dispose())
 
@@ -699,7 +699,7 @@ test('TE9: 同 root 重启后，同一 epoch 的常驻基线必须仍是该 epoc
   // 同一 root 上重启 Loader；配置改成包含 hidden —— 同 epoch 不得被改写。
   const boot2 = await bootAdapterComposition({
     fixtures: FIXTURES,
-    adapter: { alwaysVisible: [HIDDEN] },
+    adapter: { requireTrustedEpoch: true, alwaysVisible: [HIDDEN] },
     tmpRoot: boot1.tmpRoot
   })
   cleanup.push(() => boot2.dispose())

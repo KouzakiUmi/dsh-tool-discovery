@@ -58,17 +58,19 @@ export function buildRows (meta, selected) {
   const rows = [];
   for (const name of chosen) {
     if (fixed.includes(name)) continue;
-    rows.push({ name, selected: true, available: available.has(name) });
+    rows.push({ name, selected: true, available: available.has(name),
+      status: available.has(name) ? 'registered' : meta?.catalogComplete === true ? 'unregistered' : 'unknown' });
   }
   for (const name of available) {
     if (chosen.has(name)) continue;
-    rows.push({ name, selected: false, available: true });
+    rows.push({ name, selected: false, available: true, status: 'registered' });
   }
   rows.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   return {
     fixed,
     rows,
     selectedCount: rows.filter((r) => r.selected).length,
-    missingCount: rows.filter((r) => !r.available).length,
+    missingCount: rows.filter((r) => r.status === 'unregistered').length,
+    unknownCount: rows.filter((r) => r.status === 'unknown').length,
   };
 }

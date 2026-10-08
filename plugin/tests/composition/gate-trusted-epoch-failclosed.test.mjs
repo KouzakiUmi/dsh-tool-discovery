@@ -60,7 +60,7 @@ const FIXTURES = ['mock-provider', 'inherited-tools', 'scope-tools']
  * 同时它也保证「基线里没有 HIDDEN」：目标会话此前加载过的工具**只**可能来自 canonical
  * `tool_load` 折叠，所以「不携带此前加载的任何工具」是本例唯一、且真的被检验的排他项。
  */
-const ADAPTER_CONFIG = { alwaysVisible: [] }
+const ADAPTER_CONFIG = { requireTrustedEpoch: true, alwaysVisible: [] }
 const BASELINE_NAMES = [...ENTRY_TOOL_NAMES].sort()
 
 const handles = []

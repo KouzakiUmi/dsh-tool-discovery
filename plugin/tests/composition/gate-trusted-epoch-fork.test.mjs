@@ -234,7 +234,7 @@ test('TF0: 正控制 —— 未改配置的 own-only fork 子按当前配置建�
   const PARENT = 'tf0-parent'
   const boot = await bootAdapterComposition({
     fixtures: FIXTURES,
-    adapter: { alwaysVisible: [HIDDEN] },
+    adapter: { requireTrustedEpoch: true, requireTrustedEpochForSubagents: true, alwaysVisible: [HIDDEN] },
     adapterSchema: true,
     extraServices: FORK_SERVICES,
   })
@@ -284,7 +284,7 @@ test('TF1: 真实 fork 子无 own 出站 → 以当前配置建自己的记录�
   const PARENT = 'tf1-parent'
   const boot = await bootAdapterComposition({
     fixtures: FIXTURES,
-    adapter: { alwaysVisible: [HIDDEN] },
+    adapter: { requireTrustedEpoch: true, requireTrustedEpochForSubagents: true, alwaysVisible: [HIDDEN] },
     adapterSchema: true,
     extraServices: FORK_SERVICES,
   })
@@ -422,7 +422,7 @@ test('TF2: 直连 ctx.tools.execute 猜父常驻名 → body=0；同 root 重启
   const PARENT = 'tf2-parent'
   const boot1 = await bootAdapterComposition({
     fixtures: FIXTURES,
-    adapter: { alwaysVisible: [HIDDEN] },
+    adapter: { requireTrustedEpoch: true, requireTrustedEpochForSubagents: true, alwaysVisible: [HIDDEN] },
     adapterSchema: true,
     extraServices: FORK_SERVICES,
   })
@@ -480,7 +480,7 @@ test('TF2: 直连 ctx.tools.execute 猜父常驻名 → body=0；同 root 重启
     boot2 = await bootAdapterComposition({
       fixtures: FIXTURES,
       // 故意改回 [HIDDEN]：子若落回"当前配置"就会被放行，本例因此才有分辨力。
-      adapter: { alwaysVisible: [HIDDEN] },
+      adapter: { requireTrustedEpoch: true, requireTrustedEpochForSubagents: true, alwaysVisible: [HIDDEN] },
       adapterSchema: true,
       tmpRoot: boot1.tmpRoot,
     })

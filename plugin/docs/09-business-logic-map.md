@@ -10,7 +10,10 @@
 > 涉及宿主动态行为的结论标注了静态推理的部分；本轮改动碰到 `domain/` 的 load/unload
 > 状态机，**按 CONTRIBUTING 的规矩不算作者自签**，需非作者复核。
 >
-> 整理日期：2026-10-07 · 对应源码版本 `0.2.0-functional.6`（未 bump）
+> 整理日期：2026-10-07 · 2026-10-08 更新（可选设置语义、PR #10 合并状态）·
+> 对应版本：**本源码快照为 `0.2.0-functional.7`，基于 `main`@`80216ba` 的 `0.2.0-functional.6`
+> （后者已发布构建资产 `build-80216ba3effa`）；`0.2.0-functional.7` 是否已发布，以对应
+> `build-<sha>` Release 是否存在、及其 tarball 内清单为准**
 
 ---
 
@@ -95,8 +98,8 @@ outOfOrderIgnored / gaps / rejected / coldCandidateRestores）。
 模型请求
   └─ system-prompt/assemble（await next() 之后）
        ├─ 冷恢复未落定 → await whenReady（仍在恢复 = 不发请求，无超时兜底）
-       ├─ 可信基线 pending/blocked → 不发请求
-       └─ 投影：常驻基线（三入口 + 框架保留 + 常驻工具）+ 披露段（frozen 按次序追加）
+       ├─ 仅 requireTrustedEpoch=true：可信基线 pending/blocked → 不发请求
+       └─ 投影：常驻基线（三入口 + 框架保留 + 常驻工具；默认含手动 DSH 基线与当前 preset 保留项）+ 披露段（frozen 按次序追加）
   └─ 原生出站 tools = 投影结果 → provider
   └─ canonical request/header 观测 → recordAdvertisement（唯一的 advertised 来源）
   └─ 模型调用工具 → tools.guard（同步，只加拒绝）
@@ -117,7 +120,10 @@ outOfOrderIgnored / gaps / rejected / coldCandidateRestores）。
   一旦进入"没有读者"的状态（bootstrap 分支 / fail closed / dispose）必须**显式**关掉。
 - **fork 不继承能力状态**：只折叠 fork 自己拥有的段（`ownSeqStart` 边界）。
 - **compaction 不是授权**：`resetCacheEpoch` 清空 selected/advertised/frozen 与本会话未决预留。
-- **trusted-epoch**：常驻工具名单必须由宿主 storage domain 里的 durable 记录背书，
+- **设置目录**：读取应用全部工具注册层，包括预加载 preset，不依赖会话 runtime 或加载/资格状态。完整目录未列出只证明未登记；不完整目录标待确认，不推断执行失败。
+- **默认模式**：`requireTrustedEpoch=false`，常驻名单来自配置快照，不读写可信周期存储；`initialToolsEnabled=false` 只关闭手动初始注入，`alwaysAllowPresetTools=true` 独立保留当前实际 preset 修订登记且原生可见的工具。合并名单和两个 volatile 开关在新会话/成功压缩边界采用，三个发现入口和资格校验不变。
+- **子代理模式**：依据 SDK 实时所有权识别子代理，默认 `requireTrustedEpochForSubagents=false`，即使主严格开关开启也不要求其补 epoch 记录或自行 `/compact`。显式开启子严格检查走普通 Loader 重载；可伪造的会话标签和持久 fork 血缘不获得豁免。
+- **可选 trusted-epoch 严格模式**：主会话 `requireTrustedEpoch=true`、或子代理两个严格开关都为 true 时，常驻名单必须由宿主 storage domain 里的 durable 记录背书，
   冷恢复时不再用 request/header 内容反推。缺记录 = 明确报错并停止发请求，
   旧会话只能经一次真实用户 `/compact` 迁移。
 
@@ -183,7 +189,7 @@ fail closed 与 dispose 三处显式关闭，并把文件头那句"读起来像�
 dispose 后的拒绝文案原本是 `undefined`；`toDomainError` 原先回落英文而 `DomainError`
 构造器回落界面语言，同一次失败可能中英混排 —— 现统一为回落绑定语言。
 
-### 🛠 失败终态预算结算（2026-10-08，本地修复分支，尚未合并）
+### 🛠 失败终态预算结算（2026-10-08，已由 PR #10 并入 `main`@`80216ba`）
 
 **订正旧推断**：目标宿主 `0.2.1-alpha.1` 在 body 后取消时仍会写错误 `tool/result`，
 然后才写 `turn/end`；post-policy block 同样会写错误 result。真实 Loader 的确定时机
@@ -198,7 +204,7 @@ body 创建的 `engine.pending` 仍留着。`selected` 为空也会在下一次 
 新增 [`terminal-load-result.test.mjs`](../tests/unit/terminal-load-result.test.mjs) 与
 [`gate-terminal-load-result.test.mjs`](../tests/composition/gate-terminal-load-result.test.mjs)
 覆盖失败释放、正常成功正控制、其它 pending、重复/迟到结果与真实宿主取消/策略拒绝。
-**修复已有红绿证据，GLM 非作者独立测试复核 PASS（限这两项修复）；不构成对等强度安全发布签署或产品验收，不自动合并/推送。**
+**修复已有红绿证据，GLM 非作者独立测试复核 PASS（限这两项修复）；不构成对等强度安全发布签署或产品验收。**该修复已由 PR #10 合并进 `main`（分支提交 `3e79537`，合并提交 `80216ba`），并随 `build-80216ba3effa` 资产发布——这是仓库流程结果，仍**不是**产品验收，也不表示任何 profile 已安装。
 
 ### 🔍 新发现（尚未处置）
 
@@ -209,12 +215,12 @@ body 创建的 `engine.pending` 仍留着。`selected` 为空也会在下一次 
   `读取文件内容` 会把 files 类几个工具打成同分再按名字序 tiebreak。
   要修需要**每个工具的中文可描述**（catalog / adapter 层），不是检索层能单独解决的 ——
   与下面"技能从未接线"是同一类缺口。
-- **`tool_list {}` 默认导航已在本地修复分支修复（尚未合并）。** 无 `view` 且无 `category`
+- **`tool_list {}` 默认导航已由 PR #10 并入 `main`（`80216ba`）。** 无 `view` 且无 `category`
   时返回 `categories`；有 `category` 时仍默认 `available`，保留既有调用兼容。显式
   available/loaded 缺 category、null/空串、未知字段仍拒绝。回归见
   [`list-default-navigation.test.mjs`](../tests/unit/list-default-navigation.test.mjs) 与上述组合门禁。
 - ~~**`SYNONYM_GROUPS` 有两个重复触发词**（`search engine`、`spreadsheet` 各自在同组内出现两次）。~~
-  **已处置（2026-10-07 晚）**：两处重复已删除（同一触发词 → 同一概念，删除不改变行为；349 单测 + 108 组合全过）。
+  **已处置（2026-10-07 晚）**：两处重复已删除（同一触发词 → 同一概念，删除不改变行为；当时基线 349 单测 + 108 组合全过，与今日 372/130 不是同一次运行）。
 
 ### 🔐 待他人复核（不可由本轮作者签核）
 
@@ -276,6 +282,7 @@ body 创建的 `engine.pending` 仍留着。`selected` 为空也会在下一次 
 2. **拿宿主事实**收掉"中断轮的 `tool_load`"那条 —— 需要 `turn/end` 与 `tool/result`
    在中断路径上的先后关系说明。拿到之前不动。
 3. **产品决策**：技能是否接线、中文工具描述从哪来（同一条链路，一起想）。
-4. 清理轮：死导出、registry 三张表的清理、`tool_list` 缺省 view（~~`docs/01` 的"倒排"措辞~~ 已于 2026-10-07 晚改完）。
+4. 清理轮：死导出、registry 三张表的清理（~~`tool_list` 缺省 view~~ 已由 PR #10 修复；
+   ~~`docs/01` 的"倒排"措辞~~ 已于 2026-10-07 晚改完）。
 
 > 明确**不在**范围：任何进一步的安全边界加固。功能闭环之前不加新门禁。

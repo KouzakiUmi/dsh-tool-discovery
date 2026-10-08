@@ -4,7 +4,7 @@
 // 两个职责，刻意放在一个模块：
 //
 //  1. `buildConfig(Schema)` —— 宿主 dsh-settings 读的 `fiber.runtime.Config`。
-//     只有 `alwaysVisible` 是 volatile（即时生效、可被设置面板改写而不重挂载）。
+//     `alwaysVisible` / `initialToolsEnabled` 是 volatile：保存不重挂载，在周期边界采用。
 //     **替换语义，不是并集**：字段默认值是 CORE_TOOL_NAMES；一旦显式给出
 //     （含显式 `[]`），该值就是完整的初始注入名单，把默认项删掉是真的删掉，
 //     之后仍可经普通 tool_load 再次加载（engine 的 protected 判据随之放开）。
@@ -64,9 +64,23 @@ export function buildConfig(Schema) {
   const alwaysVisible = Schema.array(Schema.string())
     .default([...DEFAULT_ALWAYS_VISIBLE])
     .volatile()
-    .description('Tools injected into every request from the start. Replaces the DSH default list entirely; the three discovery entries are always present and cannot be removed.');
+    .description('Manual initial tool list. Replaces the DSH default list; current-preset retention is controlled separately. The three discovery entries are always present and cannot be removed.');
   return Schema.object({
     alwaysVisible,
+    initialToolsEnabled: Schema.boolean()
+      .default(true)
+      .volatile()
+      .description('Inject the configured initial tools. Changes take effect in a new session or after successful compaction; the three discovery entries stay available.'),
+    alwaysAllowPresetTools: Schema.boolean()
+      .default(true)
+      .volatile()
+      .description('Always include tools registered by the current bound preset, even when manual initial injection is disabled. Applies at a new session or successful compaction; native permissions and eligibility remain enforced.'),
+    requireTrustedEpoch: Schema.boolean()
+      .default(false)
+      .description('Opt-in strict durable epoch verification. Enabling reloads the plugin and may block existing sessions until a successful user /compact. Disabled by default; tool eligibility and protocol checks remain enforced.'),
+    requireTrustedEpochForSubagents: Schema.boolean()
+      .default(false)
+      .description('Also require trusted epoch records for runtime-owned subagents, only when requireTrustedEpoch is on. Off by default because subagents cannot perform user /compact; changing this reloads the plugin.'),
     frameworkRetained: Schema.array(Schema.string())
       .default([])
       .description('Trusted framework-mandated tool names the projection must keep. Not user-editable here.'),
@@ -88,7 +102,7 @@ export function buildConfig(Schema) {
 }
 
 /**
- * 当前 scope 真实可见的原生工具名（不含三个发现入口）—— 面板的目录来源。
+ * 单个 scope 真实可见的原生工具名（不含三个发现入口）；不是设置页的全局完整性证据。
  * 与 registry 同一事实源 `ctx.tools.view()`，只是不构造 CatalogBindingDTO。
  * @param {{view:{visible: Map<string,any>}}} view
  */
@@ -109,7 +123,7 @@ export function nativeToolNamesOf(view) {
  * @param {any} config buildConfig 的产物
  * @param {readonly string[]} names
  */
-export function publishToolChoices(config, names) {
+export function publishToolChoices(config, names, { complete = false } = {}) {
   const node = config?.dict?.alwaysVisible;
   if (node === undefined) return false;
   const seen = new Set();
@@ -119,13 +133,14 @@ export function publishToolChoices(config, names) {
     seen.add(name);
     choices.push({ name, available: true });
   }
-  node.meta = { ...node.meta, [INITIAL_TOOL_CHOICES]: choices };
+  node.meta = { ...node.meta, [INITIAL_TOOL_CHOICES]: choices,
+    toolDirectory: { scope: 'application', complete: complete === true } };
   return true;
 }
 
 /**
  * 设置面板的完整初始集合：固定三入口 + 目录里可选的工具。
- * 选中但当前不可用（被移除/换版）的名字保留在 `missing` 里，供 UI 标注但仍可删。
+ * 未登记或全局目录尚未完整确认的已选名字仍可删除；不把未列出等同于调用不可用。
  * @param {{choices?: readonly any[]}} meta `alwaysVisible` 节点的 meta
  * @param {readonly string[]} selected 用户配置里的 alwaysVisible
  */
@@ -145,11 +160,12 @@ export function initialSelectionView(meta, selected) {
   const rows = [];
   for (const name of selectedSet) {
     if (fixed.includes(name)) continue;
-    rows.push({ name, selected: true, available: available.has(name) });
+    rows.push({ name, selected: true, available: available.has(name),
+      status: available.has(name) ? 'registered' : meta?.catalogComplete === true ? 'unregistered' : 'unknown' });
   }
   for (const name of available) {
     if (selectedSet.has(name)) continue;
-    rows.push({ name, selected: false, available: true });
+    rows.push({ name, selected: false, available: true, status: 'registered' });
   }
   rows.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   return { fixed: [...fixed], rows };

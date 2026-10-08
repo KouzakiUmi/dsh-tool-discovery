@@ -203,7 +203,7 @@ export function createProjection(deps) {
    */
   async function enforceTrustedBaseline(runtime, signal) {
     const ledger = runtime.ledger;
-    if (ledger === undefined) return;
+    if (runtime.requireTrustedEpoch === false || ledger === undefined) return;
     if (ledger.state !== BASELINE_STATE.PENDING && ledger.state !== BASELINE_STATE.BLOCKED) return;
     if (ledger.state === BASELINE_STATE.BLOCKED) throw trustedEpochBlockedError(ledger.reason);
     const settled = await lifecycle.awaitEpochRecord(runtime.scope.sessionId, signal);

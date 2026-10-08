@@ -21,7 +21,8 @@ import { createGuard } from './guard.mjs';
 import { createLifecycle } from './lifecycle.mjs';
 import { createProjection } from './projection.mjs';
 import { createRegistryAdapter } from './registry.mjs';
-import { buildConfig, nativeToolNamesOf, publishToolChoices, resolveAlwaysVisible } from './config.mjs';
+import { buildConfig, publishToolChoices, resolveAlwaysVisible } from './config.mjs';
+import { globalToolInventory, presetToolNamesOf } from './tool-inventory.mjs';
 import { createTrustedEpochHolder, createTrustedEpochStore, TRUSTED_EPOCH_REASONS } from './trusted-epoch.mjs';
 
 /**
@@ -136,7 +137,21 @@ export function validateConfig(raw) {
   if (config.allowMissingSessionQuery !== undefined && typeof config.allowMissingSessionQuery !== 'boolean') {
     throw new DomainError('INCOMPATIBLE_COMPOSITION', 'allowMissingSessionQuery must be a boolean.');
   }
+  const initialToolsEnabled = typeof config.initialToolsEnabled?.get === 'function'
+    ? config.initialToolsEnabled.get() : config.initialToolsEnabled;
+  const alwaysAllowPresetTools = typeof config.alwaysAllowPresetTools?.get === 'function'
+    ? config.alwaysAllowPresetTools.get() : config.alwaysAllowPresetTools;
+  for (const [key, value] of Object.entries({ initialToolsEnabled, alwaysAllowPresetTools, requireTrustedEpoch: config.requireTrustedEpoch,
+    requireTrustedEpochForSubagents: config.requireTrustedEpochForSubagents })) {
+    if (value !== undefined && typeof value !== 'boolean') {
+      throw new DomainError('INCOMPATIBLE_COMPOSITION', `${key} must be a boolean.`);
+    }
+  }
   return {
+    initialToolsEnabled: initialToolsEnabled !== false,
+    alwaysAllowPresetTools: alwaysAllowPresetTools !== false,
+    requireTrustedEpoch: config.requireTrustedEpoch === true,
+    requireTrustedEpochForSubagents: config.requireTrustedEpochForSubagents === true,
     categoryConfig,
     budgets: config.budgets,
     frameworkRetained: Object.freeze([...frameworkRetained]),
@@ -278,34 +293,28 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
      * 周期中途配置变更因此不改变任何在跑的会话。
      */
     const getAlwaysVisible = () => {
+      const enabled = ctx.fiber?.config?.initialToolsEnabled ?? config.initialToolsEnabled;
+      if ((typeof enabled?.get === 'function' ? enabled.get() : enabled) === false) return [];
       const live = ctx.fiber?.config?.alwaysVisible;
       if (live !== undefined) return resolveAlwaysVisible(live);
       return resolveAlwaysVisible(config.alwaysVisible);
     };
 
-    /** lifecycle 在下方创建；刷新回调需要它，故用前向引用。 */
-    let lifecycleRef = null;
+    const getPresetTools = (agentScope) => {
+      const enabled = ctx.fiber?.config?.alwaysAllowPresetTools ?? config.alwaysAllowPresetTools;
+      if ((typeof enabled?.get === 'function' ? enabled.get() : enabled) === false) return [];
+      return presetToolNamesOf(ctx.tools, ctx.get('agentPresets'), agentScope);
+    };
 
     /** 把当前目录写进 Config 的 meta 并让设置面板重读。 */
     // 注意发布目标是 **apply.Config**（已构建的 Config 树），不是 schemastery 模块
     // 本身 —— 后者没有 dict.alwaysVisible。
     const refreshToolChoices = () => {
       if (apply.Config === undefined) return false;
-      // 目录 = 全局视图 ∪ **各会话 runtime 的目录**。
-      // 只看 view(undefined) 会漏掉 agent-scoped 工具（scope-tools、MCP 服务器、
-      // 插件在自己 agent.ctx 上注册的一切）—— 而那恰恰是用户最需要能勾选的第三方
-      // 工具。漏掉它们，面板就只剩"当前已选"可看，无法添加任何第三方工具。
-      const names = new Set(nativeToolNamesOf(ctx.tools.view(undefined)));
-      for (const runtime of lifecycleRef?.sessions?.values() ?? []) {
-        for (const entry of runtime.engine.getCatalog()?.entries?.values() ?? []) {
-          if (typeof entry?.name === 'string' && entry.name.length > 0) names.add(entry.name);
-        }
-      }
-      // 三入口恒定、可选集里不得出现（nativeToolNamesOf 已滤过一次，这里兜底）。
-      names.delete('tool_list');
-      names.delete('tool_search');
-      names.delete('tool_load');
-      if (!publishToolChoices(apply.Config, [...names].sort())) return false;
+      // 设置项是应用级配置：读全部登记层（包括预先加载的 preset），
+      // 不读当前会话的资格/selected/frozen 表，也不要求创建任何会话。
+      const inventory = globalToolInventory(ctx.tools);
+      if (!publishToolChoices(apply.Config, inventory.names, { complete: inventory.complete })) return false;
       // describe() 每次都重跑 schema.toJSON() 并比对 raw（dsh-settings:421-435），
       // meta 一变 revision 就自增并 emit settings/document-updated；invalidate()
       // 只是把这次重算排进微任务。
@@ -313,7 +322,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       return true;
     };
 
-    /** 新 runtime 建立后重发一次目录（scope 工具此时才进得来）。 */
+    /** 新 runtime 建立时重新发布应用全局目录；不读取该 runtime 的会话目录。 */
     const onRuntimeCreated = () => { refreshToolChoices(); };
 
     /**
@@ -353,10 +362,10 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
         query,
         log,
         getAlwaysVisible,
+        getPresetTools,
         onRuntimeCreated,
         trustedEpoch: trustedEpoch,
       });
-      lifecycleRef = lifecycle;
       own(() => lifecycle.dispose());
 
       // ---- 8.5 可信周期存储：动态子 fiber，作用域内 open/close ----
@@ -367,7 +376,8 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       //
       // 服务缺席 / open 失败都不是"降级继续"，而是会话级的确定终态
       // STORAGE_UNAVAILABLE（0 request，见 trusted-epoch.mjs）。
-      ctx.inject(['storageDomain'], (storageCtx) => {
+      // 兼容模式不打开、读取或写入可信周期存储；不是把易失状态伪装成 durable 授权。
+      if (config.requireTrustedEpoch) ctx.inject(['storageDomain'], (storageCtx) => {
         if (!trustedEpochDepsAvailable) {
           log('trusted-epoch:deps-missing', {
             note: 'zod / @deepseek-ai/dsh-storage-domain 不可用；会话将落 STORAGE_UNAVAILABLE 并停止发请求。',

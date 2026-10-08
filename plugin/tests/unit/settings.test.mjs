@@ -123,7 +123,7 @@ test('S-U12: 恢复默认 —— 无序比较，未变化时不产生多余写�
 })
 
 test('S-U13: model.buildRows 目录 + 选择合成面板行，固定入口不进行', () => {
-  const meta = { choices: [{ name: 'read' }, { name: 'glob' }] }
+  const meta = { choices: [{ name: 'read' }, { name: 'glob' }], catalogComplete: true }
   const built = model.buildRows(meta, ['read', 'tool_load', 'missing_one'])
   assert.deepEqual(built.fixed, ['tool_list', 'tool_search', 'tool_load'])
   assert.ok(!built.rows.some((r) => r.name === 'tool_load'), '固定入口不得成为可勾选行')

@@ -5,8 +5,8 @@
 与其把上百个工具一次性交给模型，不如只给几个小型控制入口，让模型按需加载真正需要的能力。
 
 这是一个 DSH 插件。首轮请求里模型看到三个固定入口——`tool_list`、`tool_search`、`tool_load`——
-外加每个能力类别的一段简短摘要，**以及 DSH 自带的核心工具**（它们是默认初始名单）。其它普通工具
-首轮不披露。模型判断需要某个工具时调用 `tool_load`，该工具的真实原生 schema 会在**下一次**请求中
+外加每个能力类别的一段简短摘要，**以及默认初始集合**：DSH 自带的核心工具（手动基线）与当前
+agent 自己 preset 登记的工具（默认保留）。其它普通工具首轮不披露。模型判断需要某个工具时调用 `tool_load`，该工具的真实原生 schema 会在**下一次**请求中
 披露。之后模型照常调用该工具，仍然走 DSH 自身的审批、沙箱与权限链。
 
 整个设计受两条不变量约束：
@@ -42,20 +42,54 @@
 - **每会话单个活动 agent**。单会话内多 agent 并发不受支持——请求无法无歧义地归属。
 - Node `^22.19.0 || >=24.0.0`。
 
+## 安装与更新
+
+本包**未发布到 npm**，也未上架任何插件市场。分发渠道是 **GitHub Release 构建资产**：`main` 绿跑会把
+仓库打包，在提交级 `build-<sha>` Release 上发布 `dsh-tool-discovery.tgz`（若已有更新的 `main` 提交，
+旧一次运行会直接跳过，不会把旧提交重新发布成最新资产）。该资产是
+**构建产物，不是验收声明**；某个版本覆盖什么、明确**不**宣称什么，见
+[当前状态](plugin/docs/05-current-status.md)。
+
+请使用**你所运行的那套安装自带的 DSH CLI**，并指向真正会加载本插件的 profile。DSH NEXT 桌面端自带
+CLI（经 `resources\app\lib\desktop-cli.js` 启动），插件也由其自身入口管理；`PATH` 上全局 npm 安装的
+`dsh` 是另一套启动器、另一个 profile，不是这套安装的工具。**CLI 版本不等于 Core 版本**：
+`dsh --version` 报的是 CLI，任何 CLI 版本号都不能说明某个 profile 解析到哪个 Core；请用
+[环境要求](#环境要求) 里的 Core peer 对照该 profile。
+
+```sh
+# 首次安装 —— 先写包名，再给完整 tarball URL
+dsh plugin --profile <profile> add \
+  dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz
+
+# 更新已安装副本 —— 同样是 name@URL 形式
+dsh plugin --profile <profile> update \
+  dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz
+```
+
+`<build-tag>` 是提交级 Release 标签，例如 `build-80216ba3effa`。标签里带着提交号，因此新构建不会
+覆盖旧构建；两次构建也可能共用同一个清单版本——`version` 由维护者 bump，CI 不改——所以请钉住你测过的
+那个标签对应的提交，始终显式写出包名，并以 Release 名（`v<version> · <sha>`）或该 tarball 内的清单
+为准判断它到底是哪个版本，而不是假设 `main` 与本文一致。
+
+**本轮没有执行上述任何命令。** 未安装、未重载、未重启，也没有改动任何 profile，因此这条渠道的
+**安装行为在本轮未验证**。核到的只是「某个已发布的 Release 及其资产元数据存在」（只读 `gh release
+view`：标签、目标提交、资产名）；没有下载、解包或安装任何产物，而**未来**构建的产物（含其摘要）
+只能在该次发布跑完后才能核对。确切的参数与 spec 形式以目标 CLI 自己的 `plugin --help` 为准。安装
+失败时请保留 manifest、lockfile 与 CLI 输出并如实报告，不要手改 profile。
+
 ## 获取源码
 
-插件未发布到 npm，也没有任何安装渠道经过验证。克隆仓库：
+本分支的源码版本为 **`0.2.0-functional.7`**。某次下载究竟带哪个版本，由该构建 tarball 里的清单决定
+——请与 Release 名（`v<version> · <sha>`）对照，而不是假设 `main` 与本文一致。
 
 ```sh
 git clone https://github.com/KouzakiUmi/dsh-tool-discovery
 cd dsh-tool-discovery
 ```
 
-当前源码版本为 **`0.2.0-functional.6`**。每一次 `main` 绿跑都会自动产出 GitHub Release 资产；它是
-**构建产物，不是验收结论**——本版本覆盖什么、以及明确**不**宣称什么，见
-[当前状态](plugin/docs/05-current-status.md)。
-
-纯 JavaScript，无构建步骤，自身不依赖任何包——这些由宿主提供。
+纯 JavaScript，无构建步骤。清单里声明了一个运行时 `dependencies` 项 `zod`（`^4.4.3`）——可信周期
+记录表要以 zod schema 交给宿主的 storage domain——所需宿主包则声明为 `peerDependencies`，由 DSH
+安装提供。项目不做 vendored 副本，也不存在可以拿来掩盖宿主包缺失的构建步骤。
 
 ## 自行验证
 
@@ -101,25 +135,37 @@ DSH profile；但会在被 Git 忽略的 `plugin/fixtures/tmp/` 下创建临时�
 ```jsonc
 {
   // "alwaysVisible": ["read", "grep"],  // 整项省略即保持 DSH 默认名单
+  "initialToolsEnabled": true,  // 可关闭手动初始注入，不删除已配置名单
+  "alwaysAllowPresetTools": true, // 保留当前实际绑定的 preset 所登记工具
+  "requireTrustedEpoch": false, // 高级严格校验，默认不阻断存量会话
+  "requireTrustedEpochForSubagents": false, // 仅主严格开关也开启时对子代理强制校验
   "frameworkRetained": [],  // 投影必须保留的可信框架工具名
   "categoryConfig": {},     // 本地化类别卡
   "budgets": null           // 见下；null 表示不覆盖
 }
 ```
 
-`alwaysVisible` 是**替换**初始名单，而不是追加。省略它即保持 DSH 核心工具默认值。设为
-`["read", "grep"]` 这样的列表，表示它就是**完整的**初始普通工具集合——其它默认项确实从首轮请求中
-被去掉（之后仍可按需 load 回来）。设为 `[]` 则首轮没有任何普通工具，只有三个发现入口。三个入口
-**不在**该字段里，任何配置都删不掉它们。
+`alwaysVisible` 是**替换手动初始名单**，而不是追加默认项；省略它即保持 DSH 核心工具默认值。
+preset 保留是独立来源：`alwaysAllowPresetTools` 开启时，当前实际绑定 preset 所登记且原生作用域允许
+的工具会与手动名单合并。若只需要三个发现入口，应设 `alwaysAllowPresetTools: false`，并设
+`alwaysVisible: []` 或 `initialToolsEnabled: false`（显式框架保留仍可能贡献工具）。三个入口不可删除。
+设置页全局目录中存在某工具，不意味着它会被授予所有会话。
 
 ### 设置面板
 
-在原生 `schemastery` peer 在场时，DSH 自带设置页会为本插件渲染一个**初始工具**标签页：当前作用域
-（全局 + 活动 runtime）中真实存在的工具活目录、按名称筛选、勾选切换，以及**恢复 DSH 默认**操作。
-勾选结果写入根级 `alwaysVisible` 字段。被改名或移除的工具会标注为不可用，但仍可取消勾选移除。
+在原生 `schemastery` peer 在场时，DSH 自带设置页会为本插件渲染一个**工具发现**标签页，含可选功能开关与
+**应用全局登记目录**。目录读取当前全部注册层，包括无需创建会话就已预加载的 preset；不读取会话资格、
+发现/加载状态或历史请求头。支持按名称筛选、勾选切换与**恢复 DSH 默认**，勾选只写根级 `alwaysVisible`。
+完整目录中缺少名字时标注为**未在应用全局目录登记**，不断言调用失败；宿主 SDK 无法提供完整目录时，
+未列出的名字标注为**全局登记状态尚未确认**。全局已登记不保证每个会话都具备执行权限。
 
-改动在**下一个新会话、或一次成功压缩之后**生效——当前会话保持它开始时的名单。该面板即原生配置面；
-本项目不对旧的包装式配置或任何旧版设置 UI 承诺兼容性。
+- **自动注入初始工具**（`initialToolsEnabled`，默认 `true`）：关闭不删除勾选名单，不自动注入这些工具，仍可用 `tool_load` 加载。开关和名单改动在**新会话或成功压缩后**采用，当前周期不改变。
+- **永远放行 preset 规定的工具**（`alwaysAllowPresetTools`，默认 `true`）：只读取当前 agent 实际绑定的 preset 修订自身登记、且该 agent 原生目录仍允许的工具。不根据会话 header 中的 preset 名或设置页全局目录授信；其它 preset、后装 agent-only 工具不会被自动放行。与手动注入独立，在新会话或成功压缩后采用；保留初始集合，不绕过原生权限和执行校验。
+- **强制可信周期校验**（`requireTrustedEpoch`，默认 `false`）：默认不读写可信周期存储、不因缺少记录或 storageDomain 阻断会话；常驻工具来自当前配置快照，历史出站头不授予资格。开启会重新加载插件，要求持久化周期记录；存量会话缺记录时需要成功执行用户 `/compact`，存储故障也会阻断。关闭后可恢复没有记录的会话，但**不提供严格模式的跨重启名单冻结保证**。
+- **对子代理强制可信周期校验**（`requireTrustedEpochForSubagents`，默认 `false`）：只有主严格开关也开启时才生效。默认情况下，宿主运行时拥有的子代理使用配置基线，不读写 epoch 记录，不因缺记录要求 `/compact`，包括已有历史的子会话恢复。身份依据实时父子所有权，不信 header/meta 自称或单纯的持久 fork 血缘；作为顶层恢复的 fork 会话仍受主严格开关约束。该普通设置会重载插件，关闭后可恢复旧子会话，无需伪造压缩。显式开启可能阻断旧子会话；子代理不能代替用户执行 `/compact`。
+- 工具资格、协议回执、历史损坏校验和执行门禁始终有效，不提供关闭这些保护的开关。三个发现入口始终保留。
+
+保存失败会显示错误，不宣称生效。该面板即原生配置面；不承诺旧包装配置或旧版设置 UI 的兼容性。浏览器渲染与在线安装仍需单独验收，工作区测试通过不代表已部署。
 
 ### 预算：硬上限默认关闭
 

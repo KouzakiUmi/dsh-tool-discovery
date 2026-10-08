@@ -44,7 +44,7 @@ import { bootAdapterComposition } from './harness.mjs'
 
 const FIXTURES = ['mock-provider', 'inherited-tools', 'scope-tools']
 /** 与 gate-trusted-epoch 同款配置：显式置空，基线只剩三个发现入口。 */
-const ADAPTER_CONFIG = { alwaysVisible: [] }
+const ADAPTER_CONFIG = { requireTrustedEpoch: true, alwaysVisible: [] }
 
 /** 注入用的不匹配版本号（与产品常量刻意不同，见 trusted-epoch.mjs 的 PROTOCOL/SCHEMA_VERSION）。 */
 const INJECTED_PROTOCOL_VERSION = 1

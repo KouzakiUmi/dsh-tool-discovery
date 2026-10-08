@@ -11,20 +11,137 @@ The source baseline is published on `main` as its single initial-publish commit.
 was rebuilt on 2026-10-06: the earlier history — including the `2a1f9c0` and `257ddc0` commits,
 which are quoted in older entries below — was rewritten away and **no longer resolves**. Entries
 below the functional-build entry are historical source-baseline records, not claims about current
-release availability. The package remains **not published to npm**. This functional-build round
-performs no profile installation, GUI reload, or application restart. Publishing a source commit,
-releasing a package, and accepting an online product are three different events.
+release availability. The package remains **not published to npm**; distribution is the **GitHub
+Release build asset** — a green `main` run publishes `dsh-tool-discovery.tgz` on a `build-<sha>`
+release, which is neither an npm publication nor evidence that any profile has it installed. Neither
+this changelog round nor the functional-build round performs a profile installation, GUI reload, or
+application restart. Committing source, publishing a build asset, and accepting an online product
+are three different events.
 
 Nothing in this file is a product-acceptance statement. For the authoritative per-item status —
 what is verified, what is unverified, and what this version refuses to support — see
 [`plugin/docs/05-current-status.md`](plugin/docs/05-current-status.md).
 
-## [Unreleased] — runtime stability and retrieval quality
+## [0.2.0-functional.7] — 2026-10-08 — optional feature settings
 
-Source version stays `0.2.0-functional.6` (**not bumped**). **The package is not published to npm**,
-and this round performs no install, GUI reload or application restart. This entry makes **no**
-product-acceptance claim: see [`plugin/docs/05-current-status.md`](plugin/docs/05-current-status.md)
-for the authoritative per-item status.
+Source version **`0.2.0-functional.7`** (bumped from `0.2.0-functional.6` in `package.json`). **The
+package is not published to npm** — `private` is unchanged — and this round performs no profile
+install, GUI reload or application restart. Whether this change set has been committed, merged or
+released is decided by `main` and by whether a `build-<sha>` release exists whose tarball manifest
+carries this version — **not by this entry**, which describes the source as prepared and claims no
+publication.
+
+The distribution channel is unchanged and is **not npm**: a green `main` run packs the tree, uploads
+`dsh-tool-discovery.tgz` and publishes it on a commit-derived `build-<sha>` release named
+`v<version> · <sha>`. Bumping the manifest changes the release *name*, never the tag — the
+`build-80216ba3effa` release (`v0.2.0-functional.6 · 80216ba3effa`, target commit `80216ba…`) keeps
+its identity. At the time of writing (2026-10-08) no release carried `0.2.0-functional.7`; if one
+does now, this entry does not need to change, because the release name and the manifest inside the
+tarball — not this text — say which version a build contains. The install/update wording lives in the
+[README](README.md#install-and-update) (English) /
+[README.zh.md](README.zh.md#安装与更新) (Chinese); this round ran none of those commands.
+
+### Changed — optional feature settings
+
+- The existing native settings tab is now **Tool discovery**, with four feature switches: manual initial tool injection (on by default), current-preset tool retention (on by default), strict trusted-epoch verification (off by default), and applying strict epochs to runtime-owned subagents (off by default, effective only with the main strict switch).
+- Fixed false unavailable labels: the settings catalog now reads application-wide registration layers, including preloaded presets before any session exists, instead of global view plus active runtime catalogs. Missing registrations are distinguished from unconfirmed/incomplete directory data; neither claims execution failure.
+- `alwaysAllowPresetTools` snapshots only the exact preset revision bound to the current agent, intersected with native visibility. It applies at the same new-session/successful-compaction boundary and does not bypass native restrictions, eligibility, or grant other presets' tools. Real Loader regressions cover pre-session registration, unloading, scope restrictions, opt-out/load-use, strict persistence and volatile updates.
+- Default mode uses a per-epoch configuration snapshot without accessing the trusted-epoch store. Existing sessions are not blocked solely for missing durable records or storageDomain; outbound headers never grant initial-tool authorization. Strict mode remains opt-in and preserves durable-write barriers and user `/compact` migration requirements.
+- Legacy runtime-owned subagents no longer require user `/compact` for missing epoch records by default, even when main sessions opt into strict verification. Child identity comes from live Agent registry ownership, not header/meta labels or durable lineage. The separate `requireTrustedEpochForSubagents` opt-in uses the ordinary Loader remount; eligibility, canonical receipt and native permission checks remain enforced. Real mock-provider/SDK tests cover owned resume, non-empty seeded fork, strict toggles and the main/child option matrix.
+- Initial injection changes are volatile and apply only at a new session or successful compaction. The strict switch uses the ordinary Loader remount lifecycle, so turning it off can recover a missing-record session without compaction. Tool qualification, receipt and corrupt-history checks are not optional.
+- The pre-step barrier retires the unsent-projection refresh callback before send, including when consecutive requests do not emit a changed header. Later compaction cannot mutate an already-sent tools array.
+- Regression coverage includes real Loader switch updates, legacy history, unavailable storage, initial injection disabled with successful load/use, and rejection of unloaded tools. Browser/GUI rendering and deployment are not claimed.
+
+### Not re-fixed by this version
+
+The failed-load-settlement and `tool_list {}` default-navigation fix is **already merged and already
+released**: it landed on `main` as **PR #10** (branch commit `3e79537`, merge commit `80216ba…`) and
+is carried by the published `build-80216ba3effa` asset. It is kept below as the source record of that
+round and is **not** a new fix of `0.2.0-functional.7`. The same holds for the one-command-set /
+`scripts/check-repo.mjs` / temp-residue / stale-path work in `fc015b8`, and for the product fixes in
+the rest of that section — all of them are already in the `main` line the
+`build-80216ba3effa` asset was built from. Only the optional-feature-settings group above is new
+source in this version.
+
+### Verification boundary
+
+- Re-run against the `0.2.0-functional.7` tree, with its exit code: `npm run test:all` → **exit 0**,
+  unit **372 pass / 0 fail / 0 skip** and composition **130 pass / 0 fail / 0 skip** over the real
+  DSH Core `0.2.1-alpha.1` composition (log `.probe/release-functional7-tests-20261008.log`).
+- Documentation checks on the same snapshot: `npm run check` → exit **0** (package identity and 16
+  published files, all relative links resolving; log
+  `.probe/release-functional7-check-20261008.log`); `git diff --check` → exit **0**. Relative-link
+  totals drift with documentation edits, so no count is quoted here.
+- These are runs on the working tree by the change's own side, **not** independent evidence and not
+  whole-feature acceptance. The bounded non-author cross-review is recorded below.
+- Release metadata for the **already-published** `build-80216ba3effa` was read with `gh release
+  view` (tag, target commit, asset name, size and sha256 digest). No asset was downloaded, unpacked,
+  installed or reloaded, and at the time of writing **no `0.2.0-functional.7` artifact existed** — a
+  future artifact's digest and payload can only be checked once a release for it has run.
+- **Not claimed:** browser/DOM rendering, external real-provider wire, deployment or installation
+  state, whole-feature acceptance, and any token, context or latency saving. The feature stays
+  **WIP / not product-accepted**.
+
+### Independent cross-review — bounded (2026-10-08)
+
+This round changes the source of the configuration baseline, current-preset retention and the scope
+of the strict checks, so by [`CONTRIBUTING.md`](CONTRIBUTING.md) it **cannot be signed off by its
+author**. Two **non-author** reviews were completed against the six-item scope proposed in the
+handoff document; both are private audit reports and are cited here as inline code only:
+
+- `plugin/audits/release-security-pro-20261008.md` — reviewer **MiMo-V2.6-Pro**
+  (`release-security-pro-20261008`): **six items passed with bounded scope**; independent re-run of
+  `npm run test:all` (**502** = 372 unit + 130 composition, 0 fail / 0 skip) plus four self-built
+  probe groups (**30** assertions, with positive controls) and a read-only check against the real
+  installed SDK. Three non-blocking observations, no blocking defect.
+- `plugin/audits/release-security-grok-20261008.md` — reviewer **Grok4.6**
+  (`release-security-grok-20261008`): the same six items **passed in their specific dimensions**,
+  with nine self-built unit counterexamples, six self-built composition counterexamples, and the
+  related suites re-run (49 unit / 17 composition). Two residual observations that are not current
+  execution bypasses.
+- The maintainer checked that both reports' **nine production-file SHA256 anchors** match the current
+  tree, and re-ran the four MiMo probes and the Grok nine/six counterexamples: **all exit 0**.
+
+The six items are: registration catalog partial/unknown is not reported as execution-unavailable;
+preset retention comes only from the exact bound revision intersected with native visibility;
+adoption happens only at an epoch boundary and an already-sent tools array is never rewritten; child
+exemption requires live runtime ownership; the main/sub switch AND relationship, real Loader
+remount, bad-history / canonical-receipt / native-deny checks are preserved; and guard/projection
+switching between the two modes introduces no fail-open and no rewrite of the sent array.
+
+**Non-defect observations left for later work (no product change in this round):** the
+`initialSelectionView` input contract is the normalised meta (matching the client `readMeta` output)
+rather than raw `schema.meta`, and it has **no production caller** — so it is not a product bug; the
+`unknown` row's `available: false` field semantics deserve unification; `presetToolNamesOf` has no
+`try/catch` around `tools.view()` (fail-closed in direction, but ungraceful); and
+`isRuntimeSubagent` relies on the SDK returning the same agent object from `list()` / `roots()`.
+The peer stays pinned at `0.2.1-alpha.1`.
+
+**Explicitly not covered by either review, and retained as uncovered:** browser DOM/visual
+rendering, external real-provider wire, cross-process subagent ownership, in-place re-parenting
+during a session, the private quality dataset, online installation, and full product acceptance.
+Grok's `CX-C6` manufactured its own history rather than driving a real cold restore; the real
+cold-restore plus default-mode bad-history case is covered by MiMo probe 3.
+
+**Scope discipline:** these bounded cross-reviews do **not** sign off anything else. The
+`[Unreleased]` stability/retrieval round below and the residual review debts recorded in
+`plugin/docs/05-current-status.md` §5 remain unsigned, and this repository's distribution channel is
+a **source build artifact** — so the uncovered list above is retained as-is and is **not** turned
+into a product-acceptance gate this round.
+
+## [Unreleased] — runtime stability and retrieval quality (source record; already merged before `0.2.0-functional.7`)
+
+This section is kept as the record of that round, not as pending work. Everything below is already
+on `main`: the failed-load-settlement and default-navigation fix as PR #10 (branch commit `3e79537`,
+merge commit `80216ba…`), and before it the workflow and product fixes in `fc015b8` and its
+predecessors. The optional-feature-settings group that used to sit here has moved up to
+`[0.2.0-functional.7]`, because that is the only part of this section whose source is still
+uncommitted in the working tree. The source version at the time this round was written was
+`0.2.0-functional.6` (not bumped then). **The package is not published to npm** (`private` is
+unchanged), and no round here performs an install, GUI reload or application restart. Nothing in
+this section is a product-acceptance claim: see
+[`plugin/docs/05-current-status.md`](plugin/docs/05-current-status.md) for the authoritative
+per-item status.
 
 ### Fixed — failed load settlement and default navigation
 
@@ -183,6 +300,13 @@ no install, GUI reload or application restart. A GitHub Release asset is built a
 written before that release runs and does not claim it has already happened.** No semantic tag is
 created for this version: the tag-triggered job runs host-bound unit files and cannot complete on a
 hosted runner.
+
+> **Outcome, added 2026-10-08:** that run has since happened. `build-80216ba3effa`
+> (`v0.2.0-functional.6 · 80216ba3effa`, target commit `80216ba…`, asset `dsh-tool-discovery.tgz`) is
+> the newest published build at the time of writing. Earlier `main` commits on the same unbumped
+> `version` had already produced further `build-*` releases (`build-fc015b8fa8a1`, …), which is why a
+> `build-*` tag — not the release name — identifies a build. The paragraph above is kept as it was
+> written; the entry below is still not an acceptance statement.
 
 ### What this version carries
 
