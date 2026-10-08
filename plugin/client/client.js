@@ -60,6 +60,7 @@ window.__ModuleLoader__.load({
       return {
         choices: Array.isArray(node?.meta?.initialToolChoices) ? node.meta.initialToolChoices : [],
         default: Array.isArray(node?.meta?.default) ? [...node.meta.default] : [],
+        catalogComplete: node?.meta?.toolDirectory?.scope === 'application' && node.meta.toolDirectory.complete === true,
       };
     }
 
@@ -77,19 +78,21 @@ window.__ModuleLoader__.load({
       const rows = [];
       for (const name of chosen) {
         if (fixed.includes(name)) continue;
-        rows.push({ name, selected: true, available: available.has(name) });
+        rows.push({ name, selected: true, available: available.has(name),
+          status: available.has(name) ? 'registered' : meta?.catalogComplete === true ? 'unregistered' : 'unknown' });
       }
       // 目录里**尚未选中**的也必须成行 —— 否则用户无法添加任何第三方工具。
       for (const name of available) {
         if (chosen.has(name)) continue;
-        rows.push({ name, selected: false, available: true });
+        rows.push({ name, selected: false, available: true, status: 'registered' });
       }
       rows.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
       return {
         fixed,
         rows,
         selectedCount: rows.filter((r) => r.selected).length,
-        missingCount: rows.filter((r) => !r.available).length,
+        missingCount: rows.filter((r) => r.status === 'unregistered').length,
+        unknownCount: rows.filter((r) => r.status === 'unknown').length,
       };
     }
     // ------------------------------------------------------------------------
@@ -100,14 +103,24 @@ window.__ModuleLoader__.load({
     const PLUGIN_TAB_ID = 'tool-search';
 
     const en = {
-      nav: 'Initial tools',
-      title: 'Tools injected into every request',
-      intro: 'These are advertised up front, on every request, without a tool_load call.',
+      nav: 'Tool discovery',
+      features: 'Optional features',
+      initialTools: 'Inject initial tools',
+      initialToolsHelp: 'Enabled by default. When disabled, configured initial tools are not injected automatically; tool_load can still load them. Takes effect in a new session or after successful compaction.',
+      presetTools: 'Always allow tools specified by the preset',
+      presetToolsHelp: 'On by default. Includes only the current bound preset’s registered tools, even when manual injection is off. Does not grant tools from other presets or bypass native permissions. Applies in a new session or after successful compaction.',
+      strictEpoch: 'Require trusted epoch records (advanced)',
+      strictEpochHelp: 'Off by default. Enabling reloads the plugin and requires durable epoch records. Existing main sessions without a record need a successful user /compact; subagent enforcement is off by default. Keep off for uninterrupted use; eligibility and protocol checks still apply.',
+      childEpoch: 'Also require trusted epochs for subagents (advanced)',
+      childEpochHelp: 'Off by default. Effective only when strict epoch verification is on. Subagents cannot perform user /compact, so enabling may block legacy child sessions. Changing this reloads the plugin; native ownership, not session labels, identifies children.',
+      title: 'Manual initial tool list',
+      intro: 'Lists application-wide registered tools, not session loading state. When manual injection is on, checked tools are advertised initially. Preset retention is controlled separately; registration does not guarantee permission in every session.',
       search: 'Filter tools',
       searchLabel: 'Filter tools by name',
       restore: 'Restore DSH default',
       empty: 'No tool matches the filter.',
-      missing: 'not currently available — uncheck to drop',
+      missing: 'not registered in the application catalog — uncheck to remove',
+      unknown: 'global registration status not confirmed',
       fixed: 'Always present',
       fixedNote: 'The three discovery entries are always advertised and cannot be removed.',
       pending: 'Takes effect in the next new session, or after a successful compaction. The current session keeps the list it started with.',
@@ -115,14 +128,24 @@ window.__ModuleLoader__.load({
       failed: 'Not saved — the host rejected the write. Retry.',
     };
     const zh = {
-      nav: '初始工具',
-      title: '每轮请求都注入的工具',
-      intro: '这些工具每轮都直接披露，无需先调用 tool_load。',
+      nav: '工具发现',
+      features: '可选功能',
+      initialTools: '自动注入初始工具',
+      initialToolsHelp: '默认开启。关闭后不自动注入下方配置的工具，仍可通过 tool_load 加载。在新会话或成功压缩后生效。',
+      presetTools: '永远放行 preset 规定的工具',
+      presetToolsHelp: '默认开启。保留当前会话实际绑定 preset 登记的工具，即使关闭手动初始注入；不会放行其它 preset 的工具或绕过原生权限。在新会话或成功压缩后采用。',
+      strictEpoch: '强制可信周期校验（高级）',
+      strictEpochHelp: '默认关闭。开启会重新加载插件并要求持久化可信周期记录；没有记录的存量主会话需要成功执行用户 /compact；默认不对子代理强制校验。希望不中断使用时请保持关闭；工具资格和协议校验仍然有效。',
+      childEpoch: '对子代理强制可信周期校验（高级）',
+      childEpochHelp: '默认关闭，仅在强制可信周期校验开启时生效。子代理不能自行执行用户 /compact，开启可能阻断旧子会话；切换会重新加载插件。身份按宿主运行时父子所有权判断，不信会话自称。',
+      title: '手动初始工具名单',
+      intro: '以下是应用全局登记目录，不是会话加载状态。开启手动初始注入后，勾选工具会直接披露；preset 保留由独立开关控制。全局已登记不代表每个会话都具有执行权限。',
       search: '筛选工具',
       searchLabel: '按名称筛选工具',
       restore: '恢复 DSH 默认',
       empty: '没有匹配的工具。',
-      missing: '当前不可用（勾选可移除）',
+      missing: '未在应用全局目录登记（取消勾选可移除）',
+      unknown: '全局登记状态尚未确认',
       fixed: '始终存在',
       fixedNote: '三个发现入口始终披露，不可删除。',
       pending: '改动在下一个新会话、或一次成功压缩之后生效；当前会话保持它开始时的名单。',
@@ -159,14 +182,38 @@ window.__ModuleLoader__.load({
       } catch { /* 记录失败不影响 UI 呈现 */ }
     }
 
+    function featureChoices(value) {
+      return [
+        ['initialToolsEnabled', 'initialTools', 'initialToolsHelp', value?.initialToolsEnabled !== false],
+        ['alwaysAllowPresetTools', 'presetTools', 'presetToolsHelp', value?.alwaysAllowPresetTools !== false],
+        ['requireTrustedEpoch', 'strictEpoch', 'strictEpochHelp', value?.requireTrustedEpoch === true],
+        ['requireTrustedEpochForSubagents', 'childEpoch', 'childEpochHelp', value?.requireTrustedEpochForSubagents === true],
+      ];
+    }
+
+    function saveSetting(form, key, value) {
+      if (!['alwaysVisible', 'initialToolsEnabled', 'alwaysAllowPresetTools', 'requireTrustedEpoch', 'requireTrustedEpochForSubagents'].includes(key)) return Promise.resolve(false);
+      return form.mutate([{ op: 'set', path: [key], value }]);
+    }
+
     /** 叶子组件：只收 props，不读 ctx。 */
-    function SettingsPanel ({ t, snapshot, error, notice, onToggle, onRestore }) {
+    function SettingsPanel ({ t, snapshot, error, notice, onToggle, onRestore, onFeature }) {
       const [query, setQuery] = useState('');
       const selected = Array.isArray(snapshot?.value?.alwaysVisible) ? snapshot.value.alwaysVisible : [];
       const built = buildRows(snapshot?.meta, selected);
       const visible = filterRows(built.rows, query);
 
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '12px' } },
+        h('h3', null, t('features')),
+        ...featureChoices(snapshot?.value).map(([key, label, help, checked]) => h('section', { key },
+          h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
+            h('input', {
+              type: 'checkbox', checked,
+              'aria-describedby': `tool-discovery-${key}-help`,
+              disabled: snapshot?.status !== 'ready' || snapshot?.writable === false,
+              onChange: (event) => onFeature(key, event.target.checked),
+            }), t(label)),
+          h('p', { id: `tool-discovery-${key}-help`, style: { margin: '4px 0', fontSize: '12px' } }, t(help)))),
         h('h3', { style: { margin: 0, fontSize: '15px', fontWeight: '600' } }, t('title')),
         h('p', { style: { margin: 0, fontSize: '13px' } }, t('intro')),
 
@@ -200,7 +247,7 @@ window.__ModuleLoader__.load({
               }),
               h('label', { htmlFor: `initial-tool-${row.name}`, style: { fontSize: '13px' } },
                 row.name,
-                row.available ? null : h('span', { style: { marginLeft: '8px', fontSize: '11px' } }, `(${t('missing')})`)),
+                row.status === 'registered' ? null : h('span', { style: { marginLeft: '8px', fontSize: '11px' } }, `(${t(row.status === 'unknown' ? 'unknown' : 'missing')})`)),
             ))),
 
         h('p', { style: { fontSize: '12px', margin: 0 } }, t('pending')),
@@ -241,6 +288,7 @@ window.__ModuleLoader__.load({
           value: formSnapshot.value,
           revision: formSnapshot.revision,
           status: formSnapshot.status,
+          writable: formSnapshot.writable,
         };
         return cachedSnapshot;
       }
@@ -270,11 +318,11 @@ window.__ModuleLoader__.load({
         const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
         /** 一次写入：false 或抛错都是"没被宿主接受"，必须显式呈现。 */
-        const write = useCallback(async (names) => {
+        const write = useCallback(async (value, key = 'alwaysVisible') => {
           setError(null);
           let ok = false;
           try {
-            ok = await form.mutate([{ op: 'set', path: ['alwaysVisible'], value: names }]);
+            ok = await saveSetting(form, key, value);
           } catch (reason) {
             logSaveFailure(reason);
             ok = false;
@@ -290,7 +338,11 @@ window.__ModuleLoader__.load({
           [snapshot],
         );
 
-        return h(SettingsPanel, { t, snapshot, error, notice, onToggle, onRestore });
+        const onFeature = useCallback((key, enabled) => {
+          if (!['initialToolsEnabled', 'alwaysAllowPresetTools', 'requireTrustedEpoch', 'requireTrustedEpochForSubagents'].includes(key) || typeof enabled !== 'boolean') return false;
+          return write(enabled, key);
+        }, []);
+        return h(SettingsPanel, { t, snapshot, error, notice, onToggle, onRestore, onFeature });
       };
     }
 
@@ -310,7 +362,7 @@ window.__ModuleLoader__.load({
 
     // 供 vm 内测试取用（不参与渲染）：纯逻辑 + 接缝 + 装配点。
     exports.__test = {
-      buildRows, filterRows, toggleName, isDefaultSelection,
+      buildRows, filterRows, toggleName, isDefaultSelection, featureChoices, saveSetting,
       ownView, alwaysVisibleNode, readMeta, createTabRoot, createSnapshotSource, SettingsPanel,
       FIXED_ENTRIES, NS, PLUGIN_TAB_ID, SLOT,
     };

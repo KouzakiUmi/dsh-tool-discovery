@@ -208,8 +208,8 @@ function autoCompactionEvents (sessionId, seqBase) {
   ]
 }
 
-test('SG6: 成功自动压缩后，未发送的那份 tools 数组被就地刷新成新周期的初始名单', async () => {
-  const { ctx, loader } = await boot({ alwaysVisible: ['fixture_hidden_inherited'] })
+for (const requireTrustedEpoch of [false, true]) test(`SG6: strict=${requireTrustedEpoch}，成功自动压缩刷新未发送投影并采用初始开关`, async () => {
+  const { ctx, loader } = await boot({ requireTrustedEpoch, alwaysVisible: ['fixture_hidden_inherited'] })
   const entry = adapterEntry({ loader })
   const lifecycle = serviceOf(ctx).lifecycle
   const session = fakeSession('s-auto')
@@ -218,6 +218,7 @@ test('SG6: 成功自动压缩后，未发送的那份 tools 数组被就地刷�
 
   // 改配置：下一个周期改用另一个名字。
   entry.fiber.config.alwaysVisible[VOLATILE_WRITE](['fixture_mutating'])
+  entry.fiber.config.initialToolsEnabled[VOLATILE_WRITE](false)
 
   // 模拟一次 assemble 之后、发送之前发生自动压缩：projection 挂上未发送刷新入口。
   const assembled = await ctx.systemPrompt.assemble(assembleContext(session))
@@ -243,19 +244,20 @@ test('SG6: 成功自动压缩后，未发送的那份 tools 数组被就地刷�
   assert.equal(afterSettled.mode, 'ready',
     `压缩开新周期后必须落 ready 才允许断言新名单；实际：${JSON.stringify(afterSettled)}`)
   const barrier = await lifecycle.awaitEpochRecord('s-auto')
-  assert.equal(barrier.state, 'trusted',
-    `pre-step 屏障必须等到本 epoch 的记录 durable 才放行；实际：${JSON.stringify(barrier)}`)
+  assert.equal(barrier.state, requireTrustedEpoch ? 'trusted' : 'disabled',
+    `屏障遵守当前严格模式开关；实际：${JSON.stringify(barrier)}`)
   const after = pending.map((t) => t.name)
-  assert.deepEqual(runtime.alwaysNames, ['fixture_mutating'], '压缩即周期边界，应采用新配置')
+  assert.deepEqual(runtime.alwaysNames, [], '压缩即周期边界，应采用关闭初始注入的新配置')
   assert.ok(!after.includes('fixture_hidden_inherited'), `压缩后仍披露旧工具: ${JSON.stringify(after)}`)
-  assert.ok(after.includes('fixture_mutating'), `压缩后未采用新名单: ${JSON.stringify(after)}`)
+  assert.ok(!after.includes('fixture_mutating'), '关闭注入不自动披露配置名单')
+  assert.deepEqual(entry.fiber.config.alwaysVisible.get(), ['fixture_mutating'], '关闭不会删除配置名单')
   assert.ok(after.includes('tool_load'), '三个发现入口恒在')
   // 数组是同一个（就地替换），不是换了一个新数组
   assert.equal(Array.isArray(pending), true)
 })
 
 test('SG7: 已发送的数组不再被后来的压缩改写（canonical header 观测后清除刷新入口）', async () => {
-  const { ctx, loader } = await boot({ alwaysVisible: ['fixture_hidden_inherited'] })
+  const { ctx, loader } = await boot({ requireTrustedEpoch: true, alwaysVisible: ['fixture_hidden_inherited'] })
   const entry = adapterEntry({ loader })
   const lifecycle = serviceOf(ctx).lifecycle
   const session = fakeSession('s-sent')

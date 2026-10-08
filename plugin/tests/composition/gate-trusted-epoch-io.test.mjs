@@ -373,7 +373,7 @@ async function openLab (options = {}) {
 // （IO1/IO3 的 body=0 因此有分辨力，不是"这条路径根本走不到 body"）
 // ---------------------------------------------------------------------------
 test('IO0: 正控制 —— 可信 alwaysVisible 基线下，直连 ctx.tools.execute 的 body 执行 1 次', { timeout: 120000 }, async () => {
-  const lab = await openLab({ adapter: { alwaysVisible: [HIDDEN] } })
+  const lab = await openLab({ adapter: { requireTrustedEpoch: true, alwaysVisible: [HIDDEN] } })
   try {
     const { store, queueResponse } = await storeOf()
     store.reset()
@@ -397,7 +397,7 @@ test('IO0: 正控制 —— 可信 alwaysVisible 基线下，直连 ctx.tools.ex
 // IO1：新会话的初始可信记录未 durable 之前
 // ---------------------------------------------------------------------------
 test('IO1: 初始 put 未 durable 前 → 0 出站请求 + guard 直连 body 0；放行后首请求是完整基线且真实记录已落盘', { timeout: 180000 }, async () => {
-  const lab = await openLab({ adapter: { alwaysVisible: [HIDDEN] } })
+  const lab = await openLab({ adapter: { requireTrustedEpoch: true, alwaysVisible: [HIDDEN] } })
   try {
     const { store, queueResponse } = await storeOf()
     store.reset()
@@ -505,7 +505,7 @@ async function primeTrustedEpochTurn (lab, sessionId) {
 }
 
 test('IO2: 自动压缩已发生但新 epoch 的 put 未 durable → 最终 GenerateOptions 零增量；释放后是新名单且旧 selected/frozen 已重置', { timeout: 240000 }, async () => {
-  const lab = await openLab({ adapter: { alwaysVisible: [HIDDEN] }, extraServices: AUTO_COMPACTION })
+  const lab = await openLab({ adapter: { requireTrustedEpoch: true, alwaysVisible: [HIDDEN] }, extraServices: AUTO_COMPACTION })
   try {
     const { store, queueResponse } = await storeOf()
     store.reset()
@@ -586,7 +586,7 @@ test('IO2: 自动压缩已发生但新 epoch 的 put 未 durable → 最终 Gene
 // IO3a：新 epoch 的可信写被拒（声明式注入）
 // ---------------------------------------------------------------------------
 test('IO3a: put 被拒 → 确定 blocked 终态 + 0 请求 + 不沿用旧授权，guard 不得从 alwaysNameSet 早退', { timeout: 240000 }, async () => {
-  const lab = await openLab({ adapter: { alwaysVisible: [HIDDEN] }, extraServices: AUTO_COMPACTION })
+  const lab = await openLab({ adapter: { requireTrustedEpoch: true, alwaysVisible: [HIDDEN] }, extraServices: AUTO_COMPACTION })
   try {
     const { store, queueResponse } = await storeOf()
     store.reset()
@@ -649,7 +649,7 @@ test('IO3a: put 被拒 → 确定 blocked 终态 + 0 请求 + 不沿用旧授权
 // IO3b：SDK 不可用（omitStorage 显式负向装配）
 // ---------------------------------------------------------------------------
 test('IO3b: 宿主没有 storageDomain（omitStorage）→ 确定 STORAGE_UNAVAILABLE、0 请求、配置里的常驻名也不得放行', { timeout: 180000 }, async () => {
-  const lab = await openLab({ adapter: { alwaysVisible: [HIDDEN] }, omitStorage: true })
+  const lab = await openLab({ adapter: { requireTrustedEpoch: true, alwaysVisible: [HIDDEN] }, omitStorage: true })
   try {
     const { store, queueResponse } = await storeOf()
     store.reset()
@@ -691,7 +691,7 @@ test('IO3b: 宿主没有 storageDomain（omitStorage）→ 确定 STORAGE_UNAVAI
 // `ctx.on('session/disposed', (session) => lifecycle.disposeSession(session.id))`），
 // 因此 IO4a 走的就是那条真实代码路径，而不是给产品造了一个新的释放语义。
 test('IO4a: pending put 期间 runtime 被释放 → 释放闸门后不得复活授权、不得发出请求', { timeout: 180000 }, async () => {
-  const lab = await openLab({ adapter: { alwaysVisible: [HIDDEN] } })
+  const lab = await openLab({ adapter: { requireTrustedEpoch: true, alwaysVisible: [HIDDEN] } })
   try {
     const { store, queueResponse } = await storeOf()
     store.reset()
@@ -730,7 +730,7 @@ test('IO4a: pending put 期间 runtime 被释放 → 释放闸门后不得复活
 })
 
 test('IO4b: pending put 期间插件 fiber 被释放 → 域随插件关闭，释放闸门不复活也不抛出', { timeout: 180000 }, async () => {
-  const lab = await openLab({ adapter: { alwaysVisible: [HIDDEN] } })
+  const lab = await openLab({ adapter: { requireTrustedEpoch: true, alwaysVisible: [HIDDEN] } })
   try {
     const { store, queueResponse } = await storeOf()
     store.reset()
@@ -835,7 +835,7 @@ test('IO5: legacy 会话上的压缩不得迁移 —— 真实普通轮 0 请求
       waitForDomain: false,
       match: (record) => record?.sessionId === 'io5-legacy',
     })
-    await mountAdapterLate(lab.boot, { alwaysVisible: [] })
+    await mountAdapterLate(lab.boot, { requireTrustedEpoch: true, alwaysVisible: [] })
     await waitFor(() => gate.installed, 20000, 'IO5: 产品打开域时闸门装到那张真实 table 上')
     const resumed = await lab.resume('io5-legacy')
 

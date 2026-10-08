@@ -8,16 +8,17 @@
 //     runtime 建立后按 seq 合并快照再折叠（journal 负责 merge）。
 //   * 全部注册项（三个定义、投影、guard、session 监听、恢复订阅、缓存）都持有 disposer；
 //     任一步失败由 index.mjs 逆序回滚。
-//   * **常驻名单是 per-runtime 的一份快照，但它的权威来自 storageDomain 的可信记录**。
+//   * 常驻名单是 per-runtime 的快照：默认来自显式配置；可选严格模式来自 storageDomain 记录。
 //     设置面板改动配置只影响**未来**的周期：正在跑的周期绝不改 schema，
 //     否则一次已经稳定的出站 prefix 会被中途打断。成功压缩是本周期内唯一的
 //     换名点（重开一个周期），换名不重建 runtime、不动任何协议状态。
-//   * **名单落盘才算授权**（trusted-epoch.mjs）：记录写 durable 之前基线是 pending，
+//   * 仅 requireTrustedEpoch=true 时，名单落盘才算授权（trusted-epoch.mjs）：此前是 pending，
 //     pending 与 blocked 都**不发请求**。缺记录的老会话明确报错并等本次 live 的
 //     真实用户 `/compact` 迁移，绝不从出站 header 反推授权。
 import { createDiscoveryEngine } from '../../domain/index.mjs';
 import { createJournal, normalizeInheritedBoundary } from './journal.mjs';
 import { resolveAlwaysVisible } from './config.mjs';
+import { requiresTrustedEpoch } from './epoch-policy.mjs';
 import {
   BASELINE_STATE, TRUSTED_EPOCH_REASONS, createEpochLedger, trustedEpochBlockedError,
 } from './trusted-epoch.mjs';
@@ -46,11 +47,14 @@ export function createLifecycle(deps) {
    * 此刻配置的常驻名单。只在**建立 runtime** 或**成功压缩重开周期**时读它；
    * 周期中途的设置变更不经过这里。
    */
-  function currentAlwaysNames() {
-    if (typeof deps.getAlwaysVisible === 'function') {
-      return resolveAlwaysVisible([...deps.getAlwaysVisible()]);
-    }
-    return resolveAlwaysVisible(config.alwaysVisible);
+  function currentAlwaysNames(agentScope) {
+    const enabled = typeof config.initialToolsEnabled?.get === 'function'
+      ? config.initialToolsEnabled.get() : config.initialToolsEnabled;
+    const configured = typeof deps.getAlwaysVisible === 'function'
+      ? resolveAlwaysVisible([...deps.getAlwaysVisible()])
+      : enabled === false ? [] : resolveAlwaysVisible(config.alwaysVisible);
+    const preset = typeof deps.getPresetTools === 'function' ? deps.getPresetTools(agentScope) : [];
+    return [...new Set([...configured, ...preset])];
   }
 
   /** 把一份**已确认可信**的名单装进 runtime（runtime + engine 同步换）。 */
@@ -85,6 +89,16 @@ export function createLifecycle(deps) {
   async function awaitEpochRecord(sessionId, signal) {
     const runtime = sessions.get(sessionId);
     if (runtime === undefined) return { state: 'trusted' };
+    if (!runtime.requireTrustedEpoch) {
+      if (runtime.pendingProjectionError) {
+        const error = runtime.pendingProjectionError;
+        runtime.pendingProjectionError = null;
+        throw error;
+      }
+      // pre-step 子树已结束，组装结果接下来会发送；之后的压缩不得改这份旧数组。
+      runtime.refreshPendingProjection = null;
+      return { state: 'disabled' };
+    }
     // 只在**入场**检查刷新失败是不够的：周期边界的 adopt 回调是在 put **落定之后**才
     // 调 refreshPendingProjection，刷新失败会把现场写进 pendingProjectionError。
     // 因此 await 前后都要查：入场挡住"上一轮已经失败"，收尾挡住"这一轮刚失败"。
@@ -114,6 +128,7 @@ export function createLifecycle(deps) {
         runtime.pendingProjectionError = null;
         throw error;
       }
+      runtime.refreshPendingProjection = null;
       return { state, reason: runtime.ledger.reason };
     };
     if (signal === undefined || signal === null || typeof signal.addEventListener !== 'function') {
@@ -142,8 +157,15 @@ export function createLifecycle(deps) {
    *          userInitiated:boolean}} info
    */
   function onEpochBoundary(runtime, info) {
-    const names = currentAlwaysNames();
+    const names = currentAlwaysNames(runtime.agentScope);
     const trigger = info.userInitiated ? 'manual' : 'auto';
+    if (!runtime.requireTrustedEpoch) {
+      runtime.ledger.setIdentity(info.identity);
+      adoptNames(runtime, names);
+      // journal 已重开周期；只刷新尚未发送的投影，不合成可信记录。
+      if (typeof runtime.refreshPendingProjection === 'function') runtime.refreshPendingProjection();
+      return;
+    }
     const wasTrusted = runtime.ledger.state === BASELINE_STATE.TRUSTED;
 
     if (!wasTrusted) {
@@ -192,6 +214,7 @@ export function createLifecycle(deps) {
    * 用的是压缩边界那一刻**已经捕获**的名单快照，不是此刻重新读的配置。
    */
   function onUserCompactionComplete(runtime, info) {
+    if (!runtime.requireTrustedEpoch) return;
     const pending = runtime.pendingUserEpoch;
     if (pending === null || pending.compactionId !== info.compactionId) {
       log('lifecycle:user-compaction-without-pending', {
@@ -259,7 +282,8 @@ export function createLifecycle(deps) {
 
     const view = registry.bindingsFor(scope);
     // engine 先按当前配置建一次；可信基线落定后会**整体替换**它（trusted 或 blocked）。
-    const bootstrapNames = currentAlwaysNames();
+    const bootstrapNames = currentAlwaysNames(scope);
+    const strictEpoch = requiresTrustedEpoch(config, ctx.get?.('agents'), scope);
     const engine = createDiscoveryEngine(engineConfigFor(scope, sessionId, view.bindings, bootstrapNames));
     registry.remember(view.scopeKey, view.bindings);
     const discoveryScope = { sessionId, actorId: String(scope.id) };
@@ -302,11 +326,12 @@ export function createLifecycle(deps) {
       engine,
       journal,
       ledger,
+      requireTrustedEpoch: strictEpoch,
       restoring: true,
       compositionBypass: null,
       // 可信基线落定前**没有**任何常驻名单：0 request 就是靠这个空集兑现的。
-      alwaysNames: [],
-      alwaysNameSet: new Set(),
+      alwaysNames: strictEpoch ? [] : [...bootstrapNames],
+      alwaysNameSet: new Set(strictEpoch ? [] : bootstrapNames),
       // 本轮"已组装但尚未发送"的投影刷新入口；projection 挂上、canonical
       // request/header 观测后由 journal 清掉。见 projection.mjs 的"未发送刷新"段。
       refreshPendingProjection: null,
@@ -441,6 +466,14 @@ export function createLifecycle(deps) {
       // "基线尚未落定"而**永远不发请求**，那既不是既有语义（L11b/RB2 要求请求照发、
       // 只带基线），也会把同 composition 里别的会话的请求队列错位。
       runtime.ledger.failClosed(`journal-sealed:${runtime.journal.sealedReason?.() ?? 'unknown'}`);
+      adoptNames(runtime, []);
+      runtime.restoring = false;
+      return outcome;
+    }
+    if (!runtime.requireTrustedEpoch) {
+      // 保留 journal 的完整恢复与损坏判据，不从历史 header 推导初始工具授权。
+      runtime.ledger.setIdentity(runtime.journal.currentEpoch());
+      if (outcome?.mode === 'incompatible') adoptNames(runtime, []);
       runtime.restoring = false;
       return outcome;
     }
@@ -499,6 +532,11 @@ export function createLifecycle(deps) {
    * @param {any} [restoreOutcome] 冷恢复的折叠结果（透传给调用方）
    */
   async function resolveBootstrapBaseline(runtime, restoreOutcome) {
+    if (!runtime.requireTrustedEpoch) {
+      runtime.engine.ready(runtime.scope);
+      runtime.restoring = false;
+      return restoreOutcome ?? { mode: 'ready' };
+    }
     // F3 同型，而且这里有**两处**裁决点（读记录之后、建立初始记录之后），两处都会被
     // live 用户 /compact 的 adopt 推进 revision 而提前返回 PENDING/null。
     // `retryBaseline`（index.mjs 的存储迟到重试）复用本函数，所以这两道收口是
@@ -554,7 +592,7 @@ export function createLifecycle(deps) {
       // 过期的初始记录 supersede 掉 —— 手动迁移被回退成 `initial` + 当时的当前配置名单。
       // 「决定同步 + 启动同步」在这里是**同一件事**；启动之后把 promise 交出去，等待
       // （可能被更晚的 adopt supersede）仍由外层与下面那段跟随负责。
-      return { done: false, begun: runtime.ledger.begin(currentAlwaysNames(), 'initial') };
+      return { done: false, begun: runtime.ledger.begin(currentAlwaysNames(runtime.agentScope), 'initial') };
     }, true);
     if (gate.done) return gate.outcome;
     // 建立初始记录的那次写的落定：可能已被更晚的 adopt 取代，那不是失败。
@@ -644,9 +682,9 @@ export function createLifecycle(deps) {
       const runtime = sessions.get(sessionId);
       if (runtime === undefined) return null;
       return {
-        state: runtime.ledger.state,
-        reason: runtime.ledger.reason,
-        names: runtime.ledger.names,
+        state: runtime.requireTrustedEpoch ? runtime.ledger.state : 'disabled',
+        reason: runtime.requireTrustedEpoch ? runtime.ledger.reason : null,
+        names: runtime.requireTrustedEpoch ? runtime.ledger.names : [...runtime.alwaysNames],
         epochId: runtime.ledger.identity.epochId,
         compactionEndSeq: runtime.ledger.identity.compactionEndSeq,
         revision: runtime.ledger.revision,
@@ -662,6 +700,7 @@ export function createLifecycle(deps) {
      * @param {any} runtime
      */
     retryBaseline(runtime) {
+      if (!runtime.requireTrustedEpoch) return Promise.resolve(null);
       if (runtime.restoring) return Promise.resolve(null);
       return resolveBootstrapBaseline(runtime, undefined).then((outcome) => {
         if (runtime.ledger.state !== BASELINE_STATE.TRUSTED) return outcome;

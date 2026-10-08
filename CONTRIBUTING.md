@@ -46,7 +46,7 @@ into a profile, never modify the DSH core or a profile manifest, and never resta
 part of verification. If you need a profile change to prove something, stop and ask.
 
 `check:quality` will not run on a fresh clone: the frozen scoring dataset is deliberately not
-published (see the README section "When the quality dataset is absent"). Do not "fix" this by
+published (see the "Verify it yourself" section of the README). Do not "fix" this by
 committing the dataset — that decision needs its own review.
 
 **3. Open a PR against `main`.** Use the template in
@@ -95,7 +95,14 @@ directory moves or a new one appears, check all three of:
 
 ## Scope discipline
 
-This repository has no build step and no runtime dependency of its own; host packages are provided
-by the DSH installation and declared as `peerDependencies`. Do not add a `dependencies` block to
-paper over a missing host package. If you need a new host capability, the honest options are a
-peer dependency, a documented "not supported" row, or a request — not a vendored copy.
+This repository has no build step. It declares exactly **one** runtime `dependencies` entry —
+`zod` (`^4.4.3`), because the host's `@deepseek-ai/dsh-storage-domain` takes the trusted-epoch
+record schema as a zod schema. That entry is resolved by the consuming package manager like any
+other install-time dependency; how a given profile resolves it is that profile's property, not a
+promise this repository can make. Every host package it needs is provided by the DSH installation
+and declared as `peerDependencies`.
+
+Do not add a `dependencies` block to paper over a missing host package: a new runtime dependency
+needs its own stated reason and its own review, and "the host did not provide it" is not one. If you
+need a new host capability, the honest options are a peer dependency, a documented "not supported"
+row, or a request — not a vendored copy.

@@ -4,8 +4,9 @@ Give a model a few small control entries instead of hundreds of tools, and let i
 capability it actually needs, on demand.
 
 This is a DSH plugin. On the first request the model sees three fixed entries — `tool_list`,
-`tool_search`, `tool_load` — plus a short summary of each capability category, **plus DSH's own
-core tools**, which are the default initial list. Other ordinary tools are not disclosed up front.
+`tool_search`, `tool_load` — plus a short summary of each capability category, **plus the default
+initial set**: DSH's own core tools (the manual baseline) and the tools registered by the current
+agent's own preset, which is retained by default. Other ordinary tools are not disclosed up front.
 When the model decides it needs one, it calls `tool_load`, and that tool's real native schema
 appears in the **next** request. The model then calls the tool normally, through DSH's own approval,
 sandbox, and permission chain.
@@ -53,23 +54,63 @@ model action at all — only a successful compaction clears the disclosed set.
   because a request cannot be attributed unambiguously.
 - Node `^22.19.0 || >=24.0.0`.
 
+## Install and update
+
+The package is **not published to npm** and is not listed in any plugin marketplace. The
+distribution channel is the **GitHub Release build asset**: a green `main` run packs the tree and
+publishes `dsh-tool-discovery.tgz` on a commit-derived `build-<sha>` release (a run whose commit is
+already superseded is skipped, so an older commit is never re-published as the newest release). That
+asset is a **build artifact, not an acceptance statement**; what a version covers and what it
+deliberately does not claim is recorded in [current status](plugin/docs/05-current-status.md).
+
+Use the DSH CLI that belongs to the installation you run, and target the profile that will actually
+load the plugin. DSH NEXT Desktop ships its own CLI (it starts through
+`resources\app\lib\desktop-cli.js`) and manages plugins through its own entry point; a globally
+npm-installed `dsh` on `PATH` is a different launcher with a different profile, not this
+installation's tool. **The CLI version is not the Core version**: `dsh --version` reports the CLI,
+and no CLI number tells you which Core a profile resolves. Check the Core peer under
+[Requirements](#requirements) against that profile instead.
+
+```sh
+# first install — name the package, then the full tarball URL
+dsh plugin --profile <profile> add \
+  dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz
+
+# update an installed copy — the same name@URL form
+dsh plugin --profile <profile> update \
+  dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz
+```
+
+`<build-tag>` is a commit-derived release tag such as `build-80216ba3effa`. Because the tag carries
+the commit, a later build never replaces an older one, and two builds can legitimately share one
+manifest version — maintainers bump `version`, CI does not — so pin the tag whose commit you tested,
+always give the package name explicitly, and read the version from the release name (`v<version> ·
+<sha>`) or from the manifest inside that tarball instead of assuming what `main` currently says.
+
+**Nothing here was executed in this round.** No install, reload or restart was performed, no profile
+was touched, and installation through this channel is therefore **not verified here**. What was
+checked is only that an already-published release and its asset metadata exist (a read-only `gh
+release view`: tag, target commit, asset name); no payload was downloaded, unpacked or installed, and
+the artifact of a *future* build — including its digest — can only be verified after that release
+runs. Exact flags and spec forms come from the target CLI's own `plugin --help`. If an install fails,
+keep the manifest, lockfile and CLI output and report it rather than hand-editing a profile.
+
 ## Get the source
 
-The plugin is not published to npm, and no installation channel has been verified. Clone the
-repository:
+The source version on this branch is **`0.2.0-functional.7`**. Which version a given download
+carries is decided by the manifest inside that build's tarball — compare it with the release name
+(`v<version> · <sha>`) rather than assuming that `main` and this document agree.
 
 ```sh
 git clone https://github.com/KouzakiUmi/dsh-tool-discovery
 cd dsh-tool-discovery
 ```
 
-The current source version is **`0.2.0-functional.6`**. A GitHub Release asset is built automatically
-from every green `main` run, and it is a **build artifact, not an acceptance statement** — what this
-version covers and what it deliberately does not claim is recorded in
-[current status](plugin/docs/05-current-status.md).
-
-It is plain JavaScript with no build step, and it has no dependencies of its own — the host
-provides them.
+It is plain JavaScript with no build step. The manifest declares a runtime `dependencies` entry,
+`zod` (`^4.4.3`) — the trusted-epoch record table is handed to the host's storage domain as a zod
+schema — and declares the host packages it needs as `peerDependencies`, provided by the DSH
+installation. Nothing is vendored, and there is no build step that could paper over a missing host
+package.
 
 ## Verify it yourself
 
@@ -124,30 +165,42 @@ surface:
 ```jsonc
 {
   // "alwaysVisible": ["read", "grep"],  // omit entirely to keep the DSH defaults
+  "initialToolsEnabled": true,  // optional manual initial injection; preserves the configured list
+  "alwaysAllowPresetTools": true, // retain tools declared by the current bound preset
+  "requireTrustedEpoch": false, // opt-in strict durable epoch verification
+  "requireTrustedEpochForSubagents": false, // also enforce on children only if strict is on
   "frameworkRetained": [],  // trusted framework-mandated names the projection must keep
   "categoryConfig": {},     // localised category cards
   "budgets": null           // see below; null means no overrides
 }
 ```
 
-`alwaysVisible` **replaces** the initial list; it does not add to it. Omitting it keeps the DSH
-core-tool defaults. Setting it to a list such as `["read", "grep"]` makes that the *whole* initial
-ordinary set — every other default is genuinely dropped from the initial request (and can still be
-loaded on demand later). Setting it to `[]` starts with no ordinary tools at all, only the three
-discovery entries. The three entries are **not** in this field and cannot be removed by any
-configuration.
+`alwaysVisible` **replaces the manual initial list**, rather than adding to its defaults. Omitting
+it keeps the DSH core-tool defaults. Preset retention is separate: when `alwaysAllowPresetTools`
+is on, the current bound preset's native-visible registered tools are unioned with this manual list.
+To start with only the three discovery entries, set `alwaysAllowPresetTools: false` and either
+`alwaysVisible: []` or `initialToolsEnabled: false` (unless explicit framework retention also applies).
+The three entries cannot be removed. Names that are not native-visible in the current agent are
+not granted merely because the settings catalog contains them.
 
 ### Settings panel
 
-With the native `schemastery` peer present, DSH's own settings page renders a **Initial tools** tab
-for this plugin: a live catalog of the tools that actually exist in the current scope (global plus
-the active runtime), a name filter, checkboxes to toggle selection, and a **Restore DSH default**
-action. The checkbox state is written to the root `alwaysVisible` field. Renamed or removed tools
-are shown as unavailable but can still be dropped.
+With the native `schemastery` peer present, DSH's own settings page renders a **Tool discovery** tab
+for this plugin: optional feature switches and an **application-wide registration catalog**, including
+preloaded presets even before any session exists. The catalog reads all current registration layers,
+not session eligibility, discovery/loading state, or outbound headers. It supports a name filter,
+checkboxes and **Restore DSH default**; selection writes only the root `alwaysVisible` field.
+Missing names are labelled **not registered in the application catalog**, never as an execution
+failure. If the installed SDK cannot supply a complete registry, absent names are **unconfirmed**.
+Global registration does not promise execution permission in every session.
 
-A changed list takes effect in the **next new session, or after a successful compaction** — the
-current session keeps the list it started with. This panel is the native config surface; there is no
-compatibility promise for an older wrapper-shaped config or for any legacy settings UI.
+- **Inject initial tools** (`initialToolsEnabled`, default `true`): disabling preserves the configured list but stops automatic initial injection; `tool_load` still works. This switch and the list apply in a **new session or after successful compaction**, not mid-epoch.
+- **Always allow tools specified by the preset** (`alwaysAllowPresetTools`, default `true`): retain only tools registered by the exact preset revision the current agent joined, intersected with its native-visible capabilities. Other presets and later agent-only tools do not become trusted. Independent of manual injection; uses the same new-session/successful-compaction boundary. It preserves the initial set, not arbitrary execution or native permission bypass.
+- **Require trusted epoch records** (`requireTrustedEpoch`, default `false`): default mode does not access the trusted epoch store or block sessions for missing records/storageDomain. Initial tools come from the configuration snapshot, never from outbound headers. Enabling reloads the plugin and requires durable records: an existing session without one needs a successful user `/compact`; storage failures also block. Disabling restores sessions missing records but does **not** offer strict mode's frozen-list guarantee across restarts.
+- **Also require trusted epochs for subagents** (`requireTrustedEpochForSubagents`, default `false`): only effective when `requireTrustedEpoch` is on. Live runtime-owned children otherwise use the configuration baseline without reading/writing epoch records or requiring `/compact`, including resumed legacy child sessions. Runtime ownership—not header/meta tags or durable fork lineage—identifies a child. A fork resumed as a top-level agent still follows the main strict switch. Changing this ordinary setting reloads the plugin, so disabling it recovers legacy children without a synthetic compaction. Enabling it explicitly may block old children; subagents cannot perform the user's `/compact` themselves.
+- Eligibility, protocol receipts, corrupt-history checks and execution guards remain enforced. The three discovery entries cannot be disabled.
+
+Rejected writes show an error, not a success notice. This is the native config surface, with no legacy wrapper/UI compatibility promise. Browser rendering and online installation need separate acceptance; workspace tests do not imply deployment.
 
 ### Budgets: hard caps are off by default
 

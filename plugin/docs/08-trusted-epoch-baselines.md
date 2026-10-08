@@ -7,6 +7,24 @@
 > 冻结协议常量、预算表与错误码见[02](<02-protocol-and-data-model.md>)，发布门槛见
 > [03 §11](<03-implementation-and-acceptance.md>)，总状态见[05](<05-current-status.md>)。
 
+## 0. 当前配置边界（2026-10-08）
+
+本文件以下持久化契约和历史复核结论限定于**显式启用**的严格模式，不再是默认行为。主会话由 `requireTrustedEpoch: true` 控制（默认 `false`）；宿主运行时拥有的子代理还必须显式开启 `requireTrustedEpochForSubagents: true`（默认 `false`）。两项都走普通 Loader 重挂载。默认子代理使用配置基线，不因缺记录要求用户 `/compact`；显式启用子严格模式仍可阻断旧子会话，而子代理无法自行代替用户压缩。
+
+子代理身份以 SDK Agent 注册表的实时所有权判定，既有 fork 血缘或可伪造 header/meta 不授予豁免；作为顶层恢复的 fork 会话仍按主会话处理。未知身份不获得子代理豁免。
+
+默认模式不访问可信周期存储、不合成 trusted 记录，诊断基线为 `disabled`；常驻集合来自周期开始时的配置快照，而不是历史请求头。`initialToolsEnabled`（默认 `true`）可关闭手动初始注入；独立的 `alwaysAllowPresetTools`（默认 `true`）保留当前实际绑定 preset 修订自身登记且原生可见的工具。合并后的名单和这两项开关在新会话/成功压缩边界采用；严格模式把合并名单持久化，不从全局设置目录或会话 header 推断授权。canonical load、资格、协议、历史损坏与执行校验不变。默认模式不保证冷恢复时复用严格模式的 durable 名单。
+
+当前开关回归见[可选设置组合门禁](<../tests/composition/gate-optional-settings.test.mjs>)、[全局目录与 preset 门禁](<../tests/composition/gate-global-tools-preset.test.mjs>)、[子代理开关与真实 fork 门禁](<../tests/composition/gate-subagent-epoch-option.test.mjs>)；下文旧审查发现仍按原严格模式范围保留，不能因为默认关闭而视作已经修复。UI 浏览器渲染/在线部署未验收。
+
+### 0.1 可选设置边界的独立交叉复核概述（2026-10-08）
+
+本轮可选设置实现另获两份**非作者**独立报告，各自按六项建议范围做**限定**复核，结论只覆盖这六项，**不是**全 feature 或产品验收，也不声称与任何外部模型的通用能力对等：`plugin/audits/release-security-pro-20261008.md`（MiMo-V2.6-Pro，六项有界签署通过；独立复跑 502 项测试 + 4 组 30 项断言探针 + 真实 SDK 只读核对）与 `plugin/audits/release-security-grok-20261008.md`（Grok4.6，六项在具体维度通过；自建 9 unit / 6 composition 反例 + 相关 49 unit / 17 composition）。主代理核对两份报告的 9 个生产文件 SHA256 与当前树一致，并复跑上述探针与反例全部 exit 0。
+
+六项为：登记目录 partial/unknown 不虚假判不可用、preset 只取实际绑定修订 ∩ 原生可见、只在周期边界采用且已发送数组不被改写、子豁免只认运行时 live 所有权、主/子 AND 与真 Loader remount 及坏历史/回执/原生 deny 保留、guard/projection 两模式切换无 fail-open。**非缺陷观察项**（本轮未改产品）：`initialSelectionView` 的输入合同是归一 meta 而非 raw `schema.meta` 且无生产调用方、`unknown` 行的 `available:false` 字段外观语义、`tools.view()` 无 try/catch 的 fail-closed 方向、以及 `isRuntimeSubagent` 对 SDK `list()/roots()` 对象同一性的耦合。**未覆盖**（保留为未覆盖项）：浏览器 DOM/视觉、外部真实 provider wire、跨进程所有权、所有权原地 re-parent、私有质量集、线上安装与完整产品验收；Grok 的 `CX-C6` 只自造历史，真实冷恢复 + 默认坏历史由 MiMo 探针 3 补证。口径细节见 [05 §0.4](<05-current-status.md>)。
+
+下文（§1 起）的持久化契约、历史审查发现与「仍未闭合」结论**按其原范围原样保留**：它们针对显式严格模式，**不因**这份可选设置复核而上抬或补签。
+
 ## 1. 要解决的问题
 
 工具常驻名单（alwaysVisible 派生的 `alwaysNameSet`）在**冷恢复**时，曾被允许从**出站日志**
@@ -130,7 +148,7 @@ bootstrap 快路径依赖的是一条**契约**：「live `session.seq` / `inher
 在**成功压缩之后**写入新周期记录是**正确**的（见 §2.6）；本节要的不是排除这个时机，而是让
 post-next 等待覆盖到 `assemble` 之后才开启的那次新写入。
 
-### 2.4 旧会话（缺少周期记录）
+### 2.4 旧会话（严格模式下缺少周期记录）
 
 - 缺少周期记录的既有会话：**明确报错并阻止请求**。不得猜测、不得按当前配置重建、不得默认放行。
 - 这是一个**显式错误终态**：**没有默认超时**，也不会降级为「缩水请求」（即只带发现入口的请求）。
@@ -559,6 +577,11 @@ legacy**（段一不装配 adapter → 真实 own 出站事实、表里无记录
 产出（`build-<sha>`），**本文写在发布动作之前，不声称本版本已远端发布**；未安装 / 未重启 / **未发
 npm** / 未打 semantic tag。上文所有"仍未完成"与"未验收"结论**不因这次发布准备而上抬**，也**不**代表
 无缺陷。
+
+> **2026-10-08 补记**：该版本此后确已由 `build-80216ba3effa`（`v0.2.0-functional.6 · 80216ba3effa`，
+> 目标提交 `80216ba…`，资产 `dsh-tool-discovery.tgz`）发布。上一段"写在发布之前"的措辞**按原样保留**
+> 为写作时记录；发布资产仍**不是**验收声明，也未安装到任何 profile。其后 `main` 上同一未 bump 的
+> `version` 又产生了若干 `build-*` 资产；`0.2.0-functional.7`（可选设置）在工作区，尚未发布。
 
 ## 6. 相关文件
 

@@ -158,6 +158,55 @@ function fakeCtx (schemaEnvelope, selected, mutate) {
   return { ctx, setMirror: (rev) => { current = makeMirror(rev) } }
 }
 
+test('C-U12: 目录完整性随真实 schema 元数据传递，未确认状态不误报不可用', () => {
+  const { exports: mod } = loadClient()
+  const t = mod.__test
+  const schema = buildConfig(Schema)
+  publishToolChoices(schema, ['registered'], { complete: true })
+  const node = t.alwaysVisibleNode({ schema: schema.toJSON() }, { rehydrate })
+  const meta = t.readMeta(node)
+  assert.equal(meta.catalogComplete, true)
+  const actual = t.buildRows(meta, ['registered', 'missing'])
+  const expected = model.buildRows(meta, ['registered', 'missing'])
+  assert.deepEqual(JSON.parse(JSON.stringify(actual)), expected)
+  assert.equal(actual.rows.find(row => row.name === 'registered').status, 'registered')
+  assert.equal(actual.rows.find(row => row.name === 'missing').status, 'unregistered')
+  publishToolChoices(schema, ['registered'], { complete: false })
+  const partialMeta = t.readMeta(t.alwaysVisibleNode({ schema: schema.toJSON() }, { rehydrate }))
+  const partial = t.buildRows(partialMeta, ['missing'])
+  assert.equal(partial.rows.find(row => row.name === 'missing').status, 'unknown')
+  assert.equal(partial.missingCount, 0)
+  assert.equal(t.readMeta(undefined).catalogComplete, false)
+})
+
+test('C-U11: 可选功能默认值与 Config 一致，保存只修改指定字段', async () => {
+  const { exports: mod } = loadClient()
+  const t = mod.__test
+  const config = buildConfig(Schema)
+  assert.equal(config.dict.requireTrustedEpoch.meta.default, false)
+  assert.equal(config.dict.initialToolsEnabled.meta.default, true)
+  assert.equal(config.dict.alwaysAllowPresetTools.meta.default, true)
+  assert.equal(config.dict.requireTrustedEpochForSubagents.meta.default, false)
+  assert.notEqual(config.dict.requireTrustedEpochForSubagents.meta.volatile, true)
+  const states = Object.fromEntries(t.featureChoices({}).map(([key, _label, _help, checked]) => [key, checked]))
+  assert.deepEqual(states, { initialToolsEnabled: true, alwaysAllowPresetTools: true, requireTrustedEpoch: false, requireTrustedEpochForSubagents: false })
+  const enabled = t.featureChoices({ requireTrustedEpoch: true, initialToolsEnabled: false })
+  assert.equal(enabled.find(row => row[0] === 'requireTrustedEpoch')[3], true)
+  assert.equal(enabled.find(row => row[0] === 'initialToolsEnabled')[3], false)
+  const calls = []
+  const form = { mutate: async ops => { calls.push(JSON.parse(JSON.stringify(ops))); return true } }
+  assert.equal(await t.saveSetting(form, 'requireTrustedEpoch', true), true)
+  assert.deepEqual(calls, [[{ op: 'set', path: ['requireTrustedEpoch'], value: true }]])
+  assert.equal(await t.saveSetting(form, 'frameworkRetained', []), false)
+  assert.equal(calls.length, 1, '页面不得写可信框架字段')
+  assert.equal(await t.saveSetting(form, 'alwaysAllowPresetTools', false), true)
+  assert.deepEqual(calls[1], [{ op: 'set', path: ['alwaysAllowPresetTools'], value: false }])
+  assert.equal(await t.saveSetting(form, 'requireTrustedEpochForSubagents', true), true)
+  assert.deepEqual(calls[2], [{ op: 'set', path: ['requireTrustedEpochForSubagents'], value: true }])
+  assert.equal(await t.saveSetting({ mutate: async () => false }, 'initialToolsEnabled', false), false)
+  await assert.rejects(() => t.saveSetting({ mutate: async () => { throw new Error('write rejected') } }, 'requireTrustedEpoch', false), /write rejected/)
+})
+
 test('C-U06: getSnapshot 身份稳定 —— 同输入必须返回同一引用（否则 useSyncExternalStore 无限重渲染）', () => {
   const { exports: mod } = loadClient()
   const envelope = realSchemaEnvelope(['fixture_alpha'])
@@ -165,6 +214,7 @@ test('C-U06: getSnapshot 身份稳定 —— 同输入必须返回同一引用�
   const source = mod.__test.createSnapshotSource(ctx)
 
   const a = source.getSnapshot()
+  assert.equal(a.writable, true, '保留宿主可写状态供功能开关禁用判据使用')
   const b = source.getSnapshot()
   assert.equal(a, b, '连续两次 getSnapshot 必须是同一对象')
 

@@ -170,7 +170,7 @@ function makeLifecycle({ store, query, logs, getAlwaysVisible = () => [...BOUNDA
   return createLifecycle({
     ctx: {},
     registry: makeRegistry(),
-    config: { categoryConfig: CATEGORY_CONFIG, locale: undefined, budgets: null, alwaysVisible: [...CONFIG_NAMES] },
+    config: { requireTrustedEpoch: true, categoryConfig: CATEGORY_CONFIG, locale: undefined, budgets: null, alwaysVisible: [...CONFIG_NAMES] },
     clock, random, query,
     log: (event, detail) => { logs.push([event, detail]); },
     getAlwaysVisible,

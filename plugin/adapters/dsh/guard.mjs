@@ -16,7 +16,7 @@ export function createGuard(deps) {
   const config = { locale: deps.locale };
   const frameworkRetained = new Set([...(deps.frameworkRetained ?? [])]);
   // 三入口与可信 framework 保留项由宿主配置背书，放行判据不受可信周期基线影响。
-  // 常驻工具则**只**由 storageDomain 上那份可信记录背书（trusted-epoch.mjs），
+  // 严格模式的常驻工具只由 storageDomain 记录背书；默认模式使用配置快照，
   // 所以基线判据必须排在 alwaysNameSet 早退**之前**（见下）。
   const entryNames = new Set(ENTRY_TOOL_NAMES);
   const log = deps.log ?? (() => {});
@@ -35,7 +35,7 @@ export function createGuard(deps) {
     // 这条必须早于 alwaysNameSet 的早退，否则一份不可信（或根本不存在）的名单
     // 就能凭"猜名"真正执行隐藏工具的 body。
     const baseline = runtime.ledger?.state;
-    if (baseline !== undefined && baseline !== BASELINE_STATE.TRUSTED) {
+    if (runtime.requireTrustedEpoch !== false && baseline !== undefined && baseline !== BASELINE_STATE.TRUSTED) {
       const reason = runtime.ledger?.reason ?? 'TRUSTED_EPOCH_PENDING';
       log('guard:baseline-not-trusted', {
         sessionId: agent.session.id, name: exec.name, state: baseline, reason,
