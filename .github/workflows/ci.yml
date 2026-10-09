@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: ['**']
+    tags: ['v*']
   pull_request:
 
 # Cancel superseded runs on the same ref instead of racing them.
@@ -365,9 +366,6 @@ jobs:
           }
           console.log('tag matches version:', version);
           NODE
-
-      - name: Run tests
-        run: node --test plugin/tests/unit/*.test.mjs
 
       - name: Pack release asset
         run: |
