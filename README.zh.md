@@ -49,10 +49,9 @@ DSH profile 安装仍可使用 **GitHub Release 构建资产**：`main` 绿跑�
 不会把旧提交重新发布成最新资产）。该资产是**构建产物，不是验收声明**；某个版本覆盖什么、明确
 **不**宣称什么，见[当前状态](plugin/docs/05-current-status.md)。
 
-本包也已准备好发布到公共 npm registry。首次发布需要先由维护者账号发布一次，npm 才能为该包登记
-Trusted Publisher。之后推送与 `package.json` 版本匹配的稳定 `v<version>` 标签，通过便携测试和仓库检查后，
-GitHub Actions 会自动通过 OIDC 发布到 npm，npm 同时生成 provenance；GitHub 不保存 npm 写入令牌。
-一次性设置与后续发布步骤见[发布到 npm](#发布到-npm)。
+本包自 `0.2.1` 起已发布到 npm。之后推送与 `package.json` 版本匹配的稳定 `v<version>` 标签，通过便携测试和
+仓库检查后，npm 发布任务会自动运行。GitHub Actions 通过 OIDC 向 npm 验证身份，npm 同时生成 provenance；
+GitHub 不保存 npm 写入令牌。发布步骤见[发布到 npm](#发布到-npm)。
 
 请使用**你所运行的那套安装自带的 DSH CLI**，并指向真正会加载本插件的 profile。DSH NEXT 桌面端自带
 CLI（经 `resources\app\lib\desktop-cli.js` 启动），插件也由其自身入口管理；`PATH` 上全局 npm 安装的
@@ -80,14 +79,21 @@ Node 项目可通过 `npm install dsh-tool-discovery` 从 npm 安装。本节上
 
 ## 发布到 npm
 
-npm 只允许在包已经存在后登记 Trusted Publisher，因此首次发布需要一次性引导：
+npm 只允许在包已经存在后登记 Trusted Publisher。初始 `0.2.1` 发布已完成，npm 账号的双重验证使用了
+Windows Hello。当前 Trusted Publisher 配置如下：
 
-1. 登录 npm 账号并启用账号双重验证。可使用安全密钥或 passkey；在 Windows 上可通过 Windows Hello 验证。
-2. 在仓库目录首次运行 `npm publish --access public`，发布初始版本。
-3. 在 npm 包设置中添加 GitHub Actions Trusted Publisher：组织/用户填写 `KouzakiUmi`，仓库填写
-   `dsh-tool-discovery`，工作流文件名填写 `ci.yml`，环境留空，并允许直接执行 `npm publish`。
-4. 后续稳定版本先更新 `package.json` 版本并提交，再创建同版本的 `v<version>` 标签并推送。`publish-npm`
-   任务会等待便携测试和仓库检查通过，核对标签后通过 OIDC 发布并生成 provenance。
+| 设置 | 值 |
+| --- | --- |
+| 提供方 | GitHub Actions |
+| 组织/用户 | `KouzakiUmi` |
+| 仓库 | `dsh-tool-discovery` |
+| 工作流文件名 | `ci.yml` |
+| 环境 | 无 |
+| 发布权限 | `npm publish`、`npm stage publish`（npm 默认） |
+
+每次发布稳定版本时，先更新并提交 `package.json`，再创建并推送同版本的 `v<version>` 标签。
+`publish-npm` 任务会等待便携测试和仓库检查通过，核对标签后通过 OIDC 发布并生成 provenance。
+暂存发布仍需维护者审核并通过双重验证后才会公开。
 
 工作流需要 Node 24 和 npm 11.5.1 或更高版本，不使用 GitHub 的 `NPM_TOKEN` secret。预发布标签不会触发 npm 发布。
 
@@ -99,7 +105,7 @@ view`：标签、目标提交、资产名）；没有下载、解包或安装任
 
 ## 获取源码
 
-本分支的源码版本为 **`0.2.1`**。某次下载究竟带哪个版本，由该构建 tarball 里的清单决定
+本分支的源码版本为 **`0.2.2`**。某次下载究竟带哪个版本，由该构建 tarball 里的清单决定
 ——请与 Release 名（`v<version> · <sha>`）对照，而不是假设 `main` 与本文一致。
 
 ```sh

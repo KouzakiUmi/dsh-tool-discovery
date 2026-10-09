@@ -11,20 +11,36 @@ The source baseline is published on `main` as its single initial-publish commit.
 was rebuilt on 2026-10-06: the earlier history — including the `2a1f9c0` and `257ddc0` commits,
 which are quoted in older entries below — was rewritten away and **no longer resolves**. Entries
 below the functional-build entry are historical source-baseline records, not claims about current
-release availability. The package remains **not published to npm**; distribution is the **GitHub
-Release build asset** — a green `main` run publishes `dsh-tool-discovery.tgz` on a `build-<sha>`
-release, which is neither an npm publication nor evidence that any profile has it installed. Neither
-this changelog round nor the functional-build round performs a profile installation, GUI reload, or
-application restart. Committing source, publishing a build asset, and accepting an online product
-are three different events.
+release availability. The package was first published to npm as `0.2.1`; the trusted publishing
+workflow is described in the newest entry. The **GitHub Release build asset** remains a separate
+distribution — a green `main` run publishes `dsh-tool-discovery.tgz` on a `build-<sha>` release,
+which is neither an npm publication nor evidence that any profile has it installed. Neither
+publication is a product-acceptance statement or a profile installation, GUI reload, or application
+restart.
 
 Nothing in this file is a product-acceptance statement. For the authoritative per-item status —
 what is verified, what is unverified, and what this version refuses to support — see
 [`plugin/docs/05-current-status.md`](plugin/docs/05-current-status.md).
 
+## [0.2.2] — 2026-10-09 — trusted npm publishing
+
+Source version **`0.2.2`**. This release adds a gated npm publication path; it makes no runtime plugin
+behavior changes. Version `0.2.1` was the one-time npm bootstrap publication. GitHub Actions uses the
+Trusted Publisher for repository `KouzakiUmi/dsh-tool-discovery` and workflow `ci.yml`; the first
+automated versioned publication is triggered by tag `v0.2.2` after the required CI checks pass.
+
+### Changed — npm distribution
+
+- Added `publish-npm` to the CI workflow. It runs only for matching stable `v<version>` tags after
+  portable unit tests and repository checks succeed.
+- Scoped `id-token: write` to the npm publish job. The publish step uses npm Trusted Publishing over
+  OIDC and generates provenance; no long-lived npm write token is stored in GitHub.
+- Added matching tag and manifest version validation. Pre-release tags are excluded from npm publishing.
+- Kept the existing commit-derived GitHub Release asset flow for DSH profile installs.
+
 ## [0.2.1] — 2026-10-09 — runtime verification & load tolerance
 
-Source version **`0.2.1`** (bumped from `0.2.0-functional.7` in `package.json`). **The package is not published to npm** — `private` remains true — and distribution is via **GitHub Release build assets** (`dsh-tool-discovery.tgz`) and release tags.
+Source version **`0.2.1`** (bumped from `0.2.0-functional.7` in `package.json`). This version was first published to npm on 2026-10-09 as a one-time maintainer-authenticated bootstrap; the automated Trusted Publisher flow is described in `0.2.2` above.
 
 ### Added & Changed — runtime mounted tool verification & load tolerance
 

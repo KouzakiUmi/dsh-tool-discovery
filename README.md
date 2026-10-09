@@ -63,12 +63,10 @@ newest release). That asset is a **build artifact, not an acceptance statement**
 covers and what it deliberately does not claim is recorded in
 [current status](plugin/docs/05-current-status.md).
 
-The package is also prepared for public npm distribution. The first version must be published once
-from a maintainer account before npm can attach a Trusted Publisher to the package. After that,
-pushing a stable `v<version>` tag that matches `package.json` runs the npm publish job after the
-portable tests and repository checks pass. GitHub Actions authenticates to npm with OIDC and npm
-generates provenance; no npm write token is stored in GitHub. See [Publishing to npm](#publishing-to-npm)
-for the one-time setup and release steps.
+The package has been published to npm since version `0.2.1`. Future stable `v<version>` tags that
+match `package.json` run the npm publish job after the portable tests and repository checks pass.
+GitHub Actions authenticates to npm with OIDC and npm generates provenance; no npm write token is
+stored in GitHub. See [Publishing to npm](#publishing-to-npm) for the release steps.
 
 Use the DSH CLI that belongs to the installation you run, and target the profile that will actually
 load the plugin. DSH NEXT Desktop ships its own CLI (it starts through
@@ -99,18 +97,24 @@ DSH profile installation commands above continue to use the DSH CLI and a GitHub
 
 ## Publishing to npm
 
-The initial npm publication is a one-time bootstrap because npm only lets a maintainer attach a
-Trusted Publisher after the package exists:
+The initial `0.2.1` publication was a one-time bootstrap because npm only lets a maintainer attach a
+Trusted Publisher after the package exists. The npm account's two-factor check was completed with
+Windows Hello. The Trusted Publisher is now registered for:
 
-1. Sign in to npm and enable account two-factor authentication with a security key or passkey. On
-   Windows, Windows Hello can provide that verification.
-2. Publish the initial package version from the repository with `npm publish --access public`.
-3. In the npm package settings, add a GitHub Actions Trusted Publisher with organization/user
-   `KouzakiUmi`, repository `dsh-tool-discovery`, workflow filename `ci.yml`, and no environment.
-   Permit direct `npm publish` for this publisher.
-4. For each later stable release, bump `package.json` to the next version, commit the change, create
-   the matching `v<version>` tag, and push it. The `publish-npm` job waits for the portable tests and
-   repository checks, verifies the tag, then publishes with OIDC and provenance.
+| Setting | Value |
+| --- | --- |
+| Provider | GitHub Actions |
+| Organization/user | `KouzakiUmi` |
+| Repository | `dsh-tool-discovery` |
+| Workflow filename | `ci.yml` |
+| Environment | None |
+| Allowed publishing | `npm publish`; `npm stage publish` (npm default) |
+
+npm also enables `npm stage publish` for new Trusted Publisher configurations. For each stable
+release, bump `package.json`, commit the change, create the matching `v<version>` tag, and push it.
+The `publish-npm` job waits for portable tests and repository checks, verifies the tag, then publishes
+with OIDC and provenance. A staged version stays unpublished until a maintainer reviews and approves
+it with two-factor authentication.
 
 The workflow requires Node 24 and npm 11.5.1 or newer. It does not use an `NPM_TOKEN` GitHub
 secret. Pre-release tags are not published by this job.
@@ -125,7 +129,7 @@ keep the manifest, lockfile and CLI output and report it rather than hand-editin
 
 ## Get the source
 
-The source version on this branch is **`0.2.1`**. Which version a given download
+The source version on this branch is **`0.2.2`**. Which version a given download
 carries is decided by the manifest inside that build's tarball — compare it with the release name
 (`v<version> · <sha>`) rather than assuming that `main` and this document agree.
 
