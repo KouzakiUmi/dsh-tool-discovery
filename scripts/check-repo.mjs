@@ -3,7 +3,7 @@
 //
 // Needs only Node and (optionally) git. No SDK, no DSH installation, no private data.
 //
-//   identity  package.json / cordis.patch.yml agree, package stays private, no vendor scope,
+//   identity  package.json / cordis.patch.yml agree, no vendor scope,
 //             no reference to the former package name in tracked files
 //   docs      README pair covers the three entries, relative links in published docs resolve,
 //             published docs make no unmeasured "saving N%" claim
@@ -34,8 +34,6 @@ function checkIdentity (fail) {
   // The loader resolves the patch by name; a silent mismatch ships a bundle that never activates.
   const patchName = read('cordis.patch.yml').match(/^\s*name:\s*['"]?([^'"\n]+?)['"]?\s*$/m)?.[1]
   if (patchName !== pkg.name) fail(`cordis.patch.yml name (${patchName}) must equal package.json name (${pkg.name})`)
-
-  if (pkg.private !== true) fail('package must stay private until an explicit publish decision')
 
   // This repo is third-party; publishing under the vendor scope would collide with the vendor's own plugins.
   if (/^@deepseek(-ai)?\//.test(pkg.name)) fail(`package name '${pkg.name}' squats the vendor scope`)

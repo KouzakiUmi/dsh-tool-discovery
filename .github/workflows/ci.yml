@@ -219,9 +219,6 @@ jobs:
           if (!m || m[1] !== p.name) {
             throw new Error(`cordis.patch.yml name (${m?.[1]}) must equal package.json name (${p.name})`);
           }
-          if (p.private !== true) {
-            throw new Error('package must stay private until an explicit publish decision');
-          }
           // The client surface ships as plain files, so these four declarations
           // are all the host has to work from — none of them needs an SDK
           // present on this runner to be checked.
@@ -395,3 +392,48 @@ jobs:
           # `latest` is owned by the automatic main releases; an older tag must
           # not move it backwards.
           make_latest: false
+
+  # npm releases use a separately configured Trusted Publisher for this exact
+  # workflow file (`ci.yml`). Only this job can mint an OIDC token; no npm
+  # publish token is stored in GitHub. Keep it behind the same portable tests
+  # and repository checks as the versioned GitHub Release.
+  publish-npm:
+    name: Publish to npm (Trusted Publisher)
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+    needs: [portable-unit, repo-checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Check tag matches a stable package version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
+          if (!/^\d+\.\d+\.\d+$/.test(version)) {
+            throw new Error(`npm automatic publishing only accepts stable semver versions (got ${version})`);
+          }
+          if (process.env.RELEASE_TAG !== `v${version}`) {
+            throw new Error(`tag ${process.env.RELEASE_TAG} must equal v${version}`);
+          }
+          console.log('tag matches stable package version:', version);
+          NODE
+
+      - name: Publish package
+        # npm CLI 11.5.1+ uses the GitHub OIDC identity configured as the
+        # package's Trusted Publisher; the registry creates provenance.
+        run: npm publish --provenance --access public

@@ -56,12 +56,19 @@ model action at all — only a successful compaction clears the disclosed set.
 
 ## Install and update
 
-The package is **not published to npm** and is not listed in any plugin marketplace. The
-distribution channel is the **GitHub Release build asset**: a green `main` run packs the tree and
-publishes `dsh-tool-discovery.tgz` on a commit-derived `build-<sha>` release (a run whose commit is
-already superseded is skipped, so an older commit is never re-published as the newest release). That
-asset is a **build artifact, not an acceptance statement**; what a version covers and what it
-deliberately does not claim is recorded in [current status](plugin/docs/05-current-status.md).
+The GitHub Release build asset remains available for DSH profile installs: a green `main` run packs
+the tree and publishes `dsh-tool-discovery.tgz` on a commit-derived `build-<sha>` release (a run
+whose commit is already superseded is skipped, so an older commit is never re-published as the
+newest release). That asset is a **build artifact, not an acceptance statement**; what a version
+covers and what it deliberately does not claim is recorded in
+[current status](plugin/docs/05-current-status.md).
+
+The package is also prepared for public npm distribution. The first version must be published once
+from a maintainer account before npm can attach a Trusted Publisher to the package. After that,
+pushing a stable `v<version>` tag that matches `package.json` runs the npm publish job after the
+portable tests and repository checks pass. GitHub Actions authenticates to npm with OIDC and npm
+generates provenance; no npm write token is stored in GitHub. See [Publishing to npm](#publishing-to-npm)
+for the one-time setup and release steps.
 
 Use the DSH CLI that belongs to the installation you run, and target the profile that will actually
 load the plugin. DSH NEXT Desktop ships its own CLI (it starts through
@@ -87,6 +94,27 @@ manifest version — maintainers bump `version`, CI does not — so pin the tag 
 always give the package name explicitly, and read the version from the release name (`v<version> ·
 <sha>`) or from the manifest inside that tarball instead of assuming what `main` currently says.
 
+For a Node project, install the public package from npm with `npm install dsh-tool-discovery`. The
+DSH profile installation commands above continue to use the DSH CLI and a GitHub Release asset.
+
+## Publishing to npm
+
+The initial npm publication is a one-time bootstrap because npm only lets a maintainer attach a
+Trusted Publisher after the package exists:
+
+1. Sign in to npm and enable account two-factor authentication with a security key or passkey. On
+   Windows, Windows Hello can provide that verification.
+2. Publish the initial package version from the repository with `npm publish --access public`.
+3. In the npm package settings, add a GitHub Actions Trusted Publisher with organization/user
+   `KouzakiUmi`, repository `dsh-tool-discovery`, workflow filename `ci.yml`, and no environment.
+   Permit direct `npm publish` for this publisher.
+4. For each later stable release, bump `package.json` to the next version, commit the change, create
+   the matching `v<version>` tag, and push it. The `publish-npm` job waits for the portable tests and
+   repository checks, verifies the tag, then publishes with OIDC and provenance.
+
+The workflow requires Node 24 and npm 11.5.1 or newer. It does not use an `NPM_TOKEN` GitHub
+secret. Pre-release tags are not published by this job.
+
 **Nothing here was executed in this round.** No install, reload or restart was performed, no profile
 was touched, and installation through this channel is therefore **not verified here**. What was
 checked is only that an already-published release and its asset metadata exist (a read-only `gh
@@ -97,7 +125,7 @@ keep the manifest, lockfile and CLI output and report it rather than hand-editin
 
 ## Get the source
 
-The source version on this branch is **`0.2.0-functional.7`**. Which version a given download
+The source version on this branch is **`0.2.1`**. Which version a given download
 carries is decided by the manifest inside that build's tarball — compare it with the release name
 (`v<version> · <sha>`) rather than assuming that `main` and this document agree.
 
