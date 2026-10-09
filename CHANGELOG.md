@@ -11,8 +11,8 @@ The source baseline is published on `main` as its single initial-publish commit.
 was rebuilt on 2026-10-06: the earlier history — including the `2a1f9c0` and `257ddc0` commits,
 which are quoted in older entries below — was rewritten away and **no longer resolves**. Entries
 below the functional-build entry are historical source-baseline records, not claims about current
-release availability. The package was first published to npm as `0.2.1`; the trusted publishing
-workflow is described in the newest entry. The **GitHub Release build asset** remains a separate
+release availability. The package was first published to npm as `0.2.1`; `0.2.2` was published by
+the trusted workflow described in the newest entry. The **GitHub Release build asset** remains a separate
 distribution — a green `main` run publishes `dsh-tool-discovery.tgz` on a `build-<sha>` release,
 which is neither an npm publication nor evidence that any profile has it installed. Neither
 publication is a product-acceptance statement or a profile installation, GUI reload, or application
@@ -25,9 +25,10 @@ what is verified, what is unverified, and what this version refuses to support �
 ## [0.2.2] — 2026-10-09 — trusted npm publishing
 
 Source version **`0.2.2`**. This release adds a gated npm publication path; it makes no runtime plugin
-behavior changes. Version `0.2.1` was the one-time npm bootstrap publication. GitHub Actions uses the
-Trusted Publisher for repository `KouzakiUmi/dsh-tool-discovery` and workflow `ci.yml`; the first
-automated versioned publication is triggered by tag `v0.2.2` after the required CI checks pass.
+behavior changes. Version `0.2.1` was the one-time npm bootstrap publication. GitHub Actions used the
+Trusted Publisher for repository `KouzakiUmi/dsh-tool-discovery` and workflow `ci.yml` to publish
+`0.2.2` from tag `v0.2.2`; the npm publish job succeeded after the required CI checks passed, and
+npm recorded provenance in the Sigstore transparency log.
 
 ### Changed — npm distribution
 
@@ -37,6 +38,8 @@ automated versioned publication is triggered by tag `v0.2.2` after the required 
   OIDC and generates provenance; no long-lived npm write token is stored in GitHub.
 - Added matching tag and manifest version validation. Pre-release tags are excluded from npm publishing.
 - Kept the existing commit-derived GitHub Release asset flow for DSH profile installs.
+- Verified the first automated release through GitHub Actions run `37925256780` and Sigstore log
+  entry `3163619718`.
 
 ## [0.2.1] — 2026-10-09 — runtime verification & load tolerance
 
