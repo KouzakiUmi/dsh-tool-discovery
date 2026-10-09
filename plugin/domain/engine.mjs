@@ -75,6 +75,10 @@ export function createDiscoveryEngine(config) {
    * 就在每一轮请求里。过滤只针对名单之外的后装工具。
    */
   const alwaysNames = new Set(config.alwaysToolNames || []);
+  /** 是否容错放正常驻工具的重复加载（方案 2 开关项：默认开启以解除死锁冲突） */
+  const tolerantLoadProtected = config.tolerantLoadProtected !== false;
+  /** 严格不可加载保护项：入口与框架保留项永远不可 load/unload */
+  const strictProtectedNames = new Set([...entryNames, ...frameworkNames]);
   /** 入口与框架保留项不可 load/unload —— 来自可信配置,不按名称猜。 */
   const protectedNames = new Set([...entryNames, ...frameworkNames, ...alwaysNames]);
   /** @type {Map<string, string>} name → toolId(受保护项,如可解析) */
@@ -142,9 +146,10 @@ export function createDiscoveryEngine(config) {
    * @returns {Set<string>}
    */
   function protectedToolIdsNow() {
+    const activeProtectedNames = tolerantLoadProtected ? strictProtectedNames : protectedNames;
     return new Set(
       Array.from(catalog.entries.values())
-        .filter((e) => protectedNames.has(e.name))
+        .filter((e) => activeProtectedNames.has(e.name))
         .map((e) => e.toolId),
     );
   }
@@ -396,7 +401,10 @@ export function createDiscoveryEngine(config) {
         const expectedRevision = item.revision ?? rec.revision;
         if (entry.revision !== expectedRevision) throw new DomainError('STALE_CANDIDATE');
         // D1:候选路径与 names 路径对称 —— 入口/框架保留项一律不可 load。
-        if (protectedNames.has(entry.name)) {
+        if (entryNames.has(entry.name) || frameworkNames.has(entry.name)) {
+          throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotLoadable']));
+        }
+        if (alwaysNames.has(entry.name) && !tolerantLoadProtected) {
           throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotLoadable']));
         }
         if (byToolId.has(entry.toolId) && byToolId.get(entry.toolId) !== expectedRevision) {
@@ -409,7 +417,10 @@ export function createDiscoveryEngine(config) {
 
       for (const name of /** @type {string[]} */ (req.names ?? [])) {
         namesPath.push(name);
-        if (protectedNames.has(name)) {
+        if (entryNames.has(name) || frameworkNames.has(name)) {
+          throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotLoadable']));
+        }
+        if (alwaysNames.has(name) && !tolerantLoadProtected) {
           throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotLoadable']));
         }
         const entry = resolveByName(catalog, name);
@@ -561,7 +572,7 @@ export function createDiscoveryEngine(config) {
         now: () => clock.now(),
         catalog,
         protectedToolIds: protectedToolIdsNow(),
-        protectedNames,
+        protectedNames: tolerantLoadProtected ? strictProtectedNames : protectedNames,
         resolveRef: (ref) => {
           try {
             const rec = refStore.resolve(ref, scope.sessionId, eligibilityGeneration, clock.now());
@@ -759,7 +770,13 @@ export function createDiscoveryEngine(config) {
       let rejected = 0;
       let cur = st;
       for (const p of deduped) {
-        const out = reducePair(cur, p, { now: () => clock.now(), catalog, protectedToolIds: protectedToolIdsNow(), protectedNames, resolveRef: undefined });
+        const out = reducePair(cur, p, {
+          now: () => clock.now(),
+          catalog,
+          protectedToolIds: protectedToolIdsNow(),
+          protectedNames: tolerantLoadProtected ? strictProtectedNames : protectedNames,
+          resolveRef: undefined,
+        });
         cur = out.state;
         if (out.applied) applied += 1;
         else rejected += 1;

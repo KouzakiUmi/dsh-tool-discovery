@@ -6,6 +6,7 @@
 // 签名若需变更,必须先在该文件追加 delta 并通知主代理与独立 reviewer。
 
 export { PROTOCOL_VERSION, CONTROLLED_CATEGORIES, DEFAULT_BUDGETS, OPTIONAL_LIMIT_KEYS, ENTRY_TOOL_NAMES, ERROR_CODES, errorCodes, MATCH_REASONS, SIGNAL_WEIGHTS, SYNONYM_INDEX } from './constants.mjs';
+export { CORE_TOOL_NAMES } from './core-tools.mjs';
 export { createText, normalizeLocale, tableFor, SUPPORTED_LOCALES, DEFAULT_LOCALE, setDomainLocale, domainText } from './locale.mjs';
 export { detectHostLocale } from './host-locale.mjs';
 export { DomainError, isDomainError, toDomainError } from './errors.mjs';

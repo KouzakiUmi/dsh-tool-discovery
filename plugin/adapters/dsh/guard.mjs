@@ -5,7 +5,7 @@
 // 对外文案只由 domain 的 `reason` 决定，`visibility` 只进宿主日志，
 // 绝不拼进模型可见的拒绝文本；也**不使用** UNKNOWN_TOOL 字样
 // （那是宿主原生语义，与本插件拒绝不同义）。
-import { ENTRY_TOOL_NAMES } from '../../domain/index.mjs';
+import { ENTRY_TOOL_NAMES, CORE_TOOL_NAMES } from '../../domain/index.mjs';
 import { BASELINE_STATE } from './trusted-epoch.mjs';
 
 /**
@@ -43,6 +43,13 @@ export function createGuard(deps) {
       return `tool "${exec.name}" is not admitted: STATE_NOT_READY (${reason})`;
     }
     if (runtime.alwaysNameSet?.has(exec.name) === true) return undefined;
+    // 运行时装载自证（方案 1 动态兜底）：
+    // 若调用的工具属于官方核心工具（CORE_TOOL_NAMES），且宿主当前 agent scope 实际装载了它：
+    // 说明它是原本就有的系统工具，动态补入常驻名单并放行，避免产生 TOOL_NOT_LOADED 冲突死锁。
+    if (CORE_TOOL_NAMES.includes(exec.name) && ctx.tools.get(exec.name, agent) !== undefined) {
+      if (runtime.alwaysNameSet) runtime.alwaysNameSet.add(exec.name);
+      return undefined;
+    }
     // 有 listener 在我们的投影之后重加了未披露工具 → 整会话 fail closed
     if (runtime.compositionBypass !== null) {
       log('guard:bypass-closed', { sessionId: agent.session.id, name: exec.name, leaked: runtime.compositionBypass.names });

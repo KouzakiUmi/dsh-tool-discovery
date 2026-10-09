@@ -42,3 +42,41 @@ export function presetToolNamesOf(tools, agentPresets, agentScope) {
   const visible = tools.view(agentScope).visible;
   return [...names].filter(name => visible.has(name)).sort();
 }
+
+/**
+ * 运行时装载自证（方案 1）：获取当前 agent scope 自身实际装载并可见的工具名集合。
+ * 覆盖直接注册在 agent 自身 scope 及其链上的系统工具（例如 subagent、subagent_fork、list_agents 等动态注入工具）。
+ * @param {any} tools ctx.tools
+ * @param {any} agentScope 当前会话的 Agent 作用域
+ * @returns {string[]}
+ */
+export function scopeMountedToolNamesOf(tools, agentScope) {
+  if (tools === undefined || agentScope === undefined) return [];
+  const names = new Set();
+  // 1. 若宿主 layers 支持按 scope 获取链式层（chain layers）或自身层（own layer）
+  if (typeof tools?.layers?.chainLayers === 'function') {
+    try {
+      const layers = tools.layers.chainLayers(agentScope) ?? tools.layers.chainLayers(agentScope?.ctx);
+      if (Array.isArray(layers)) {
+        for (const l of layers) addLayer(names, l);
+      }
+    } catch {
+      // 容错降级
+    }
+  } else if (typeof tools?.layers?.peek === 'function') {
+    const ownLayer = tools.layers.peek(agentScope) ?? tools.layers.peek(agentScope?.ctx);
+    if (ownLayer) addLayer(names, ownLayer);
+  }
+  // 2. 校验在当前 agentScope 下是否真实可见且未被拦截
+  if (typeof tools?.view === 'function') {
+    try {
+      const visible = tools.view(agentScope)?.visible;
+      if (visible instanceof Map || (visible && typeof visible.has === 'function')) {
+        return [...names].filter(name => visible.has(name)).sort();
+      }
+    } catch {
+      // 容错降级
+    }
+  }
+  return [...names].sort();
+}

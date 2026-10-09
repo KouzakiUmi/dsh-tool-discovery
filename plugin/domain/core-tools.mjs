@@ -5,11 +5,9 @@
 // profile-installed plugin or an MCP server. Everything the core ships is
 // therefore named explicitly.
 //
-// Derivation (2026-10-06, DSH NEXT @ 0.2.1-alpha.1): every `@deepseek-ai/dsh-tool-*`
-// package in the core install was scanned for the tool names it registers, using
-// two independent extraction passes that agreed exactly on 32 names. Packages
-// that register no tool (dsh-tool-workflow, dsh-tool-call-timeout-policy) and
-// aliases of the same name across packages (bash / pwsh) are folded in once.
+// Derivation (2026-10-09, DSH NEXT @ 0.2.1-alpha.1): scanned across upstream preset-standard
+// (@deepseek-ai/dsh-web-app/presets/standard.patch.yml) and core packages. Dynamic subagent
+// tools (subagent, subagent_fork, list_agents), workflow, and exit_plan_mode are incorporated.
 //
 // This is the default, not a mandatory set: an explicit `alwaysVisible` replaces
 // it entirely (including []), so a deployment can add or remove initial tools
@@ -24,16 +22,18 @@ export const CORE_TOOL_NAMES = Object.freeze([
   'glob', 'grep',
   // interaction
   'ask_user_question', 'present', 'skill',
-  // planning / goals
-  'todo_write', 'get_goal', 'create_goal', 'update_goal',
+  // planning / goals / plan mode
+  'todo_write', 'get_goal', 'create_goal', 'update_goal', 'exit_plan_mode',
   // background jobs
   'job_output', 'job_list', 'job_kill',
   // scheduling
   'schedule_create', 'schedule_list', 'schedule_delete', 'schedule_update',
   // web
   'web_search', 'web_fetch',
-  // subagents
-  'list_subagent_models', 'send_message', 'interrupt_agent',
+  // subagents & delegation
+  'subagent', 'subagent_fork', 'list_agents', 'list_subagent_models', 'send_message', 'interrupt_agent',
+  // workflow
+  'workflow',
   // diagnostics
   'cordis_inspect_list', 'cordis_inspect_query',
   // workspace

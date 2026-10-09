@@ -15,7 +15,7 @@
 //   * 仅 requireTrustedEpoch=true 时，名单落盘才算授权（trusted-epoch.mjs）：此前是 pending，
 //     pending 与 blocked 都**不发请求**。缺记录的老会话明确报错并等本次 live 的
 //     真实用户 `/compact` 迁移，绝不从出站 header 反推授权。
-import { createDiscoveryEngine } from '../../domain/index.mjs';
+import { createDiscoveryEngine, CORE_TOOL_NAMES } from '../../domain/index.mjs';
 import { createJournal, normalizeInheritedBoundary } from './journal.mjs';
 import { resolveAlwaysVisible } from './config.mjs';
 import { requiresTrustedEpoch } from './epoch-policy.mjs';
@@ -46,6 +46,11 @@ export function createLifecycle(deps) {
   /**
    * 此刻配置的常驻名单。只在**建立 runtime** 或**成功压缩重开周期**时读它；
    * 周期中途的设置变更不经过这里。
+   *
+   * 运行时装载自证（方案 1）：
+   * 若初始工具未被显式禁用（enabled !== false），自省当前 agentScope 实际装载的官方核心工具（CORE_TOOL_NAMES）。
+   * 即使用户的 profile/配置因历史原因未包含某些新增核心工具（如 subagent、subagent_fork 等动态注入工具），
+   * 只要当前 scope 真实装载了它们，运行时自动将其识别并纳入常驻名单，彻底杜绝 TOOL_NOT_LOADED。
    */
   function currentAlwaysNames(agentScope) {
     const enabled = typeof config.initialToolsEnabled?.get === 'function'
@@ -54,7 +59,24 @@ export function createLifecycle(deps) {
       ? resolveAlwaysVisible([...deps.getAlwaysVisible()])
       : enabled === false ? [] : resolveAlwaysVisible(config.alwaysVisible);
     const preset = typeof deps.getPresetTools === 'function' ? deps.getPresetTools(agentScope) : [];
-    return [...new Set([...configured, ...preset])];
+    const candidates = new Set([...configured, ...preset]);
+
+    // 运行时装载自证：自省当前 scope 实际装载的核心系统工具
+    if (enabled !== false && ctx?.tools && typeof ctx.tools.view === 'function' && agentScope !== undefined) {
+      try {
+        const view = ctx.tools.view(agentScope);
+        const visible = view?.visible;
+        if (visible instanceof Map || (visible && typeof visible.has === 'function')) {
+          for (const coreName of CORE_TOOL_NAMES) {
+            if (visible.has(coreName)) candidates.add(coreName);
+          }
+        }
+      } catch {
+        // 异常容错
+      }
+    }
+
+    return [...candidates];
   }
 
   /** 把一份**已确认可信**的名单装进 runtime（runtime + engine 同步换）。 */
@@ -258,6 +280,7 @@ export function createLifecycle(deps) {
       entryToolNames: [...registry.entryNames],
       frameworkToolNames: [...registry.frameworkRetained],
       alwaysToolNames: [...alwaysNames],
+      tolerantLoadProtected: config.tolerantLoadProtected !== false,
       budgets: config.budgets,
       newSessionMode: 'restoring',
       bindings,

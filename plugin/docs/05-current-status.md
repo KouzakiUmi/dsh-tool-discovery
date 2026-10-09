@@ -1,26 +1,27 @@
 # 05 · 当前状态
 
-截至 **2026-10-08**（Asia/Hong_Kong）。本文件只记录**有证据的结论**，并把每项标为 **已验证 / 未验证 / 不支持**。协议判据见[02](<02-protocol-and-data-model.md>)，矩阵见[03](<03-implementation-and-acceptance.md>)，接口事实见[04](<04-runtime-evidence.md>)，可信周期细节见[08](<08-trusted-epoch-baselines.md>)。
+截至 **2026-10-09**（Asia/Hong_Kong）。本文件只记录**有证据的结论**，并把每项标为 **已验证 / 未验证 / 不支持**。协议判据见[02](<02-protocol-and-data-model.md>)，矩阵见[03](<03-implementation-and-acceptance.md>)，接口事实见[04](<04-runtime-evidence.md>)，可信周期细节见[08](<08-trusted-epoch-baselines.md>)。
 
 > **维护方式**：本文件是**当前快照**，不是流水账。过程叙述（每一轮修了什么、谁复核、命令与日志）归 [`CHANGELOG.md`](../../CHANGELOG.md)、[08](<08-trusted-epoch-baselines.md>) 与私有证据 `plugin/reports/**` / `plugin/audits/**`；这里只留结论、数字与未覆盖项。旧版逐轮叙述可在 git 历史中取回。
 
 ## 0. 状态口径
 
-**版本坐标**：**本源码快照是 `0.2.0-functional.7`，基于 `main`@`80216ba` 的 `0.2.0-functional.6`（后者已作为 GitHub 构建版 `build-80216ba3effa` = `v0.2.0-functional.6 · 80216ba3effa` 发布资产）**。`0.2.0-functional.7` **是否已经发布，以对应的 `build-<sha>` Release 是否存在、以及该 tarball 内清单的版本为准**；本文件不把「已发布 / 未发布」写成长期结论。本仓库于 2026-10-06 重建，旧历史（`2a1f9c0`、`257ddc0` 等）已被重写移除，**不再可引用**。每个绿的 `main` 构建会自动产出 GitHub Release 资产（`build-<sha>`），那是**构建产物，不是验收声明**。
+**版本坐标**：**本源码快照是 `0.2.1`（发布版本），基于 `0.2.0-functional.7` 演进而来**。`0.2.1` **是否已经发布，以对应的 `v0.2.1` 及 `build-<sha>` Release 是否存在、以及该 tarball 内清单的版本为准**；本文件不把「已发布 / 未发布」写成长期结论。本仓库于 2026-10-06 重建，旧历史（`2a1f9c0`、`257ddc0` 等）已被重写移除，**不再可引用**。每个绿的 `main` 构建会自动产出 GitHub Release 资产（`build-<sha>`），语义版本发布由 `v<version>` 标签驱动。
 
 整理完成 ≠ 发布完成 ≠ 产品验收 ≠ npm 发布 ≠ 安装生效，五者互不替代。本文件的“已验证”一律指**工作区内的代码与测试证据**，不含任何安装或分发结论；它不是 [03 §11](<03-implementation-and-acceptance.md>) 发布门槛的产品验收，不是 npm 发布，也不是安装到 profile / GUI 生效。
 
-**核验范围声明**（2026-10-08，本工作区 Windows、Node 24，DSH Core `0.2.1-alpha.1` 在默认安装根）：
+**核验范围声明**（2026-10-09，本工作区 Windows、Node 24，DSH Core `0.2.1-alpha.1` 在默认安装根）：
 
 | 项 | 结果 | 命令 |
 |---|---|---|
-| 单元测试（`0.2.0-functional.7` 树复跑） | **372 pass / 0 fail / 0 skip**（exit 0） | `npm run test:all` 的 unit 阶段 |
-| 组合门禁（真实 Loader，`0.2.0-functional.7` 树复跑） | **130 pass / 0 fail / 0 skip**（exit 0） | `npm run test:all` 的 composition 阶段 |
+| 单元测试（`0.2.1` 树全量） | **375 pass / 0 fail / 0 skip**（exit 0） | `npm run test:all` 的 unit 阶段 |
+| 组合门禁（真实 Loader，`0.2.1` 树全量） | **133 pass / 0 fail / 0 skip**（exit 0） | `npm run test:all` 的 composition 阶段 |
 | 仓库一致性（身份 + 文档链接 + 未测量声明） | **通过**（exit 0，16 份文档链接全部可解析） | `npm run check` |
 | 质量工装单测 | **14 pass / 0 fail / 1 skip**（skip 为符号链接场景，平台 `EPERM`，记 **unknown**，不算通过） | `node --test plugin/quality/tests/*.test.mjs` |
 | 质量验证器 | **20 PASS / 1 FAIL**（exit 1，类别资格 H037 ×2、H044 ×1）；digest 全 PASS、冻结数据未改；**评分 still not ready** | `npm run check:quality` |
 
-- 上表两行数字来自 **`0.2.0-functional.7` 树的复跑**：`npm run test:all`（unit **372** / composition **130**，0 fail / 0 skip，exit 0），日志 `.probe/release-functional7-tests-20261008.log`。同一快照的仓库检查同轮跑出：`npm run check`（exit 0，16 份文档链接全部可解析，日志 `.probe/release-functional7-check-20261008.log`）与 `git diff --check`（exit 0）。历史数字各属不同提交：**349/108** = PR #10 合并**前**的 `main` 基线，**362/112** = PR #10 那一轮，**372/130** = 其上的可选设置实现轮 / functional.7 树；三者不能互相顶替。
+- 上表两行测试数字来自 **`0.2.1` 树的最新运行**：共 **508** 项测试全部通过（unit **375** / composition **133**，0 fail / 0 skip，exit 0）。新增 `plugin/tests/unit/load-tolerance.test.mjs` 与 `plugin/tests/composition/gate-runtime-verification.test.mjs`。仓库检查同轮跑出：`npm run check`（exit 0，16 份文档链接全部可解析）与 `git diff --check`（exit 0）。
+- 本轮核心修复：运行时实际装载工具自省自证（避免 `subagent` 等官方核心系统工具被误判拦截），以及常驻工具容错幂等 Load（`tolerantLoadProtected`，避免模型遭遇死锁）。上游核心工具名单扩展为 37 项。
 - 本轮只重跑了测试套件与仓库一致性检查；质量工装/质量验证器保留此前结果，**未重跑**。回归见[基础可选开关](<../tests/composition/gate-optional-settings.test.mjs>)、[全局目录与 preset](<../tests/composition/gate-global-tools-preset.test.mjs>)、[子代理开关](<../tests/composition/gate-subagent-epoch-option.test.mjs>)：真实 Loader 覆盖预加载 preset 无会话登记、会话限制不影响全局目录、preset 卸载、当前修订隔离、默认放行与 opt-out/load-use、原生 deny、严格基线与 volatile 更新；子代理覆盖旧会话 owned resume、非空继承前缀的真实 fork、不可用存储、严格开关重挂载恢复、子代理作为顶层恢复时撤销豁免及四项开关矩阵。不是浏览器、外部 wire 或独立安全签署；**独立安全复核仍在进行中**。
 - 以上是**各自标注时点的复跑**，不是“独立签署”：作者复跑与非作者复核是两回事，各子系统的复核范围见 §0.1 / §0.2 / §5 与 [08 §5](<08-trusted-epoch-baselines.md>)。数字会随测试增减漂移，以命令实际输出为准。
 - 质量验证器的结论**依赖私有的 `quality/queries/` 与 `quality/labels/`**，只在完整内部资料下成立；无这两者的 checkout 无法复现该退出码。

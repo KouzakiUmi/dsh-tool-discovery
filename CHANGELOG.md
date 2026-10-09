@@ -22,6 +22,27 @@ Nothing in this file is a product-acceptance statement. For the authoritative pe
 what is verified, what is unverified, and what this version refuses to support — see
 [`plugin/docs/05-current-status.md`](plugin/docs/05-current-status.md).
 
+## [0.2.1] — 2026-10-09 — runtime verification & load tolerance
+
+Source version **`0.2.1`** (bumped from `0.2.0-functional.7` in `package.json`). **The package is not published to npm** — `private` remains true — and distribution is via **GitHub Release build assets** (`dsh-tool-discovery.tgz`) and release tags.
+
+### Added & Changed — runtime mounted tool verification & load tolerance
+
+- **Runtime mounted tool verification (Scheme 1)**:
+  - Dynamically inspects the current agent scope view (`ctx.tools.view(agentScope).visible`) and registration layers (`scopeMountedToolNamesOf`).
+  - Introspects and automatically reconciles officially installed core tools (`CORE_TOOL_NAMES`) into the resident baseline even if historical user profile configurations omitted newly injected dynamic tools (e.g. `subagent`, `subagent_fork`, `list_agents`, `workflow`, `exit_plan_mode`).
+  - Added synchronous guard dynamic introspection fallback in `plugin/adapters/dsh/guard.mjs`: verified official core tools present in the current agent scope are permitted and auto-enrolled into `alwaysNameSet`, eliminating `TOOL_NOT_LOADED` errors.
+- **Idempotent load tolerance for resident tools (Scheme 2)**:
+  - Introduced configuration option `tolerantLoadProtected` (default `true`) in `plugin/adapters/dsh/config.mjs`.
+  - When enabled, `engine.handleLoad` permits loading tools present in the resident baseline (`alwaysNames`) idempotently without throwing `protectedNotLoadable` (`INVALID_ARGS`), eliminating deadlocks when LLMs attempt to load already-resident tools after encountering perception errors.
+  - Hard protection for control entry points (`tool_list`, `tool_search`, `tool_load`) and framework-reserved tools (`final_answer`) remains strictly enforced and non-loadable.
+- **Upstream core tool baseline sync**:
+  - Reconciled `CORE_TOOL_NAMES` in `plugin/domain/core-tools.mjs` with upstream official presets (`@deepseek-ai/dsh-web-app/presets/standard.patch.yml`) and core packages, expanding the baseline to 37 tools.
+- **Test coverage**:
+  - Added `plugin/tests/unit/load-tolerance.test.mjs` covering idempotent loading, strict opt-out behavior, and immutable control protection (`LT1`–`LT3`).
+  - Added `plugin/tests/composition/gate-runtime-verification.test.mjs` covering scope dynamic introspection, core tool auto-enrollment, non-core tool confinement, and guard dynamic fallback (`RV1`–`RV3`).
+  - Total test suite expanded to 508 passing tests across 48 test files (375 unit + 133 composition).
+
 ## [0.2.0-functional.7] — 2026-10-08 — optional feature settings
 
 Source version **`0.2.0-functional.7`** (bumped from `0.2.0-functional.6` in `package.json`). **The

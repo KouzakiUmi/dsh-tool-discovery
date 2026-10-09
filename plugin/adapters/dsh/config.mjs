@@ -84,6 +84,9 @@ export function buildConfig(Schema) {
     frameworkRetained: Schema.array(Schema.string())
       .default([])
       .description('Trusted framework-mandated tool names the projection must keep. Not user-editable here.'),
+    tolerantLoadProtected: Schema.boolean()
+      .default(true)
+      .description('Tolerate loading already-active baseline tools idempotently instead of throwing protectedNotLoadable. Resolves conflict deadlocks when models attempt to load system or preset tools.'),
     // budgets 默认 null = 完全不覆盖，走 domain 的冻结默认值（budgets.mjs 对
     // undefined/null 都回落 DEFAULT_BUDGETS）。必须显式允许 null：用户把
     // "关闭覆盖"写成 null 不该被 schema 拒掉。schemastery 没有 `Schema.null`，

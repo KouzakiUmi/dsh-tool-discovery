@@ -22,7 +22,7 @@ import { createLifecycle } from './lifecycle.mjs';
 import { createProjection } from './projection.mjs';
 import { createRegistryAdapter } from './registry.mjs';
 import { buildConfig, publishToolChoices, resolveAlwaysVisible } from './config.mjs';
-import { globalToolInventory, presetToolNamesOf } from './tool-inventory.mjs';
+import { globalToolInventory, presetToolNamesOf, scopeMountedToolNamesOf } from './tool-inventory.mjs';
 import { createTrustedEpochHolder, createTrustedEpochStore, TRUSTED_EPOCH_REASONS } from './trusted-epoch.mjs';
 
 /**
