@@ -43,7 +43,7 @@ kernel so the kernel no longer owns any I/O.
 - That release also releases an idle local-fork subagent once its turn settles, so the three
   real-fork gates take their evidence differently: `SE3` uses a new mock-provider **response gate**
   (`holdNextResponse`) to pin the subagent's active window, and `TF1` / `L03` observe the runtime
-  rebuilt from that session's own durable record. All **133 composition + 381 unit** tests pass on
+  rebuilt from that session's own durable record. All **137 composition + 396 unit** tests pass on
   the current host, and no assertion was loosened — "an inherited prefix pair never folds into the
   child" is still pinned by exact `selected` / `operationId` / `rejected` assertions.
 - `plugin/domain/host-locale.mjs` no longer owns any I/O: it imports neither `node:fs` nor
@@ -55,7 +55,7 @@ kernel so the kernel no longer owns any I/O.
   dependency) are real capabilities, and both are disclosed in the README.
 - The README pair now carries an explicit **Permissions and external dependencies** table (file
   reads/writes, session data, network, commands, credentials, logging) as the listing contract
-  requires; unit suite is 381 test cases (was 375).
+  requires; unit suite is 396 test cases (was 375).
 - The one-time Profile record for install / start / uninstall / recovery, the per-version matrix, its
   evidence, and the DSH STORE automatic-review mirror (selector, bounds, permission signals, and the
   deterministic reasons that remain) are recorded in
@@ -88,6 +88,24 @@ kernel so the kernel no longer owns any I/O.
 - The README pair documents the new switch, a starting budget profile for bounding prompt growth
   (guard-rail values vs interaction bounds), and scopes the deployment promise to a single user on a
   single profile.
+- The README pair now opens with an **original title banner** (`assets/title.jpg`), npm / license /
+  DSH badges, and English↔中文 cross-links (the English README had none). `assets/` sits outside
+  the manifest `files` whitelist, so the banner renders on the GitHub page only — never in the npm
+  package or the STORE review surface.
+- `dsh.compatibility` now declares `node` explicitly (`^22.19.0 || >=24.0.0`, mirroring `engines`),
+  so the declared Node range is stated in the same `dsh` namespace the STORE reads, not only in
+  `engines`.
+- Documentation counts were re-pinned to a full re-run on the current tree (137 composition +
+  396 unit, 2026-10-11): the README pair, the `0.2.1-alpha.2` matrix row (whose “本次实测” still
+  carried the 0.2.1-era 133 + 375 counts), and the §5 conclusion. The matrix now also states the
+  **OS and Profile scope** of the one-time Profile acceptance (Windows, DSH NEXT Desktop; macOS /
+  Linux and other host shapes untested), and §4 gained a per-version comparison against the
+  STORE's four `dshOperations`: `install` / `start` / `uninstall` have records on
+  `0.2.1-alpha.2` × `0.3.0`; `rollback` is **unknown** (only the failed-install recovery path has
+  evidence); `0.2.1-alpha.1` has no one-time Profile operations — its `compatible` entry is test
+  evidence, not operation evidence.
+- SECURITY.md no longer claims `0.2.1-alpha.1` is the only reviewed version: both alpha releases
+  are named, with a pointer to the per-version matrix.
 
 Nothing here is a product-acceptance statement, and no real Profile was installed into or restarted.
 

@@ -1,6 +1,12 @@
 # DSH Tool Discovery
 
+![DSH Tool Discovery](assets/title.jpg)
+
 [English](README.md) | 中文
+
+[![npm version](https://img.shields.io/npm/v/dsh-tool-discovery)](https://www.npmjs.com/package/dsh-tool-discovery)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![DSH](https://img.shields.io/badge/DSH-0.2.1--alpha.1%20%7C%200.2.1--alpha.2-informational)](plugin/docs/10-store-compatibility.md)
 
 与其把上百个工具一次性交给模型，不如只给几个小型控制入口，让模型按需加载真正需要的能力。
 
@@ -36,7 +42,7 @@ agent 自己 preset 登记的工具（默认保留）。其它普通工具首轮
 ## 环境要求
 
 - DSH Core **`0.2.1-alpha.1` 或 `0.2.1-alpha.2`**——声明的 peer 范围正是这两个发行版，且都声明为
-  `compatible`：`0.2.1-alpha.1` 是发布基线；`0.2.1-alpha.2` 在当前宿主上通过全套测试（组合 133 + 单元 386），
+  `compatible`：`0.2.1-alpha.1` 是发布基线；`0.2.1-alpha.2` 在当前宿主上通过全套测试（组合 137 + 单元 396），
   门禁已计入该版本的子代理常驻语义变化。逐版本矩阵、证据与一次性 Profile 记录见
   [上架与兼容声明](plugin/docs/10-store-compatibility.md)。其它版本未测试。
 - 原生 **`@deepseek-ai/schemastery`** peer 是配置面与设置面板的前提。缺少它时发现内核仍正常运行，

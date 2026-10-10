@@ -27,13 +27,17 @@ DSH STORE 对每个第三方插件都从**固定 Commit**读取 manifest、Bundl
 |---|---|---|
 | `0.2.0-rc.2` | `unknown` | 本机无该版本安装，未测 |
 | `0.2.1-alpha.1` | `compatible` | 发布基线：`0.2.1`–`0.2.2` 的单元与组合测试在该 Core 上通过（结论集见 [当前状态](<05-current-status.md>)）。**本次未复跑**——本机 Core 已是 `0.2.1-alpha.2` |
-| `0.2.1-alpha.2` | `compatible` | 本次实测：**133/133 组合测试**与 375/375 单元测试在当前宿主上通过，一次性 Profile 的安装/启动/卸载/恢复全通（§4）。该版本改变了本地 fork 子代理的常驻语义，门禁的取证方式已随之更新（§5） |
+| `0.2.1-alpha.2` | `compatible` | 实测：**137/137 组合测试**与 396/396 单元测试在当前宿主上通过（2026-10-11 于 `0.3.0` 树复跑；2026-10-10 首测为 133 组合 + 375 单元，其后测试集扩充），一次性 Profile 的安装/启动/卸载/恢复全通（§4）。该版本改变了本地 fork 子代理的常驻语义，门禁的取证方式已随之更新（§5） |
 
 peer 范围（安装准入）与上表是**两件不同的事**：`peerDependencies` 写
 `0.2.1-alpha.1 || 0.2.1-alpha.2`，表示这两个运行时都允许安装；`dshReleases` 表示作者掌握的兼容证据。
 未声明的版本一律按未知处理，不用范围推断兼容。
 
 Node：`engines.node` = `^22.19.0 || >=24.0.0`，与 CI 的 `22.19.0` 下限矩阵一致。
+
+系统与 Profile 范围：一次性 Profile 验收（§4）在 Windows 的 DSH NEXT Desktop（随包 CLI）上完成；
+macOS / Linux 与其它宿主形态未测，不声明兼容。承诺范围是单用户、单 profile（见根 README 的
+「Scope of the promise」）。
 
 ## 3. 上架契约逐项对照
 
@@ -118,6 +122,12 @@ Node：`engines.node` = `^22.19.0 || >=24.0.0`，与 CI 的 `22.19.0` 下限矩�
 
 **未做**：真实 Profile 安装、GUI 可见性、真实 provider 出站请求、跨进程重启的会话恢复。
 
+**与 STORE `dshOperations` 四项的对照（逐版本）**：`install` / `start` / `uninstall` 三项在
+`0.2.1-alpha.2` × `0.3.0` 产物上有上表记录；`rollback` 只有**失败安装路径**的证据（对照组：
+`0.2.2` 被拒后 Profile 的 `package.json` / `pnpm-lock.yaml` / `node_modules` 被自动恢复），
+成功安装后的显式回滚操作未单独执行，记 **unknown**。`0.2.1-alpha.1` 上未执行过任何一次性
+Profile 操作，四项均记 **unknown**——§2 对它的 `compatible` 是测试证据，不是操作证据。
+
 ## 5. `0.2.1-alpha.2` 的宿主语义变更与取证方式
 
 alpha.2 改变了本地 fork 子代理的生命周期：`result` 落定后，idle 的本地 fork 子 Agent 会从 live
@@ -133,7 +143,8 @@ runtime；此后该会话按**顶层**会话恢复 —— `epoch-policy.isRuntim
 | `TF1` | 运行时观测改为**按该会话自己的持久记录重建 runtime** 后再看。`applied` 的期望由「恰好 0」改为「≤1 且必须来自子自己的 `op_tf1-child-load`」——重建会重放子自己那一条对；继承对仍由 `rejected === 0` 与 `selected` 的 name / `operationId` 精确钉住 |
 | `L03` | 同上：按记录重建后再观测恢复结果，`selected` 仍只允许子自己的 `op_c-load`，`rejected === 0` |
 
-结论：`0.2.1-alpha.2` 上组合 **133/133**、单元 **375/375** 全部通过。宿主语义变化记录在测试注释里，
+结论：`0.2.1-alpha.2` 上组合 **137/137**、单元 **396/396** 全部通过（2026-10-11 复跑；2026-10-10
+首测为 133 + 375，其后测试集扩充）。宿主语义变化记录在测试注释里，
 断言强度未降低 ——「继承前缀的对绝不进入子的折叠管线」这条性质仍由精确的 `selected` /
 `operationId` / `rejected` 断言保证。
 

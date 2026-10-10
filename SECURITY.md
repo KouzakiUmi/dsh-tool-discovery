@@ -19,8 +19,9 @@ the GitHub profile DM as the working channel and confirm it with the reporter.
 
 Please include, as far as you can:
 
-- the DSH core version the finding reproduces on (`0.2.1-alpha.1` is the only version this code
-  has been reviewed against),
+- the DSH core version the finding reproduces on (`0.2.1-alpha.1` and `0.2.1-alpha.2` are the
+  versions this code has been reviewed against — see
+  [STORE compatibility](plugin/docs/10-store-compatibility.md) for the per-version matrix),
 - the plugin commit,
 - the tool sequence and inputs,
 - what a caller should have been able to do, and what happened instead.

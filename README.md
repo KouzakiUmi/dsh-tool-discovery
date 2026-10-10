@@ -1,5 +1,13 @@
 # DSH Tool Discovery
 
+![DSH Tool Discovery](assets/title.jpg)
+
+English | [中文](README.zh.md)
+
+[![npm version](https://img.shields.io/npm/v/dsh-tool-discovery)](https://www.npmjs.com/package/dsh-tool-discovery)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![DSH](https://img.shields.io/badge/DSH-0.2.1--alpha.1%20%7C%200.2.1--alpha.2-informational)](plugin/docs/10-store-compatibility.md)
+
 Give a model a few small control entries instead of hundreds of tools, and let it load the
 capability it actually needs, on demand.
 
@@ -45,8 +53,8 @@ model action at all — only a successful compaction clears the disclosed set.
 
 - DSH Core **`0.2.1-alpha.1` or `0.2.1-alpha.2`** — the declared peer range is exactly these two
   releases, and both are declared `compatible`. `0.2.1-alpha.1` is the release baseline every
-  earlier result was taken on; `0.2.1-alpha.2` passes the full suite on the current host (133
-  composition + 386 unit), with the gates accounting for that release's fork-subagent residency
+  earlier result was taken on; `0.2.1-alpha.2` passes the full suite on the current host (137
+  composition + 396 unit), with the gates accounting for that release's fork-subagent residency
   change. The per-version matrix, its evidence, and the one-time Profile record are in
   [STORE compatibility](plugin/docs/10-store-compatibility.md). Any other version is untested.
 - The native **`@deepseek-ai/schemastery`** peer is required for the config surface and the settings
