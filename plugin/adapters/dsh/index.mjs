@@ -18,7 +18,7 @@ import { randomBytes } from 'node:crypto';
 // 界面语言文件由**本层**读（内核 host-locale 是纯函数，不持有 I/O 能力）。
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { CONTROLLED_CATEGORIES, DomainError, ENTRY_TOOL_NAMES, createDiscoveryEngine, createText, detectHostLocale, setDomainLocale } from '../../domain/index.mjs';
+import { AUTO_LOCALE, CONTROLLED_CATEGORIES, DomainError, ENTRY_TOOL_NAMES, createDiscoveryEngine, createText, detectHostLocale, setDomainLocale } from '../../domain/index.mjs';
 import { createEntryDefinitions } from './entries.mjs';
 import { createGuard } from './guard.mjs';
 import { createLifecycle } from './lifecycle.mjs';
@@ -107,9 +107,18 @@ function preferenceFromPatch(text) {
 /**
  * 语言探测的全部注入面。每一项都可能缺（web/headless、更老的宿主），缺了就回落 en ——
  * 这里不抛错、不伪造路径：探测失败只意味着"语言没跟上"。
+ *
+ * `localeOverride` 钉住语言（非 `auto`）时**两个来源都不读**：域层会直接返回 override，
+ * 任何来源值都用不上 —— 与其读了再扔，不如一开始就不碰文件系统（README 权限表与
+ * 10-store §3.1 的承诺：「skips both reads entirely」）。判定规则与 detectHostLocale
+ * 的 override 分支一致（trim + 小写后再比哨兵）。
  * @returns {Promise<{localeFile:string|null, localePreference:string|null, profileKey:string|null}>}
  */
-async function localeSourcesOf(ctx) {
+export async function localeSourcesOf(ctx, localeOverride) {
+  const override = typeof localeOverride === 'string' ? localeOverride.trim().toLowerCase() : '';
+  if (override.length > 0 && override !== AUTO_LOCALE) {
+    return { localeFile: null, localePreference: null, profileKey: null };
+  }
   const profile = profileContextOf(ctx);
   let localeFile = null;
   if (typeof profile?.home === 'string' && profile.home.length > 0) {
@@ -330,7 +339,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
     // 显式给出语言时不再读文件。路径由宿主 API 解析、读取由本层注入 —— 内核不持有 I/O 能力
     // （见 host-locale.mjs）。任何失败回落 en。
     const locale = detectHostLocale({
-      ...(await localeSourcesOf(ctx)),
+      ...(await localeSourcesOf(ctx, config.locale)),
       localeOverride: config.locale,
       readFile: readLocaleFile,
       log,

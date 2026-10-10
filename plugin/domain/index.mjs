@@ -8,7 +8,7 @@
 export { PROTOCOL_VERSION, CONTROLLED_CATEGORIES, DEFAULT_BUDGETS, OPTIONAL_LIMIT_KEYS, ENTRY_TOOL_NAMES, ERROR_CODES, errorCodes, MATCH_REASONS, SIGNAL_WEIGHTS, SYNONYM_INDEX } from './constants.mjs';
 export { CORE_TOOL_NAMES } from './core-tools.mjs';
 export { createText, normalizeLocale, tableFor, SUPPORTED_LOCALES, DEFAULT_LOCALE, setDomainLocale, domainText } from './locale.mjs';
-export { detectHostLocale } from './host-locale.mjs';
+export { detectHostLocale, AUTO_LOCALE } from './host-locale.mjs';
 export { DomainError, isDomainError, toDomainError } from './errors.mjs';
 export { canonicalJson, sha256Hex, digestOf, utf8Bytes, deepEqualCanonical, deepFreeze } from './canonical.mjs';
 export { clampCodePoints, isPlainObject, sortBy, createMutex } from './util.mjs';

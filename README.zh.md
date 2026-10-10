@@ -42,7 +42,7 @@ agent 自己 preset 登记的工具（默认保留）。其它普通工具首轮
 ## 环境要求
 
 - DSH Core **`0.2.1-alpha.1` 或 `0.2.1-alpha.2`**——声明的 peer 范围正是这两个发行版，且都声明为
-  `compatible`：`0.2.1-alpha.1` 是发布基线；`0.2.1-alpha.2` 在当前宿主上通过全套测试（组合 137 + 单元 396），
+  `compatible`：`0.2.1-alpha.1` 是发布基线；`0.2.1-alpha.2` 在当前宿主上通过全套测试（组合 137 + 单元 401），
   门禁已计入该版本的子代理常驻语义变化。逐版本矩阵、证据与一次性 Profile 记录见
   [上架与兼容声明](plugin/docs/10-store-compatibility.md)。其它版本未测试。
 - 原生 **`@deepseek-ai/schemastery`** peer 是配置面与设置面板的前提。缺少它时发现内核仍正常运行，
@@ -199,6 +199,8 @@ DSH profile；但会在被 Git 忽略的 `plugin/fixtures/tmp/` 下创建临时�
   "requireTrustedEpochForSubagents": false, // 仅主严格开关也开启时对子代理强制校验
   "frameworkRetained": [],  // 投影必须保留的可信框架工具名
   "categoryConfig": {},     // 本地化类别卡
+  "tolerantLoadProtected": true, // 容忍重复加载已在册的工具（幂等）
+  "respectAlwaysVisible": false, // false（默认）：核心工具自动常驻；true：你的名单就是上限
   "budgets": null,          // 见下；null 表示不覆盖
   "locale": "auto"          // "auto" 跟随桌面语言；写 "zh"/"en" 可钉住语言并跳过读文件
 }

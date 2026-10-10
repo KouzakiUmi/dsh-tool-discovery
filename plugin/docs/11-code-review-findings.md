@@ -250,3 +250,29 @@
 `SG2/SG3` 曾因 fixture 缺素材而空转，我新加的 `RV5` 又重演了一次同款形态，而 `RV2` 的空转已经存在
 很久却一直没被发现。因此新增门禁时，"前置素材真的到位了吗"必须和断言本身一样被钉住 —— 本轮的
 整改就是把这一条补进每一处。
+
+## 6. 第三轮只读审查（GLM-5.3 Flash，范围 `v0.2.2..6781dcb`，2026-10-11）
+
+独立复核整改提交（git 实测 10 个提交，含任务清单遗漏的 CI 动作修复与兼容契约声明两项）。结论：
+**开关链路、三个 bug 修复、宿主事实断言、blob 字节数全部通过**；宿主事实（profileContext 形状、
+`dsh-home-paths` 导出、desktop-locale.json 的 per-profile 键、`locale.preference` 设置项形状）
+逐项与安装树核对一致。
+
+本轮修复（随发布提交入库）：
+
+| 项 | 处置 |
+|---|---|
+| locale 钉住「skips both reads entirely」与实现不符：`localeSourcesOf` 无条件 `readFileSync(patchPath)`，只跳过了 desktop-locale.json | 代码兑现文档：`localeSourcesOf(ctx, localeOverride)` 钉住时短路返回空来源；新增适配层门禁 `locale-sources.test.mjs`（钉住 → 深比较全 null；patch 文件真实存在且含 `preference: en`，删掉短路分支用例即红 —— 变异已实测） |
+| CHANGELOG "no assertion was loosened" 与 §5「applied 期望由恰好 0 改为 ≤1」字面冲突 | 措辞改为 "no property was loosened"（性质未放宽，单断言确有放宽） |
+| README.zh 配置 JSON 示例缺 `tolerantLoadProtected` / `respectAlwaysVisible` 两行 | 补齐，与 README.md 等价 |
+
+记录在案、未改动（低危边缘）：
+
+- `preferenceFromPatch` 与宿主语义的边缘差异：不检查条目 `disabled: true`、不要求 preference
+  位于 `config:` 之下、多个 locale 条目取第一条（宿主取最后）。仅异常 patch 下语言跟随偏离宿主，
+  后果限于文案语言且未知值回落 en。
+- `validateConfig` 对 `tolerantLoadProtected`/`locale` 不做 volatile unwrap（`respectAlwaysVisible`
+  做了）：当前两字段均非 volatile，行为正确；日后若加 `.volatile()` 会静默失效，`CP1` 只钉键存在
+  不钉 unwrap。
+- 单元测试数三处口径矛盾（386/381/375 vs 实测）已由文档轮统一 re-pin；本轮新增 5 个
+  locale-sources 门禁后为 **401 单元**（137 组合不变），各处计数已同步。

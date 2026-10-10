@@ -43,8 +43,8 @@ kernel so the kernel no longer owns any I/O.
 - That release also releases an idle local-fork subagent once its turn settles, so the three
   real-fork gates take their evidence differently: `SE3` uses a new mock-provider **response gate**
   (`holdNextResponse`) to pin the subagent's active window, and `TF1` / `L03` observe the runtime
-  rebuilt from that session's own durable record. All **137 composition + 396 unit** tests pass on
-  the current host, and no assertion was loosened — "an inherited prefix pair never folds into the
+  rebuilt from that session's own durable record. All **137 composition + 401 unit** tests pass on
+  the current host, and no property was loosened — "an inherited prefix pair never folds into the
   child" is still pinned by exact `selected` / `operationId` / `rejected` assertions.
 - `plugin/domain/host-locale.mjs` no longer owns any I/O: it imports neither `node:fs` nor
   `process.env`. The adapter resolves the path through the host's `@deepseek-ai/dsh-home-paths` and
@@ -55,7 +55,7 @@ kernel so the kernel no longer owns any I/O.
   dependency) are real capabilities, and both are disclosed in the README.
 - The README pair now carries an explicit **Permissions and external dependencies** table (file
   reads/writes, session data, network, commands, credentials, logging) as the listing contract
-  requires; unit suite is 396 test cases (was 375).
+  requires; unit suite is 401 test cases (was 375).
 - The one-time Profile record for install / start / uninstall / recovery, the per-version matrix, its
   evidence, and the DSH STORE automatic-review mirror (selector, bounds, permission signals, and the
   deterministic reasons that remain) are recorded in
@@ -96,7 +96,7 @@ kernel so the kernel no longer owns any I/O.
   so the declared Node range is stated in the same `dsh` namespace the STORE reads, not only in
   `engines`.
 - Documentation counts were re-pinned to a full re-run on the current tree (137 composition +
-  396 unit, 2026-10-11): the README pair, the `0.2.1-alpha.2` matrix row (whose “本次实测” still
+  401 unit, 2026-10-11): the README pair, the `0.2.1-alpha.2` matrix row (whose “本次实测” still
   carried the 0.2.1-era 133 + 375 counts), and the §5 conclusion. The matrix now also states the
   **OS and Profile scope** of the one-time Profile acceptance (Windows, DSH NEXT Desktop; macOS /
   Linux and other host shapes untested), and §4 gained a per-version comparison against the
@@ -106,6 +106,12 @@ kernel so the kernel no longer owns any I/O.
   evidence, not operation evidence.
 - SECURITY.md no longer claims `0.2.1-alpha.1` is the only reviewed version: both alpha releases
   are named, with a pointer to the per-version matrix.
+- A third read-only review (GLM-5.3 Flash) confirmed the switch chain, the three bug fixes, and the
+  host-fact assertions, and caught one promise the code did not keep: pinning `locale` to `zh`/`en`
+  still read the profile patch (only the desktop-locale file was skipped). `localeSourcesOf` now
+  short-circuits to empty sources when the language is pinned — both reads skipped as documented —
+  pinned by a new adapter-level gate (`plugin/tests/unit/locale-sources.test.mjs`, five cases; the
+  pinned case fails against the pre-fix behavior).
 
 Nothing here is a product-acceptance statement, and no real Profile was installed into or restarted.
 
