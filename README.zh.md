@@ -36,7 +36,7 @@ agent 自己 preset 登记的工具（默认保留）。其它普通工具首轮
 ## 环境要求
 
 - DSH Core **`0.2.1-alpha.1` 或 `0.2.1-alpha.2`**——声明的 peer 范围正是这两个发行版，且都声明为
-  `compatible`：`0.2.1-alpha.1` 是发布基线；`0.2.1-alpha.2` 在当前宿主上通过全套测试（组合 133 + 单元 375），
+  `compatible`：`0.2.1-alpha.1` 是发布基线；`0.2.1-alpha.2` 在当前宿主上通过全套测试（组合 133 + 单元 381），
   门禁已计入该版本的子代理常驻语义变化。逐版本矩阵、证据与一次性 Profile 记录见
   [上架与兼容声明](plugin/docs/10-store-compatibility.md)。其它版本未测试。
 - 原生 **`@deepseek-ai/schemastery`** peer 是配置面与设置面板的前提。缺少它时发现内核仍正常运行，

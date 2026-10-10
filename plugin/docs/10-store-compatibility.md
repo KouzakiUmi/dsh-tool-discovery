@@ -68,7 +68,7 @@ Node：`engines.node` = `^22.19.0 || >=24.0.0`，与 CI 的 `22.19.0` 下限矩�
 | 源码面选择器 | `explicit-files-conservative-superset`（`files` 全是字面路径/目录，未回退到全包） | 必须受支持 |
 | 扫描完整性 | `scanComplete: true`（33 个运行时文件全部读完，字节数与树一致） | 必须完整 |
 | 运行时文件数 | 33 | 240 |
-| 运行时字节合计 | 411,729 | 2,097,152 |
+| 运行时字节合计 | 403,532 | 2,097,152 |
 | 最大单文件 | 44 KB 量级 | 262,144 |
 | 权限信号 | `files: true`；`network` / `commands` / `credentials` / `protectedDsh` / 原生制品 全为 `false` | 自动批准要求全为 `false` |
 | 复核信号 | `toolViewExtension: false`、`dynamicModuleLoading: false` | — |
