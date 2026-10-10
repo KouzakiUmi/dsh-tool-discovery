@@ -60,6 +60,14 @@ kernel so the kernel no longer owns any I/O.
   evidence, and the DSH STORE automatic-review mirror (selector, bounds, permission signals, and the
   deterministic reasons that remain) are recorded in
   [`plugin/docs/10-store-compatibility.md`](plugin/docs/10-store-compatibility.md).
+- A code-review round — three independent read-only reviews plus a mirror of DSH STORE's own
+  fixed-source rules — closed two fail-closed gaps in `journal`'s restore terminal exits, an O(L²)
+  query-term grouping in `search`, a `pending` leak in `engine.destroySession`, and the
+  interface-language probe's wrong assumption that `desktop-locale.json` is keyed by a `desktop`
+  field rather than by **profile name** (it now prefers the host's own `locale.preference`). It also
+  fixed the CI gate that made the composition and quality jobs unreachable. Findings, the fixed
+  items with the gate that pins each one, and the four items deliberately left for a product
+  decision are in [`plugin/docs/11-code-review-findings.md`](plugin/docs/11-code-review-findings.md).
 
 Nothing here is a product-acceptance statement, and no real Profile was installed into or restarted.
 
