@@ -87,6 +87,14 @@ export function buildConfig(Schema) {
     tolerantLoadProtected: Schema.boolean()
       .default(true)
       .description('Tolerate loading already-active baseline tools idempotently instead of throwing protectedNotLoadable. Resolves conflict deadlocks when models attempt to load system or preset tools.'),
+    // 「alwaysVisible 是下限还是精确集合」的开关。默认关闭 = 现状：当前 scope 真实提供的
+    // DSH 核心工具会被自动并入常驻名单，并且不经 load 即可执行——这避免了 TOOL_NOT_LOADED
+    // 往返，也让上游新增的核心工具不必等本插件更新名单。打开后 alwaysVisible（与 preset
+    // 保留项）就是**精确集合**：没列出的核心工具必须像别的工具一样先 tool_load。
+    // 非 volatile：注入行为在周期开始时确定，改了要重载插件（与 requireTrustedEpoch 同类）。
+    respectAlwaysVisible: Schema.boolean()
+      .default(false)
+      .description('Make alwaysVisible an exact set, DSH core tools included. Off by default: core tools the current scope actually offers are auto-enrolled and admitted without a load (fewer round-trips, new upstream core tools keep working). Turn it on when your list should be the ceiling — a core tool you left out then has to be loaded like any other tool. Changing this reloads the plugin.'),
     // budgets 默认 null = 完全不覆盖，走 domain 的冻结默认值（budgets.mjs 对
     // undefined/null 都回落 DEFAULT_BUDGETS）。必须显式允许 null：用户把
     // "关闭覆盖"写成 null 不该被 schema 拒掉。schemastery 没有 `Schema.null`，

@@ -84,6 +84,13 @@ catalog, the projection, the guards — works without it.
 language path) are optional: when absent, the corresponding feature degrades honestly instead of
 being simulated.
 
+**Scope of the promise.** This plugin is built and verified for a **single user on a single
+profile** — the installation it is mounted into. It does **not** claim to hold a boundary across a
+shared, multi-user, remote, or multi-tenant deployment: session history and the trusted-epoch store
+are trusted *inputs*, and whoever can write them can influence what a session may execute. Treat it
+as a disclosure gate inside one profile, not as a wall between users. If you need that wall, put it
+in the host (per-user accounts, sandboxing, filesystem permissions), not here.
+
 ## Install and update
 
 The GitHub Release build asset remains available for DSH profile installs: a green `main` run packs
@@ -233,6 +240,8 @@ surface:
   "requireTrustedEpochForSubagents": false, // also enforce on children only if strict is on
   "frameworkRetained": [],  // trusted framework-mandated names the projection must keep
   "categoryConfig": {},     // localised category cards
+  "tolerantLoadProtected": true, // tolerate loading an already-resident tool (idempotent)
+  "respectAlwaysVisible": false, // false (default): core tools are auto-enrolled; true: your list is the ceiling
   "budgets": null,          // see below; null means no overrides
   "locale": "auto"          // "auto" follows the desktop language; "zh"/"en" pins it and skips the file read
 }
@@ -261,7 +270,8 @@ Global registration does not promise execution permission in every session.
 - **Always allow tools specified by the preset** (`alwaysAllowPresetTools`, default `true`): retain only tools registered by the exact preset revision the current agent joined, intersected with its native-visible capabilities. Other presets and later agent-only tools do not become trusted. Independent of manual injection; uses the same new-session/successful-compaction boundary. It preserves the initial set, not arbitrary execution or native permission bypass.
 - **Require trusted epoch records** (`requireTrustedEpoch`, default `false`): default mode does not access the trusted epoch store or block sessions for missing records/storageDomain. Initial tools come from the configuration snapshot, never from outbound headers. Enabling reloads the plugin and requires durable records: an existing session without one needs a successful user `/compact`; storage failures also block. Disabling restores sessions missing records but does **not** offer strict mode's frozen-list guarantee across restarts.
 - **Also require trusted epochs for subagents** (`requireTrustedEpochForSubagents`, default `false`): only effective when `requireTrustedEpoch` is on. Live runtime-owned children otherwise use the configuration baseline without reading/writing epoch records or requiring `/compact`, including resumed legacy child sessions. Runtime ownership—not header/meta tags or durable fork lineage—identifies a child. A fork resumed as a top-level agent still follows the main strict switch. Changing this ordinary setting reloads the plugin, so disabling it recovers legacy children without a synthetic compaction. Enabling it explicitly may block old children; subagents cannot perform the user's `/compact` themselves.
-- **Interface language** (`locale`, default `auto`): `auto` reads the desktop language once at activation and falls back to `en` when it cannot be read (missing file, bad JSON, unsupported language) — falling back is always logged, never silent. `zh`/`en` pins the model-visible copy language and **skips that read entirely**. Not a volatile field: a change takes effect when the plugin reloads.
+- **Interface language** (`locale`, default `auto`): `auto` reads the host's own `locale.preference` from the active profile patch, and otherwise falls back to the desktop language file — any failure (missing, bad JSON, unsupported language) falls back to `en` and is always logged, never silent. `zh`/`en` pins the model-visible copy language and **skips those reads entirely**. Not a volatile field: a change takes effect when the plugin reloads.
+- **Make the initial list an exact set** (`respectAlwaysVisible`, default `false`): **off**, DSH core tools that the current scope actually offers are auto-enrolled and can be called without a load — fewer round-trips, and a new upstream core tool keeps working without waiting for a plugin update. **On**, your `alwaysVisible` (plus preset retention) is the *ceiling*: a core tool you left out has to be loaded like any other tool. Refusing it is not a deadlock — an omitted core tool is simply **not in the protected baseline**, so one ordinary `tool_load` admits it on the next request (`tolerantLoadProtected` is about something else: re-loading a tool that is *already* resident stays idempotent). Two caveats: a session already running under strict mode keeps admitting what its durable record already lists until the next user `/compact`; and this is not a volatile field — changing it reloads the plugin.
 - Eligibility, protocol receipts, corrupt-history checks and execution guards remain enforced. The three discovery entries cannot be disabled.
 
 Rejected writes show an error, not a success notice. This is the native config surface, with no legacy wrapper/UI compatibility promise. Browser rendering and online installation need separate acceptance; workspace tests do not imply deployment.
@@ -304,6 +314,29 @@ Turning a cap **on** is a real trade-off, not a free safety win:
 - **Limits are not optimisation.** A cap that makes a task fail or take longer has not made
   anything cheaper. Default recommendation: leave them off, and set one only when you have a
   concrete reason (a deployment that must bound prompt growth, for example).
+
+**A starting profile, if you do want to bound prompt growth.** This plugin exists to keep the tool
+block small; nothing is ever evicted to make room, so without a cap an eager model can keep loading
+tools until a compaction. If you would rather the plugin hold the line than rely on the model
+self-managing, start here and adjust from observed behaviour:
+
+```jsonc
+"budgets": {
+  "maxActiveTools": 12,          // how many on-demand tools may stay resident at once
+  "maxActiveSchemaBytes": 49152, // 48 KiB of frozen schema for those tools
+  "maxLoadBatch": 4,             // tools per single load call
+  "maxQueryCodePoints": 512,     // reject absurdly long search queries
+  "maxListResultBytes": 4096     // bound name listings *and* the state projection
+}
+```
+
+The first three are **guard rails**: they are the mechanism that actually delivers the plugin's
+promise, and because nothing is ever unloaded, turning them off means a long session only grows. The
+last two are **interaction bounds**: they protect the host from one pathological call rather than
+changing ordinary usage. `maxListResultBytes` now also covers `view: "state"`: when it would be
+exceeded, the diagnostic `invalidated` list is trimmed first (with an explicit
+`invalidatedTruncated` marker) — `selected` and `advertised` are never trimmed — and only if even an
+empty one does not fit does the call fail with `BUDGET_EXCEEDED`.
 
 What stays bounded even with every cap disabled: the default page size (`defaultListLimit`, 20),
 the default candidate count (`defaultSearchLimit`, 5), pagination, and the TTLs. Disabling a hard

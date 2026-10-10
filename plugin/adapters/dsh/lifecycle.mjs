@@ -52,6 +52,19 @@ export function createLifecycle(deps) {
    * 即使用户的 profile/配置因历史原因未包含某些新增核心工具（如 subagent、subagent_fork 等动态注入工具），
    * 只要当前 scope 真实装载了它们，运行时自动将其识别并纳入常驻名单，彻底杜绝 TOOL_NOT_LOADED。
    */
+  /**
+   * `respectAlwaysVisible` 的当前值。
+   *
+   * 兼容 volatile 引用与非 volatile 布尔两种形态（与 `initialToolsEnabled` 同一读法）。
+   * 打开时 `alwaysVisible`（加 preset 保留项）就是**精确集合**：核心工具不再被自证补入，
+   * guard 侧也同步不再免披露放行。默认关闭 = 现状。
+   */
+  function respectAlwaysVisible() {
+    const raw = config.respectAlwaysVisible;
+    const value = raw !== null && typeof raw === 'object' && typeof raw.get === 'function' ? raw.get() : raw;
+    return value === true;
+  }
+
   function currentAlwaysNames(agentScope) {
     const enabled = typeof config.initialToolsEnabled?.get === 'function'
       ? config.initialToolsEnabled.get() : config.initialToolsEnabled;
@@ -61,8 +74,11 @@ export function createLifecycle(deps) {
     const preset = typeof deps.getPresetTools === 'function' ? deps.getPresetTools(agentScope) : [];
     const candidates = new Set([...configured, ...preset]);
 
-    // 运行时装载自证：自省当前 scope 实际装载的核心系统工具
-    if (enabled !== false && ctx?.tools && typeof ctx.tools.view === 'function' && agentScope !== undefined) {
+    // 运行时装载自证：自省当前 scope 实际装载的核心系统工具。
+    // `respectAlwaysVisible` 打开时跳过 —— 那种模式下用户的名单是上限，不在名单里的核心工具
+    // 必须像其它工具一样先 tool_load（代价是可能多一次往返，换取"配置真的生效"）。
+    if (respectAlwaysVisible() !== true
+      && enabled !== false && ctx?.tools && typeof ctx.tools.view === 'function' && agentScope !== undefined) {
       try {
         const view = ctx.tools.view(agentScope);
         const visible = view?.visible;

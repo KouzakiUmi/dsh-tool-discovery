@@ -68,6 +68,26 @@ kernel so the kernel no longer owns any I/O.
   fixed the CI gate that made the composition and quality jobs unreachable. Findings, the fixed
   items with the gate that pins each one, and the four items deliberately left for a product
   decision are in [`plugin/docs/11-code-review-findings.md`](plugin/docs/11-code-review-findings.md).
+- The open question "can a user narrow down the core tools?" is answered with a **switch that is off
+  by default** (`respectAlwaysVisible`). Off keeps today's behaviour — DSH core tools the current
+  scope actually offers are auto-enrolled and need no load. On makes the configured list the
+  *ceiling*: an omitted core tool has to be loaded like any other, and the guard no longer admits it
+  without disclosure. Both behaviours are wanted, so the deployment picks; being refused is not a
+  deadlock because an omitted core tool is **not in the protected baseline** — one ordinary
+  `tool_load` admits it on the next request (`tolerantLoadProtected` covers a different case:
+  re-loading a tool that is already resident).
+- Fixed a real configuration bug found while wiring that switch: `validateConfig` returns a **new
+  literal**, and three declared fields were missing from it — `tolerantLoadProtected`, `locale`, and
+  `respectAlwaysVisible`. Turning tolerant load off, or pinning a locale, had silently done nothing.
+  A new portable gate (`plugin/tests/unit/config-passthrough.test.mjs`) now compares every field
+  declared in `config.mjs` against that literal.
+- `tool_list`'s `loaded` view now paginates exactly like `available` (it used to discard the
+  validated `limit`/`cursor` and hard-code `truncated: false`, so `limit: 2` could return 30 names
+  while claiming that was everything), and `view: "state"` is now subject to `maxListResultBytes` —
+  it fails with `BUDGET_EXCEEDED` instead of silently returning an oversized body.
+- The README pair documents the new switch, a starting budget profile for bounding prompt growth
+  (guard-rail values vs interaction bounds), and scopes the deployment promise to a single user on a
+  single profile.
 
 Nothing here is a product-acceptance statement, and no real Profile was installed into or restarted.
 

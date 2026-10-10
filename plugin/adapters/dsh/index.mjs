@@ -143,6 +143,20 @@ function readLocaleFile(path) {
   return readFileSync(path, 'utf8');
 }
 
+/**
+ * 读 `respectAlwaysVisible`（兼容 volatile 引用与非 volatile 布尔）。
+ *
+ * 返回**函数**而不是值：守卫对象是长生命周期闭包，配置在运行中被改时不该读到过期快照。
+ * 默认 `false` = 现状（核心工具自动常驻且免披露放行）。
+ */
+function respectAlwaysVisibleReader(config) {
+  return () => {
+    const raw = config?.respectAlwaysVisible;
+    const value = raw !== null && typeof raw === 'object' && typeof raw.get === 'function' ? raw.get() : raw;
+    return value === true;
+  };
+}
+
 function requirePlainObject(value, what) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new DomainError('INCOMPATIBLE_COMPOSITION', `${what} 必须是对象。`);
@@ -193,6 +207,15 @@ export function validateConfig(raw) {
     throw new DomainError('INCOMPATIBLE_COMPOSITION', 'locale must be a string.');
   }
 
+  // respectAlwaysVisible：布尔开关（默认 false = 核心工具自动常驻且免披露放行）。
+  // 与 initialToolsEnabled 同样先 unwrap volatile 引用再校验 —— 否则日后给该字段加 `.volatile()`
+  // 时激活会直接 INCOMPATIBLE_COMPOSITION，而读取器里那段"兼容 volatile"的分支永远走不到。
+  const respectAlwaysVisibleRaw = typeof config.respectAlwaysVisible?.get === 'function'
+    ? config.respectAlwaysVisible.get() : config.respectAlwaysVisible;
+  if (respectAlwaysVisibleRaw !== undefined && typeof respectAlwaysVisibleRaw !== 'boolean') {
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'respectAlwaysVisible must be a boolean.');
+  }
+
   // alwaysVisible：默认放行 DSH 自带工具，使过滤只作用于后装的插件/MCP 工具。
   //
   // 配了 schemastery Config 时这里是 **volatile 引用**而不是数组（设置面板的即时
@@ -238,6 +261,13 @@ export function validateConfig(raw) {
     // tool_load 重新加载 —— engine 的 protected 判据随之放开。三个发现入口不在
     // 这个字段里，由 ENTRY_TOOL_NAMES 单独保护，任何配置都动不了。
     alwaysVisible: Object.freeze(resolveAlwaysVisible(alwaysVisibleRaw)),
+    // 下面三个键曾经**漏在这个字面量里**。注意：本函数的返回值是 apply 阶段唯一的 config
+    // 视图（不是调用方传进来的原对象），所以漏掉的键等于"这个配置项不存在"——`tolerantLoadProtected`
+    // 因此长期只能取默认 true，显式关掉它无效；`locale` 的钉住同理。现在由
+    // plugin/tests/unit/config-passthrough.test.mjs 对着 config.mjs 的 schema 字段逐项钉住。
+    tolerantLoadProtected: config.tolerantLoadProtected !== false,
+    locale: typeof config.locale === 'string' ? config.locale : undefined,
+    respectAlwaysVisible: respectAlwaysVisibleRaw === true,
     // 保留该键仅为兼容既有配置；缺失 sessionQuery 已不再拒绝激活。
     allowMissingSessionQuery: config.allowMissingSessionQuery === true,
   };
@@ -511,7 +541,14 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       own(createProjection({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, log }));
 
       // ---- 6. guard（只增拒绝） ----
-      own(createGuard({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, locale, log }));
+      own(createGuard({
+        ctx,
+        lifecycle,
+        frameworkRetained: config.frameworkRetained,
+        respectAlwaysVisible: respectAlwaysVisibleReader(config),
+        locale,
+        log,
+      }));
 
       // ---- 7. session 与 registry 事件 ----
       own(ctx.on('session/event', (session, event) => lifecycle.onSessionEvent(session, event)));

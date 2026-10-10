@@ -149,6 +149,85 @@ test('F12 loaded 视图只列有效 selected', async () => {
   assert.deepEqual(shell.data.names, []);
 });
 
+test('F12b loaded 视图必须尊重 limit/cursor，不得谎报「这就是全部」', async () => {
+  const many = Array.from({ length: 25 }, (_, i) => binding({ name: `file_tool_${String(i).padStart(2, '0')}`, toolId: `t_lt_${i}`, namespace: 'files' }));
+  const { engine } = await makeEngine({ bindings: many });
+  const names = many.map((b) => b.name);
+  const op = nextOpId();
+  const res = await engine.handleLoad({ names }, SCOPE_A, { operationId: op });
+  assert.equal(res.response.ok, true, `前置：批量 load 必须成功：${JSON.stringify(res.response.error)}`);
+  engine.applyCanonicalPair({
+    seq: 1,
+    call: { operationId: op, tool: 'tool_load', input: { names } },
+    result: { isError: false, ok: true, payload: res.response.data.receipt },
+  }, SCOPE_A);
+
+  const first = engine.handleList({ view: 'loaded', category: 'files' }, SCOPE_A);
+  assert.equal(first.data.names.length, 20, '默认一页 20：loaded 必须与 available 走同一条分页规则');
+  assert.equal(first.data.truncated, true, '还有下一页时必须如实报 truncated');
+  assert.equal(typeof first.data.nextCursor, 'string', '必须给出续页游标');
+
+  const second = engine.handleList({ view: 'loaded', category: 'files', cursor: first.data.nextCursor }, SCOPE_A);
+  // 断言**内容**而不只是数量：offset 错位、重复、漏项这三类回归只验数量时全部是绿的。
+  assert.deepEqual(second.data.names, names.slice(20), '续页必须正好返回剩余项，不是重发也不是错位');
+  assert.equal(second.data.truncated, false, '最后一页必须报 truncated:false');
+  assert.deepEqual([...first.data.names, ...second.data.names], names, '两页并集必须等于全集且不重复');
+
+  const wide = engine.handleList({ view: 'loaded', category: 'files', limit: 25 }, SCOPE_A);
+  assert.deepEqual(wide.data.names, names, '显式 limit 必须被尊重（硬上限默认关闭）');
+});
+
+test('F12d loaded 游标绑定当时的名单：名单一变，旧游标必须失效', async () => {
+  // 顺序摘要是"名单一变旧游标即失效"这条确定性的**唯一载体**。把它换成常量之后本文件此前
+  // 全绿 —— 而那时旧游标会在**新名单**上按 offset 续读，调用方就会拿到重复或漏项。
+  const many = Array.from({ length: 30 }, (_, i) => binding({ name: `file_tool_${String(i).padStart(2, '0')}`, toolId: `t_lc_${i}`, namespace: 'files' }));
+  const { engine } = await makeEngine({ bindings: many });
+  const all = many.map((b) => b.name);
+
+  const op1 = nextOpId();
+  const res1 = await engine.handleLoad({ names: all.slice(0, 25) }, SCOPE_A, { operationId: op1 });
+  assert.equal(res1.response.ok, true);
+  engine.applyCanonicalPair({
+    seq: 1,
+    call: { operationId: op1, tool: 'tool_load', input: { names: all.slice(0, 25) } },
+    result: { isError: false, ok: true, payload: res1.response.data.receipt },
+  }, SCOPE_A);
+
+  const first = engine.handleList({ view: 'loaded', category: 'files' }, SCOPE_A);
+  assert.equal(first.data.truncated, true, '前置：必须有第二页，否则测不到游标');
+  const cursor = first.data.nextCursor;
+
+  // 名单变了：把剩下的 5 个也 load 进来。
+  const op2 = nextOpId();
+  const res2 = await engine.handleLoad({ names: all.slice(25) }, SCOPE_A, { operationId: op2 });
+  assert.equal(res2.response.ok, true);
+  engine.applyCanonicalPair({
+    seq: 2,
+    call: { operationId: op2, tool: 'tool_load', input: { names: all.slice(25) } },
+    result: { isError: false, ok: true, payload: res2.response.data.receipt },
+  }, SCOPE_A);
+
+  const stale = engine.handleList({ view: 'loaded', category: 'files', cursor }, SCOPE_A);
+  assert.equal(stale.ok, false, '名单变化后旧游标必须被拒绝，而不是在新名单上按 offset 续读');
+  assert.equal(stale.error.code, 'CURSOR_UNAVAILABLE');
+
+  // 正控制：重新翻页必须得到完整且不重复的新名单。
+  const page1 = engine.handleList({ view: 'loaded', category: 'files' }, SCOPE_A);
+  const page2 = engine.handleList({ view: 'loaded', category: 'files', cursor: page1.data.nextCursor }, SCOPE_A);
+  assert.deepEqual([...page1.data.names, ...page2.data.names], all, '重新翻页必须拿到完整、不重复的新名单');
+});
+
+test('F12c state 视图必须受 maxListResultBytes 约束，不得被静默绕过', async () => {
+  const open = await makeEngine();
+  assert.equal(open.engine.handleList({ view: 'state' }, SCOPE_A).ok, true, '默认（上限关闭）必须照常成功');
+
+  const capped = await makeEngine({ engineConfig: { budgets: { maxListResultBytes: 64 } } });
+  const r = capped.engine.handleList({ view: 'state' }, SCOPE_A);
+  assert.equal(r.ok, false, '状态响应超过上限时必须明确失败，而不是静默返回超限内容');
+  assert.equal(r.error.code, 'BUDGET_EXCEEDED');
+  assert.match(String(r.error.message), /\d+ bytes/, '错误消息必须带实测字节数，否则无法定位');
+});
+
 test('F12 state 视图返回 selected/advertised/invalidated 与预算', async () => {
   const { engine } = await makeEngine();
   const r = engine.handleList({ view: 'state' }, SCOPE_A);

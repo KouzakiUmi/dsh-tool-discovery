@@ -15,6 +15,11 @@ export function createGuard(deps) {
   const { ctx, lifecycle } = deps;
   const config = { locale: deps.locale };
   const frameworkRetained = new Set([...(deps.frameworkRetained ?? [])]);
+  // 「alwaysVisible 是下限还是精确集合」：由 index 层注入读取器。
+  // 默认关闭 = 现状（核心工具自动常驻，且不经 load 即可执行）。
+  const respectAlwaysVisible = typeof deps.respectAlwaysVisible === 'function'
+    ? deps.respectAlwaysVisible
+    : () => false;
   // 三入口与可信 framework 保留项由宿主配置背书，放行判据不受可信周期基线影响。
   // 严格模式的常驻工具只由 storageDomain 记录背书；默认模式使用配置快照，
   // 所以基线判据必须排在 alwaysNameSet 早退**之前**（见下）。
@@ -55,7 +60,13 @@ export function createGuard(deps) {
     // 运行时装载自证（方案 1 动态兜底）：
     // 若调用的工具属于官方核心工具（CORE_TOOL_NAMES），且宿主当前 agent scope 实际装载了它：
     // 说明它是原本就有的系统工具，动态补入常驻名单并放行，避免产生 TOOL_NOT_LOADED 冲突死锁。
-    if (CORE_TOOL_NAMES.includes(exec.name) && ctx.tools.get(exec.name, agent) !== undefined) {
+    //
+    // `respectAlwaysVisible` 打开时**不走这条路**：那种模式下用户的名单是上限，没列出的核心
+    // 工具必须像其它工具一样先 tool_load（名单层也同步不再自证补入）。被拒之后模型 load 一次
+    // 即可 —— 被排除的名字**不在**受保护的基线里，engine 的 protected 判据不会拦它。
+    // （`tolerantLoadProtected` 管的是另一件事：**已在名单里**的工具重复 load 保持幂等。）
+    if (respectAlwaysVisible() !== true
+      && CORE_TOOL_NAMES.includes(exec.name) && ctx.tools.get(exec.name, agent) !== undefined) {
       if (runtime.alwaysNameSet) runtime.alwaysNameSet.add(exec.name);
       // 可审计：这条放行**不**依赖可信记录、也不要求名字已在常驻集合 —— 它是"宿主自带的
       // 核心工具不被本插件阻断"这一信任边界。放行同时把名字补进常驻集合，因此它也是一次

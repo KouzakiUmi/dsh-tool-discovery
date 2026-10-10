@@ -11,9 +11,11 @@
 // 部署因此可以增删初始工具而无需改这个文件。某个宿主没有的名字无害：投影只保留该宿主真正
 // 提供的工具。
 //
-// 注意（已知语义边界）：适配层的"运行时装载自证"会在每次周期边界把 scope 内**可见**的核心
-// 工具重新并进常驻名单 —— 也就是说，把某个核心工具从 `alwaysVisible` 里删掉，只能影响
-// 初始注入，不能阻止它在边界之后回来。这条边界记在 plugin/docs/11-code-review-findings.md。
+// 注意（已知语义边界）：适配层的"运行时装载自证"会把当前 scope 内**可见**的核心工具并入常驻
+// 名单，并且不经 load 即可执行 —— 所以**默认情况下**把某个核心工具从 `alwaysVisible` 里删掉，
+// 只影响初始注入，不能阻止它回来。要让配置成为**上限**（没列出就必须先 load），把适配层的
+// `respectAlwaysVisible` 打开；该开关的两个分支、三个观测面与已记录的覆盖缺口见
+// plugin/docs/11-code-review-findings.md。
 export const CORE_TOOL_NAMES = Object.freeze([
   // shell
   'bash', 'pwsh',

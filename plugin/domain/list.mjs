@@ -197,6 +197,36 @@ export function navigationFootprint(cards) {
   };
 }
 
+/**
+ * 把状态投影塞进字节上限：**只裁 `invalidated`**（纯诊断段），逐条减少完整项直到装下。
+ *
+ * 为什么不是一律明确失败：`selected` / `advertised` 是执行与披露的事实，裁它们会改变含义；
+ * 但 `invalidated` 只增不减（state.mjs 的 `next.invalidated.set(...)`），长会话里它会单独把
+ * 整个 `view:"state"` 顶穿 —— 于是配了上限的部署会**永久**拿不到状态视图，直到一次成功压缩。
+ * 那是"开关看起来配上了、实际长期报错"，比没有上限更糟。
+ *
+ * 这是**带标记裁剪**，不是静默裁剪：返回值带 `invalidatedTruncated: true`，调用方知道这一段不全。
+ * 真装不下（连三段里最短的组合都超）时返回 `null`，由调用方按明确失败处理。
+ *
+ * 度量口径与出站一致：外壳由 adapter 用 `JSON.stringify` 序列化，这里也用同一口径，
+ * 避免 `canonicalJson`（对 `undefined`/NaN 抛错）与真实出站行为不一致。
+ *
+ * @param {{invalidated?: unknown[]}} payload
+ * @param {number|null} maxBytes
+ * @returns {object|null}
+ */
+export function fitStateWithinBudget(payload, maxBytes) {
+  const sizeOf = (value) => Buffer.byteLength(JSON.stringify(value), 'utf8');
+  if (maxBytes === null) return payload;
+  if (sizeOf(payload) <= maxBytes) return payload;
+  const invalidated = Array.isArray(payload.invalidated) ? payload.invalidated : [];
+  for (let keep = invalidated.length - 1; keep >= 0; keep -= 1) {
+    const candidate = { ...payload, invalidated: invalidated.slice(0, keep), invalidatedTruncated: true };
+    if (sizeOf(candidate) <= maxBytes) return candidate;
+  }
+  return null;
+}
+
 const LIST_VIEW_SET = new Set(['available', 'loaded', 'categories', 'state']);
 
 /** 供 adapter 用:校验 view 名。 */

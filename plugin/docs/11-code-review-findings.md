@@ -111,6 +111,23 @@
 
 三份分析分别由不同厂商路由独立完成（Anthropic / OpenAI / 智谱），口径与本文档相同：只读，不改文件。
 
+### 4.0 作者决策（2026-10-11）
+
+总原则：**很多问题不是问题 —— 做成开关、默认关闭、选择权交给用户。产品服务于用户，而不是代码正确性。**
+
+| 开放项 | 决策 | 落地 |
+|---|---|---|
+| §4.1 核心工具能否被配置收窄 | **做一个开关，两种行为都要** | 新增 Config `respectAlwaysVisible`（默认 `false` = 现状）。开启后 `alwaysVisible` 成为**上限**：名单层不再自证并集，guard 也不再免披露放行。门禁 `RV4` / `RV5`。 |
+| §4.2 冷恢复的授权边界 | **只承诺单用户、单 profile** | 不改恢复链路。在 README 的权限段写明「承诺范围」，把会话历史与可信周期存储列为**受信任输入**。 |
+| §4.3 默认上限 | **不默认打开，给设置建议** | 默认值不变；README 增加一组起步配方（护栏三项 + 交互两项），并说明为什么这样分。 |
+| §4.3 两处实现缺陷 | **照修**（否则用户配的开关会静默失效） | `loaded` 视图改为与 `available` 走同一条分页；`state` 视图纳入 `maxListResultBytes`，超限以 `BUDGET_EXCEEDED` 明确失败。门禁 `F12b` / `F12c`。 |
+
+**实施中额外发现并修复的真实缺陷**：`validateConfig` 返回的是一个**新字面量**（不是调用方传入的原对象），
+而其中漏掉了三个已声明的字段 —— `tolerantLoadProtected`、`locale`、`respectAlwaysVisible`。
+也就是说"关掉 tolerantLoadProtected"和"钉住 locale"此前**都是假的**（配置项静默不存在）。
+新门禁 `plugin/tests/unit/config-passthrough.test.mjs` 现在对着 `config.mjs` 的 schema 字段逐项钉住，
+`CP2` 是这三个键的正控制。
+
 ### 4.1 核心工具能否被用户配置收窄（对应 §2.1 与 §2.3）
 
 **要回答的产品问题**：DSH 自带的 37 个核心工具，用户配置能不能收窄？
@@ -183,3 +200,53 @@
 
 推荐 B（追加文档 delta + `loaded` 尊重 `limit` + `state` 纳入字节核算），C（默认打开护栏型上限）
 需要真实使用数据（一个会话通常 load 多少工具）才能判断会不会误伤。
+
+## 5. 第二轮对抗性审查（2026-10-11，三份独立审核）
+
+开关化改造完成后，同一批**未提交**改动被三份独立审核并行核对（不同厂商路由，全部只读——变异的
+部分由它们在 `%TEMP%` 的 index 导出副本上执行，仓库零写入）。三份的结论一致：**开关语义在代码层
+完整、默认路径零回归、新门禁全部非空转**（变异实测）。但它们各自找到了"测试看起来在守、实际没守"
+的形态 —— 这类缺口比单个 bug 更值得记。
+
+### 5.1 共同确认成立的部分
+
+- **开关没有被绕过的路径**：枚举 `alwaysNameSet` / `alwaysNames` 的全部写入点，入参只有
+  `currentAlwaysNames()`（受开关门）、`runtime.ledger.names`（严格模式记录，权威）与 `[]`；
+  `projection` 与 `journal` 对名单**只读**。执行层与名单层同步关断。
+- **默认零回归**：把默认值翻成 `true` 会让 `RV1` / `RV3` 变红 ⇒ 旧行为被真实钉住（不是恒真）。
+- **`digestOf(allNames)` 的选择正确**：名单一变（含 revision 失效被过滤）摘要必变 → 旧游标
+  `CURSOR_UNAVAILABLE`，确定且 fail-closed。
+- **`CP1` 能抓未来新增字段**：注入一个未透传的新字段会被点名报错。
+
+### 5.2 审核发现并已整改（本轮）
+
+| # | 发现 | 来源 | 整改 |
+|---|---|---|---|
+| 1 | **`RV5` 恒真**：删掉 `CORE_TOOL_NAMES` 里的 `'bash'`/`'write'` 后 390 单元 + 5 RV **全绿** | GLM 5.3（变异 F）、MiMo（独立同结论）、GLM Flash（同） | fixture 前置断言 + `RV6` 默认模式正控制 |
+| 2 | `RV5` 只钉名单层：只去掉 guard 侧判断时它仍绿 | GLM Flash（缺口 2） | `RV5` 内补执行层断言（已注册的核心工具必须 `TOOL_NOT_LOADED`） |
+| 3 | **`RV2` 名单层断言空转**：`scope-tools` fixture 挂在 `agent/created`，而该用例从不创建真 agent | GLM Flash（缺口 7） | 显式 `ctx.tools.register(def, agentScope)` + 前置断言 |
+| 4 | **"不会死锁"的归因错误**（4 处）：被拒的核心工具不在 `alwaysNames`，与 `tolerantLoadProtected` 无关 | GLM 5.3（问题 2）、MiMo（附注） | README 双语 / CHANGELOG / guard 注释改为"不在受保护基线里，普通 `tool_load` 即可" |
+| 5 | **`loaded` 游标契约无门禁**：`orderDigest` 换常量后全绿 | MiMo（问题 1，列为最重要缺口）、GLM 5.3（变异 G） | 新增 `F12d`（名单变化 → 旧游标 `CURSOR_UNAVAILABLE` + 重新翻页正控制） |
+| 6 | `F12b` 只验数量不验内容 | MiMo（问题 2） | 改 `deepEqual(names.slice(20))` + 两页并集断言 |
+| 7 | **`state` 上限会长期失败**：`invalidated` 只增不减，配方下 12 个 selected 已 2,032 字节 | MiMo（问题 6，实测） | `fitStateWithinBudget`：超限**先裁诊断段并带 `invalidatedTruncated` 标记**，`selected`/`advertised` 不裁；门禁 `SB1`–`SB5` |
+| 8 | §13 delta 自己引错 §9 的两个数字（写成 8192，实际 6,144 / 12,288） | MiMo（问题 5） | 订正，并把 §9 表末的 unload 指引一并纳入 §13.2 |
+| 9 | `CP1` 容差过宽（`>= 8`，实际 11 个字段） | MiMo（问题 7） | 棘轮到 `>= 11` |
+| 10 | 度量口径不一致（`canonicalJson` vs 出站 `JSON.stringify`） | MiMo（问题 9） | 统一为 `JSON.stringify` |
+| 11 | 错误消息硬编码英文、未走文案表 | MiMo（问题 10） | 走 `text.format(['detail','bytesOverBudget'])`，数字并进 `what` |
+| 12 | 形状校验与"兼容 volatile"注释互相矛盾 | MiMo（问题 8）、GLM 5.3（问题 6） | 与 `initialToolsEnabled` 同样先 unwrap `.get()` |
+| 13 | **出站披露面在开关打开时零覆盖** | GLM Flash（缺口 1） | 新增 `RV7`（`assemble` 后断言 wire 含配置核心、不含未列出核心、三入口恒在） |
+
+### 5.3 仍未覆盖（如实记录，不阻塞）
+
+- `preset` 保留项 × 开关打开：代码上 preset 保留**不受**开关门控（有意语义），但无测试钉住。
+- 开关打开 × 缺省 `alwaysVisible`；`requireTrustedEpoch: true` × 开关打开：无组合门禁。
+- `RV4` 的解锁闭环只覆盖到 `load → 折叠`。"再执行成功"还需要一次真实出站（`evaluateCall` 要求
+  `advertised.requestId` 匹配当前请求），那需要驱动真实 agent 轮次；本用例的注释里写明了这条边界。
+- `initialToolsEnabled=false × 开关打开` 的等价性目前是**读码推断**，未实测。
+
+### 5.4 三份审核共同强调的一点
+
+它们各自独立指出：这个仓库真正该防的不是"某条断言写错"，而是**"测试看起来在守、实际没守"**——
+`SG2/SG3` 曾因 fixture 缺素材而空转，我新加的 `RV5` 又重演了一次同款形态，而 `RV2` 的空转已经存在
+很久却一直没被发现。因此新增门禁时，"前置素材真的到位了吗"必须和断言本身一样被钉住 —— 本轮的
+整改就是把这一条补进每一处。

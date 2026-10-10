@@ -522,3 +522,49 @@ token、字符与字节是不同单位；没有 tokenizer 时一律走估算并�
 | 10 | 说明稿把入口失败写成「`execute` 抛错」；§2 旧句把「不得把 `ok:false` 当成功返回」写得像要求 `execute` 抛错 | `domain` 的 `handle*` 捕获 `DomainError` 后**返回** `ok:false` 错误外壳；[`entries.mjs`](../adapters/dsh/entries.mjs) 把它序列化为结果文本字符串返回，**不抛**（`scopeFromExec` 的 throw 也在 `execute` 内被 catch 转成外壳）。§2 该句的落点是 **reducer / 恢复激活判据**，不是抛错 | 以返回外壳为准，**验收标准不变**：§2 三条表分列语义，`S03c` 冻结断言（失败结果可 `JSON.parse` 且保留 `error.code`）与 §11 第 12 条双条件判据照旧生效 |
 
 其它冻结项（三入口行为、状态机、恢复判据、预算表、错误码、`native-only`、fork `reset`）与实现一致。
+
+## 13. 2026-10-11 追加 delta（以代码为准）
+
+本节按冻结纪律**只追加**，不改写上面任何结论。上一节末尾那句「预算表…与实现一致」对 §9 表已不再成立，
+以本节为准：漂移的原因是实现有意识地把可选上限默认关闭，而 §9 表停留在旧世界的数值。
+
+### 13.1 §9 预算表的默认值
+
+§9 表里列出的具体数值是**建议值 / 历史值**，不是当前默认。`domain/constants.mjs` 的 `DEFAULT_BUDGETS`
+把九个可选硬上限一律默认设为 `null`（= 不限制），根 README 也如此声明（"hard caps are off by default"）：
+
+| 键 | §9 表写的 | `DEFAULT_BUDGETS` 实际 |
+|---|---|---|
+| `maxListLimit` / `maxSearchLimit` | 20 / 8 | `null` |
+| `maxListResultBytes` / `maxSearchResultBytes` | 4,096 / 6,144 | `null` |
+| `maxQueryCodePoints` | 512 | `null` |
+| `maxLoadBatch` | 4 | `null` |
+| `maxActiveTools` | 12 | `null` |
+| `maxActiveSchemaBytes` | 49,152 | `null` |
+| `maxSkillBytesPerLoad` | 12,288 | `null` |
+
+默认仍然有界的量（不因上表改变）：`defaultListLimit` = 20、`defaultSearchLimit` = 5、
+`maxInitialCategories` = 12，以及各项 TTL。想主动约束 prompt 增长时，README 给了一组起步配方。
+
+### 13.2 §10 `BUDGET_EXCEEDED` 的 recovery 与解除路径
+
+`recovery` 实际为 `reduce_batch_or_wait_for_compaction`（**不是** `reduce_or_unload`）。
+`unload` **不是模型的可用动作**：`domain/protocol.mjs` 对 unload 一律 `INVALID_ARGS`，折叠器里的 unload
+分支只为回放旧历史保留。因此 §9 表末那句「达到上限提示显式 `unload`」、§10 与 §7 中「显式卸载」的
+表述都不构成可执行路径；解除预算压力的现实手段是**拆小批次**、**调高或关闭上限**，或者等一次成功压缩。
+
+### 13.3 §4 `tool_list` 两个视图的边界（2026-10-11 修复后）
+
+- `view: "loaded"` 现在与 `view: "available"` 走**同一条分页**：`limit`、`cursor` 与字节上限都生效，
+  `nextCursor` / `truncated` 如实返回。此前它丢弃已校验的 `limit` 并把 `truncated` 恒置 `false` ——
+  可能「用 2 的页大小返回 30 项，同时声称这就是全部」。
+- `view: "state"` 现在受 `maxListResultBytes` 约束。超限时**先按完整项数裁掉 `invalidated`**
+  （纯诊断段；该列表只增不减，长会话里会单独把视图顶穿）并带 `invalidatedTruncated: true` 标记；
+  `selected` 与 `advertised` 是执行与披露事实，**不裁**。连诊断段裁空都装不下时才返回
+  `BUDGET_EXCEEDED`（消息带实测字节数与上限）。度量口径与出站一致（`JSON.stringify`）。
+
+### 13.4 适配层新增的部署开关（不属于冻结语义）
+
+`respectAlwaysVisible`（默认 `false`）决定 `alwaysVisible` 是「下限」还是「精确集合」。默认关闭时，
+当前 scope 真实提供的 DSH 核心工具会被自动并入常驻名单且免披露放行；打开后两者都不再发生（没列出的
+核心工具必须先 `tool_load`）。它只影响适配层的名单维护与执行门禁，不改变本文件定义的协议。

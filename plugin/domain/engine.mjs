@@ -6,9 +6,9 @@
 import { resolveBudgets } from './budgets.mjs';
 import { buildCatalog, identityFingerprintOf, orderedNamesFor, resolveByName, resolveByToolId } from './catalog.mjs';
 import { buildCategoryCards, resolveCategory } from './categories.mjs';
-import { deepEqualCanonical } from './canonical.mjs';
+import { deepEqualCanonical, digestOf } from './canonical.mjs';
 import { createByteAccumulator } from './budgets.mjs';
-import { createCursorStore, paginateCategories, paginateNames, projectState } from './list.mjs';
+import { createCursorStore, fitStateWithinBudget, paginateCategories, paginateNames, projectState } from './list.mjs';
 import { createRefStore } from './candidate-refs.mjs';
 import { DomainError, toDomainError } from './errors.mjs';
 import { ENTRY_TOOL_NAMES, PROTOCOL_VERSION } from './constants.mjs';
@@ -199,7 +199,22 @@ export function createDiscoveryEngine(config) {
           const activeEntries = Array.from(st.selected.values())
             .map((s) => resolveByToolId(catalog, s.toolId))
             .filter(Boolean);
-          return okEnvelope('tool_list', 'list', projectState(st, budgets, activeEntries), text.t(['nextAction', 'stateViewNoHidden']));
+          const payload = projectState(st, budgets, activeEntries);
+          // 状态投影同样受 `maxListResultBytes` 约束（02 §4）：配了上限却被静默绕过的响应等于假执行。
+          // 超限时**先裁诊断段**（`invalidated`，返回值带 `invalidatedTruncated` 标记）—— 它的来源
+          // 只增不减，长会话里会单独把整个视图顶穿，让"配了上限"变成永久报错；连诊断段裁空都装不下
+          // 才明确失败。度量与出站同口径（JSON.stringify），并走文案表（数字并进 what）。
+          const maxBytes = budgets.maxListResultBytes;
+          const fitted = fitStateWithinBudget(payload, maxBytes);
+          if (fitted === null) {
+            const bytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
+            throw new DomainError(
+              'BUDGET_EXCEEDED',
+              text.format(['detail', 'bytesOverBudget'], { what: `state view (${bytes} bytes > ${maxBytes})` }),
+              { bytes, maxBytes },
+            );
+          }
+          return okEnvelope('tool_list', 'list', fitted, text.t(['nextAction', 'stateViewNoHidden']));
         }
 
         if (req.view === 'categories') {
@@ -232,7 +247,7 @@ export function createDiscoveryEngine(config) {
 
         if (req.view === 'loaded') {
           // 只列当前 category 中**有效** selected(仍解析得到且未被撤权/失效)的名称
-          const names = Array.from(st.selected.values())
+          const allNames = Array.from(st.selected.values())
             .map((s) => {
               const e = resolveByToolId(catalog, s.toolId);
               if (!e || e.revision !== s.revision) return null; // 已失效
@@ -241,8 +256,25 @@ export function createDiscoveryEngine(config) {
             })
             .filter((n) => n !== null)
             .sort();
+          // 与 available 同一分页形状：`limit`、`cursor` 与字节上限都必须真的生效。
+          // 这里过去硬编码 `nextCursor: null` / `truncated: false` 并丢掉已校验的 `limit` ——
+          // 一份"看似有界、实则无界"的响应会击穿调用方的 token 预算，而且谎报"这就是全部"。
+          // 顺序摘要取**这份名单自己的**摘要（它来自会话状态而非目录），名单一变旧游标即失效。
+          const page = paginateNames({
+            allNames,
+            cursorStore,
+            sessionId: scope.sessionId,
+            view: 'loaded',
+            category,
+            eligibilityGeneration,
+            orderDigest: digestOf(allNames),
+            limit: req.limit,
+            budgets,
+            now: clock.now(),
+            cursor: req.cursor,
+          });
           return okEnvelope('tool_list', 'list', {
-            category, view: 'loaded', names, nextCursor: null, truncated: false,
+            category, view: 'loaded', names: page.names, nextCursor: page.nextCursor, truncated: page.truncated,
           }, text.t(['nextAction', 'loadedMeansSelected']));
         }
 
