@@ -49,6 +49,7 @@
 | [07 恢复与 fork 覆盖](<07-lifecycle-recovery-coverage.md>) | 恢复覆盖增强的 own-only 折叠、事件 `seq` 门禁、证据强度分级与结论口径（**已并入基线**；范围限当时的 3 个 code 文件，非产品验收） |
 | [08 可信周期基线](<08-trusted-epoch-baselines.md>) | trusted-epoch 的契约、判据与配套门禁的进展与未覆盖项（**WIP，未验收**） |
 | [09 业务逻辑地图](<09-business-logic-map.md>) | **派生整理稿**：分层职责、协议面、会话状态机与请求链路，以及按功能影响排序的待办问题与实测性能基线。非证据文档，不代表任何验收结论 |
+| [10 上架与兼容声明](<10-store-compatibility.md>) | 固定 Commit 的上架契约逐项对照、逐版本兼容声明与证据来源、一次性 Profile 的安装/启动/卸载/恢复记录、已知未覆盖项（**顺带记录 npm/商城/真实 Profile 三种状态的区别**） |
 
 跨文档一致的证据放在 `plugin/reports/` 与 `plugin/audits/` 下（阶段 0 合同与独立审查、domain API 与两轮独立审查、adapter 接口对照、实现报告与独立审查、质量数据计划）。本文件集引用它们作为证据，不复制其内容。
 

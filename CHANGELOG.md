@@ -22,6 +22,29 @@ Nothing in this file is a product-acceptance statement. For the authoritative pe
 what is verified, what is unverified, and what this version refuses to support — see
 [`plugin/docs/05-current-status.md`](plugin/docs/05-current-status.md).
 
+## [0.3.0] — 2026-10-10 — DSH STORE contract and `0.2.1-alpha.2` installability
+
+Source version **`0.3.0`**. No product runtime behavior changed; this release makes the declared
+install and compatibility contract explicit, and adapts the composition harness to the current host.
+
+- `dsh.compatibility.dshReleases` now declares each release of the official window explicitly:
+  `0.2.1-alpha.1` **compatible** (the release baseline), `0.2.0-rc.2` and `0.2.1-alpha.2` **unknown**.
+  A version range alone is never treated as compatibility evidence.
+- `peerDependencies` widen from the exact `0.2.1-alpha.1` to `0.2.1-alpha.1 || 0.2.1-alpha.2`.
+  Before this release `0.2.2` was **refused** by the DSH CLI on `0.2.1-alpha.2`
+  (`incompatible-version`); `0.3.0` installs there.
+- The composition harness now wires the host's real fork seam through a single `forkServices()` /
+  `startFork()` pair. `0.2.1-alpha.2` made `workingDirectory` a hard dependency of
+  `@deepseek-ai/dsh-subagent` — so mounting only `subagents` + `dsh-subagent-fork-in-process` left
+  the service pending — and replaced `subagents.start()` with `startActivation()`. Six real-fork
+  gates that failed for those two wiring reasons now pass; three remain unadapted to that release's
+  idle-subagent release behavior.
+- The one-time Profile record for install / start / uninstall / recovery, the per-version matrix,
+  its evidence, and the open gaps are recorded in
+  [`plugin/docs/10-store-compatibility.md`](plugin/docs/10-store-compatibility.md).
+
+Nothing here is a product-acceptance statement, and no real Profile was installed into or restarted.
+
 ## [0.2.2] — 2026-10-09 — trusted npm publishing
 
 Source version **`0.2.2`**. This release adds a gated npm publication path; it makes no runtime plugin

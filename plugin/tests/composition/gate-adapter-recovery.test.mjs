@@ -11,7 +11,7 @@
 import test, { after } from 'node:test'
 import assert from 'node:assert/strict'
 import { dshModule, fixtureFileUrl } from '../../contracts/install-resolver.mjs'
-import { bootAdapterComposition, LOCAL } from './harness.mjs'
+import { bootAdapterComposition, forkServices, startFork, LOCAL } from './harness.mjs'
 import { createJournal, mergeBySeq, foldPairs } from '../../adapters/dsh/journal.mjs'
 
 const handles = []
@@ -205,10 +205,7 @@ test('L03: 真实 fork → 父 selected 不继承（own-only 折叠），子 own
   const boot = await bootAdapterComposition({
     fixtures: ['mock-provider', 'inherited-tools', 'scope-tools'],
     adapter: {},
-    extraServices: [
-      { id: 'subagents', name: '@deepseek-ai/dsh-subagent', config: {} },
-      { id: 'subagent-fork-in-process', name: '@deepseek-ai/dsh-subagent-fork-in-process', config: {} }
-    ]
+    extraServices: forkServices()
   })
   cleanup.push(() => boot.dispose())
   assert.deepEqual(boot.activationErrors(), [], 'subagent composition must converge')
@@ -228,11 +225,7 @@ test('L03: 真实 fork → 父 selected 不继承（own-only 折叠），子 own
   queueResponse({ toolCalls: [{ id: 'c-load', name: 'tool_load', arguments: { names: ['fixture_hidden_inherited'] } }] })
   queueResponse({ toolCalls: [{ id: 'c-legit', name: 'fixture_hidden_inherited', arguments: { text: 'child own' } }] })
   queueResponse({ text: 'child done' })
-  const run = await boot.ctx.subagents.start('fork', {
-    parent: hp.agent,
-    prompt: [{ type: 'text', text: 'Child task.' }],
-    signal: new AbortController().signal
-  })
+  const run = await startFork(boot.ctx, hp.agent)
   const result = await run.result
   assert.notEqual(result, undefined, 'fork run must settle')
 
@@ -499,10 +492,7 @@ test('L03xL01: fork 子 own load 跨重启恢复，继承前缀仍不折叠（�
   const boot = await bootAdapterComposition({
     fixtures: ['mock-provider', 'inherited-tools', 'scope-tools'],
     adapter: {},
-    extraServices: [
-      { id: 'subagents', name: '@deepseek-ai/dsh-subagent', config: {} },
-      { id: 'subagent-fork-in-process', name: '@deepseek-ai/dsh-subagent-fork-in-process', config: {} }
-    ]
+    extraServices: forkServices()
   })
   cleanup.push(() => boot.dispose())
   queueResponse({ toolCalls: [{ id: 'p2-load', name: 'tool_load', arguments: { names: ['fixture_hidden_inherited'] } }] })
@@ -512,11 +502,7 @@ test('L03xL01: fork 子 own load 跨重启恢复，继承前缀仍不折叠（�
   // 子：自 load（own 操作，落在 seed 之后）
   queueResponse({ toolCalls: [{ id: 'c2-load', name: 'tool_load', arguments: { names: ['fixture_hidden_inherited'] } }] })
   queueResponse({ text: 'child done' })
-  const run = await boot.ctx.subagents.start('fork', {
-    parent: hp.agent,
-    prompt: [{ type: 'text', text: 'Child task.' }],
-    signal: new AbortController().signal
-  })
+  const run = await startFork(boot.ctx, hp.agent)
   await run.result
   const childId = run.id
   const childBefore = await boot.ctx.sessionQuery.readSession(childId)

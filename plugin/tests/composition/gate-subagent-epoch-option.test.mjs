@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bootAdapterComposition } from './harness.mjs';
+import { bootAdapterComposition, forkServices, startFork } from './harness.mjs';
 import { dshModule } from '../../contracts/install-resolver.mjs';
 const { store, queueResponse } = await import('../../fixtures/mock-store.mjs');
 const { createUserMessage } = await import(dshModule('@deepseek-ai/dsh-llm'));
@@ -65,10 +65,7 @@ test('SE1: 安装后旧子会话默认不需 /compact，主会话严格模式仍
 
 test('SE3: 真实 fork 带非空继承前缀和旧 own 请求，安装后默认不需要子代理 compact', async () => {
   store.reset();
-  const boot = await bootAdapterComposition({ fixtures, adapterSchema: true, adapter: { alwaysVisible: [] }, extraServices: [
-    { id: 'subagents', name: '@deepseek-ai/dsh-subagent', config: {} },
-    { id: 'fork-provider', name: '@deepseek-ai/dsh-subagent-fork-in-process', config: {} },
-  ] });
+  const boot = await bootAdapterComposition({ fixtures, adapterSchema: true, adapter: { alwaysVisible: [] }, extraServices: forkServices() });
   let root, run;
   try {
     assert.deepEqual(boot.activationErrors(), []);
@@ -77,7 +74,7 @@ test('SE3: 真实 fork 带非空继承前缀和旧 own 请求，安装后默认�
     queueResponse({ text: 'legacy child own turn' });
     const subagents = boot.ctx.get('subagents');
     assert.ok(subagents && subagents.getProvider('fork'), '必须已激活真实宿主 fork provider');
-    run = await subagents.start('fork', { parent: root.agent, prompt: [{ type: 'text', text: 'Child task.' }], signal: new AbortController().signal });
+    run = await startFork(boot.ctx, root.agent);
     assert.notEqual(await run.result, undefined);
     assert.ok(run.localAgent);
     assert.equal(boot.ctx.agents.isOwnedBy(run.id, root.agent), true);

@@ -39,7 +39,7 @@
 import test, { after } from 'node:test'
 import assert from 'node:assert/strict'
 import { dshModule } from '../../contracts/install-resolver.mjs'
-import { bootAdapterComposition } from './harness.mjs'
+import { bootAdapterComposition, forkServices, startFork } from './harness.mjs'
 import {
   TRUSTED_EPOCH_DOMAIN,
   TRUSTED_EPOCH_TABLE,
@@ -56,11 +56,10 @@ const FIXTURES = ['mock-provider', 'inherited-tools', 'scope-tools']
 /** settings 写路径最终落到 schemastery 的 volatile 写协议（gate-settings SG5 同源）。 */
 const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write')
 
-/** 真实宿主 fork provider（自带 seeded 子会话）。禁止 mock 顶替。 */
-const FORK_SERVICES = [
-  { id: 'subagents', name: '@deepseek-ai/dsh-subagent', config: {} },
-  { id: 'subagent-fork-in-process', name: '@deepseek-ai/dsh-subagent-fork-in-process', config: {} },
-]
+/** 真实宿主 fork provider（自带 seeded 子会话）。禁止 mock 顶替。
+ *  服务集由 harness 统一给出：`@deepseek-ai/dsh-subagent` 自 0.2.1-alpha.2 起硬依赖
+ *  `workingDirectory`，只装 subagents 会让它的 fiber 停在 pending —— 见 forkServices 注释。 */
+const FORK_SERVICES = forkServices()
 
 /** 本文件所有 composition 的私有 tmp 根（随 after 一并删除，落在 fixture/tmp 之下）。 */
 const cleanup = []
@@ -190,12 +189,8 @@ async function forkChild (ctx, parentAgent, promptText = 'Child task.') {
   const subagents = ctx.get('subagents')
   assert.ok(subagents !== undefined && subagents.getProvider('fork') !== undefined,
     '前置：真实宿主 fork provider 必须已注册（禁止 mock 顶替）')
-  const run = await subagents.start('fork', {
-    parent: parentAgent,
-    prompt: [{ type: 'text', text: promptText }],
-    signal: new AbortController().signal,
-  })
-  // run.id === 子会话 id（in-process driver lib/index.js:219），run.localAgent === 子 Agent。
+  const run = await startFork(ctx, parentAgent, promptText)
+  // run.id === 子会话 id（activation receipt 的 childId），run.localAgent === 子 Agent。
   assert.equal(typeof run.id, 'string', '子 run 必须持有自己的会话 id')
   assert.ok(run.localAgent !== undefined && run.localAgent !== null, '子 run 必须暴露自己的 Agent（直连执行需要）')
   const result = await run.result

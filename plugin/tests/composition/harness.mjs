@@ -1,4 +1,4 @@
-// 组合测试 harness：真实 Cordis Loader entry 树 + 安装内 0.2.1-alpha.1 服务
+// 组合测试 harness：真实 Cordis Loader entry 树 + 安装内 0.2.1-alpha.2 服务
 // + mock provider（录制最终 GenerateOptions）+ adapters/dsh 产品插件。
 //
 // 与阶段0 contracts/harness.mjs 的区别：这里装载的是**产品 adapter**，
@@ -41,7 +41,7 @@ export function storageRoot (tmpRoot) {
 }
 
 /**
- * 可信周期记录用的真实 SDK 存储 provider（安装内 0.2.1-alpha.1）。
+ * 可信周期记录用的真实 SDK 存储 provider（安装内 0.2.1-alpha.2）。
  *
  * 这三条 entry 与 Desktop base bundle 的真实装配同源：
  * `node_modules/@deepseek-ai/dsh-base/cordis.patch.yml:161-176`
@@ -58,6 +58,65 @@ export function storageEntries (tmpRoot) {
     { id: 'storage-json', name: '@deepseek-ai/dsh-storage-json', config: { root: storageRoot(tmpRoot) } },
     { id: 'storage-domain', name: '@deepseek-ai/dsh-storage-domain', config: { backend: 'json' } }
   ]
+}
+
+/**
+ * 真实宿主 fork 场景需要的最小服务集（`planEntries` 的 `extraServices` 参数）。
+ *
+ * 为什么不是只装配 subagents + fork provider：`@deepseek-ai/dsh-subagent` 的
+ * `static inject` 含 **`workingDirectory`**（0.2.1-alpha.2 起），而
+ * `@deepseek-ai/dsh-working-directory` 又硬依赖 `fs` 与 `sessionProjections`。
+ * 少装任何一条，subagents 的 fiber 都停在 pending：`ctx.get('subagents')` 是
+ * undefined，真实 fork 门禁会以「前置不成立」失败 —— 那不是产品缺陷，是装配缺口。
+ *
+ * 三条与安装内最小装配同源（`@deepseek-ai/dsh-sdk-minimal/cordis.patch.yml`）：
+ *   sandbox           → ctx.sandbox
+ *   filesystem        → ctx.fs（fs-local）
+ *   working-directory → ctx.workingDirectory
+ *
+ * @param {string} [defaultDirectory] workingDirectory 的部署回落目录（必须是绝对路径）。
+ */
+export function forkServices (defaultDirectory = process.cwd()) {
+  return [
+    { id: 'sandbox', name: '@deepseek-ai/dsh-sandbox-local', config: {} },
+    { id: 'filesystem', name: '@deepseek-ai/dsh-fs-local', config: {} },
+    { id: 'working-directory', name: '@deepseek-ai/dsh-working-directory', config: { defaultDirectory } },
+    { id: 'subagents', name: '@deepseek-ai/dsh-subagent', config: {} },
+    { id: 'subagent-fork-in-process', name: '@deepseek-ai/dsh-subagent-fork-in-process', config: {} }
+  ]
+}
+
+/**
+ * 真实 fork 子会话的启动器 —— 0.2.1-alpha.2 的 activation 形状。
+ *
+ * `ctx.subagents.start(provider, request)` 在 0.2.1-alpha.2 已不存在；公开入口是
+ * `startActivation({ provider, label, request, signal, delivery })`，返回
+ * `{ childId, messageId, result, dispose }`，**不再回传子 Agent 句柄** —— 子 Agent 由
+ * `ctx.agents.get(childId)` 取（物化后立即可达）。这里把两者收口成门禁共用的一个形状，
+ * 避免每个真实 fork 门禁各自写一遍 API 映射。
+ *
+ * 注意 `dispose` 是**本次 activation** 的释放句柄，不是「关闭子会话」。
+ *
+ * @param {any} ctx 已装配 forkServices() 的 composition ctx。
+ * @param {any} parentAgent 作为父的真实 live Agent（必须是 agents 里那个精确实例）。
+ * @param {string} [promptText] 初始 prompt 文本，同时用作 descriptor label。
+ * @param {{signal?:AbortSignal}} [options] 调用方取消信号。
+ * @returns {Promise<{id:string, result:Promise<unknown>, localAgent:any, dispose:()=>Promise<void>}>}
+ */
+export async function startFork (ctx, parentAgent, promptText = 'Child task.', options = {}) {
+  const receipt = await ctx.subagents.startActivation({
+    provider: 'fork',
+    label: promptText,
+    request: { parent: parentAgent, prompt: [{ type: 'text', text: promptText }] },
+    signal: options.signal ?? new AbortController().signal,
+    delivery: 'parent'
+  })
+  return {
+    id: receipt.childId,
+    result: receipt.result,
+    localAgent: ctx.agents.get(receipt.childId),
+    dispose: receipt.dispose
+  }
 }
 
 /** 组装 entry 列表：服务 → 选定 fixture → adapter（最后装配，便于观察冲突面）。
