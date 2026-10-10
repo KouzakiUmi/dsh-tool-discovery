@@ -48,6 +48,49 @@ Node：`engines.node` = `^22.19.0 || >=24.0.0`，与 CI 的 `22.19.0` 下限矩�
 | 运行文件与 `files` | `files` 声明 `plugin/adapters/`、`plugin/domain/`、`plugin/client/`、`cordis.patch.yml`；本机 `npm pack` 载荷 36 项 / 约 152 KB（含自动附带的 `package.json`、`LICENSE`、`README*`、`CHANGELOG.md`） |
 | 运行依赖 | `zod`（运行时 `import('zod')`）；`@deepseek-ai/*` 为 peer，由宿主安装提供 |
 | 兼容声明 | 见 §2 |
+| 自动策略信号 | 见 §3.1（本地镜像复算，**不复述记忆值**） |
+
+## 3.1 DSH STORE 自动策略的本地镜像复算
+
+上架门禁不只看 manifest：STORE 的八小时自动化会对**固定 Commit 的可分发面**跑一遍源码级审查。
+本仓库用 STORE 自己的规则实现（不重写、不近似）在本地复算了这一遍。
+
+- 规则实现取自 `AI-Scarlett/DSH-Store`：`src/package-source-surface.mjs`（源码面选择器与
+  `files` 语义）、`src/automation-source-policy.mjs`（信号判定）、`src/fixed-source-review.mjs`
+  （审查主流程）、`registry/automation-policy.json`（权威上限与开关）。
+- 复算输入是**同一个固定 Commit 的仓库树与 blob 内容**（不是工作区文件），LF 与字节数因此与
+  STORE 读到的一致。
+
+2026-10-11 复算结果（本轮整改后在 `main` 的树上）：
+
+| 项 | 值 | 上限 |
+|---|---|---|
+| 源码面选择器 | `explicit-files-conservative-superset`（`files` 全是字面路径/目录，未回退到全包） | 必须受支持 |
+| 扫描完整性 | `scanComplete: true`（33 个运行时文件全部读完，字节数与树一致） | 必须完整 |
+| 运行时文件数 | 33 | 240 |
+| 运行时字节合计 | 411,729 | 2,097,152 |
+| 最大单文件 | 44 KB 量级 | 262,144 |
+| 权限信号 | `files: true`；`network` / `commands` / `credentials` / `protectedDsh` / 原生制品 全为 `false` | 自动批准要求全为 `false` |
+| 复核信号 | `toolViewExtension: false`、`dynamicModuleLoading: false` | — |
+
+由此得到的**确定性原因**只剩两条，且都是**真实能力**而不是误报：
+
+1. `runtime source contains the files permission signal` —— 激活时读 `$DSH_HOME/desktop-locale.json`；
+   把 Config 的 `locale` 钉成 `zh`/`en` 即可完全不读（见根 README 的权限表）。
+2. `runtime or optional dependencies require a separate supply-chain review` —— `zod` 是宿主存储 API
+   （`@deepseek-ai/dsh-storage-domain`）要求的 schema 库。
+
+本轮整改消除的是一条**误报**：`credentials` 信号此前由 `process.env`（拼 `DSH_HOME` 路径）触发 ——
+插件并不处理任何凭据。现在 home 由宿主包 `@deepseek-ai/dsh-home-paths` 解析、语言覆盖走 Config
+字段，域层（`plugin/domain/host-locale.mjs`）不再持有任何 I/O 能力（既不 import `node:fs`、也不读
+`process.env`），并有用注入读取函数的单测钉住这一点。
+
+**不要误读这张表**：自动批准通道要求六个信号全为 `false`。本插件有真实的文件读取与运行时依赖，
+因此**不应**被自动标成 `low` 权限。按 STORE 当前现状（787 条目录条目中 approved 32 条、blocked 385
+条），本插件预期落在需要单独审查的类别 —— 这与「商城能否展示它」是两件事。
+
+复算脚本本身不入库：它只是以只读方式调用 STORE 的规则实现，任何持有 STORE 源码的人都能在几分钟内
+重复同一流程（选择器、上限、信号判定都来自上面列出的文件，没有本仓库自造的近似规则）。
 
 ## 4. 一次性 Profile 验收（2026-10-10）
 

@@ -95,6 +95,12 @@ export function buildConfig(Schema) {
     budgets: Schema.dict(Schema.number())
       .default(null)
       .description('Optional overrides for the frozen budget defaults. null means no overrides.'),
+    // 界面语言：'auto'（默认）跟随桌面界面语言，读不到就回落 en；其它值把语言钉死，
+    // 不再去读宿主文件。取值经 domain 的 normalizeLocale 归一，未知语言名回落 en。
+    // 非 volatile：语言在 apply 时一次性写进域层的文案表，改了要重载插件才生效。
+    locale: Schema.string()
+      .default('auto')
+      .description('Model-visible copy language: "auto" follows the desktop interface language when it can be read, otherwise falls back to en. Any other value pins the locale; unknown names fall back to en.'),
     // 既有部署已在用的字段：保留在 Config 里，免得新 Config 把它当成未知键吞掉。
     // 形状校验仍由 validateConfig 做（逐类检查 title/capabilitySummary），这里只
     // 保证不拦。

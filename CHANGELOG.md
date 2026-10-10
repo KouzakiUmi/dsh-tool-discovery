@@ -24,8 +24,10 @@ what is verified, what is unverified, and what this version refuses to support �
 
 ## [0.3.0] — 2026-10-10 — DSH STORE contract and `0.2.1-alpha.2` installability
 
-Source version **`0.3.0`**. No product runtime behavior changed; this release makes the declared
-install and compatibility contract explicit, and adapts the composition harness to the current host.
+Source version **`0.3.0`**. The three discovery entries, the frozen protocol, and the tool-card surface
+are unchanged; this release makes the declared install and compatibility contract explicit, adapts the
+composition harness to the current host, and moves the interface-language probe out of the domain
+kernel so the kernel no longer owns any I/O.
 
 - `dsh.compatibility.dshReleases` now declares each release of the official window explicitly:
   `0.2.1-alpha.1` **compatible** (the release baseline) and `0.2.1-alpha.2` **compatible** (full
@@ -41,11 +43,22 @@ install and compatibility contract explicit, and adapts the composition harness 
 - That release also releases an idle local-fork subagent once its turn settles, so the three
   real-fork gates take their evidence differently: `SE3` uses a new mock-provider **response gate**
   (`holdNextResponse`) to pin the subagent's active window, and `TF1` / `L03` observe the runtime
-  rebuilt from that session's own durable record. All **133 composition + 375 unit** tests pass on
+  rebuilt from that session's own durable record. All **133 composition + 381 unit** tests pass on
   the current host, and no assertion was loosened — "an inherited prefix pair never folds into the
   child" is still pinned by exact `selected` / `operationId` / `rejected` assertions.
-- The one-time Profile record for install / start / uninstall / recovery, the per-version matrix,
-  its evidence, and the open gaps are recorded in
+- `plugin/domain/host-locale.mjs` no longer owns any I/O: it imports neither `node:fs` nor
+  `process.env`. The adapter resolves the path through the host's `@deepseek-ai/dsh-home-paths` and
+  injects the reader, a new `locale` config field pins the language so the file is not read at all,
+  and the previously untested module now has unit coverage built on injected readers. This removes
+  the **credentials** permission signal that DSH STORE's automatic fixed-source review reported for
+  code that never touches a credential; the signals that remain (`files`, and the `zod` runtime
+  dependency) are real capabilities, and both are disclosed in the README.
+- The README pair now carries an explicit **Permissions and external dependencies** table (file
+  reads/writes, session data, network, commands, credentials, logging) as the listing contract
+  requires; unit suite is 381 test cases (was 375).
+- The one-time Profile record for install / start / uninstall / recovery, the per-version matrix, its
+  evidence, and the DSH STORE automatic-review mirror (selector, bounds, permission signals, and the
+  deterministic reasons that remain) are recorded in
   [`plugin/docs/10-store-compatibility.md`](plugin/docs/10-store-compatibility.md).
 
 Nothing here is a product-acceptance statement, and no real Profile was installed into or restarted.

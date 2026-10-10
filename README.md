@@ -58,6 +58,32 @@ model action at all — only a successful compaction clears the disclosed set.
   because a request cannot be attributed unambiguously.
 - Node `^22.19.0 || >=24.0.0`.
 
+## Permissions and external dependencies
+
+DSH STORE requires every plugin to disclose what it can reach before installation. This is the
+complete list for this plugin — nothing here is inferred from "we did not find it":
+
+| Surface | Behaviour |
+|---|---|
+| Files (read) | Reads `$DSH_HOME/desktop-locale.json` once at activation to follow the desktop interface language. Any failure (missing file, bad JSON, unknown language) falls back to `en` with one log line. Setting the `locale` config field to `zh`/`en` **pins the language and skips the read entirely**. |
+| Files (write) | No direct filesystem writes. Durable state goes through the host's `@deepseek-ai/dsh-storage-domain` service: one record per session holding an epoch identity plus the **tool-name list** permitted to stay resident. It contains no file contents, no message bodies, and no credentials. |
+| Session data | Reads this session's own events through the public `ctx.sessionQuery` service (one fold, then incremental) to restore what the session had already loaded. |
+| Network | None. The plugin issues no outbound request of any kind. |
+| Commands | None. No child process, shell, or dynamic code evaluation. |
+| Credentials | None. It does not read `process.env`, does not touch keychains or account state, and stores no secret. |
+| Logging | Diagnostics only (session id, state, reason). Tool arguments, file contents, and message bodies are never logged. |
+
+**Runtime dependency: `zod`.** The host storage API (`@deepseek-ai/dsh-storage-domain`) accepts a zod
+schema, so the optional trusted-epoch feature declares `zod` as a real dependency. When it cannot be
+resolved the plugin does **not** fake an in-memory store: the session lands in a terminal
+`STORAGE_UNAVAILABLE` state and stops issuing requests. Everything else — the three entries, the
+catalog, the projection, the guards — works without it.
+
+**Host peers.** `@deepseek-ai/dsh` and `@deepseek-ai/dsh-tools` are required.
+`@deepseek-ai/dsh-storage-domain` (trusted epoch) and `@deepseek-ai/dsh-home-paths` (interface
+language path) are optional: when absent, the corresponding feature degrades honestly instead of
+being simulated.
+
 ## Install and update
 
 The GitHub Release build asset remains available for DSH profile installs: a green `main` run packs
@@ -207,7 +233,8 @@ surface:
   "requireTrustedEpochForSubagents": false, // also enforce on children only if strict is on
   "frameworkRetained": [],  // trusted framework-mandated names the projection must keep
   "categoryConfig": {},     // localised category cards
-  "budgets": null           // see below; null means no overrides
+  "budgets": null,          // see below; null means no overrides
+  "locale": "auto"          // "auto" follows the desktop language; "zh"/"en" pins it and skips the file read
 }
 ```
 
@@ -234,6 +261,7 @@ Global registration does not promise execution permission in every session.
 - **Always allow tools specified by the preset** (`alwaysAllowPresetTools`, default `true`): retain only tools registered by the exact preset revision the current agent joined, intersected with its native-visible capabilities. Other presets and later agent-only tools do not become trusted. Independent of manual injection; uses the same new-session/successful-compaction boundary. It preserves the initial set, not arbitrary execution or native permission bypass.
 - **Require trusted epoch records** (`requireTrustedEpoch`, default `false`): default mode does not access the trusted epoch store or block sessions for missing records/storageDomain. Initial tools come from the configuration snapshot, never from outbound headers. Enabling reloads the plugin and requires durable records: an existing session without one needs a successful user `/compact`; storage failures also block. Disabling restores sessions missing records but does **not** offer strict mode's frozen-list guarantee across restarts.
 - **Also require trusted epochs for subagents** (`requireTrustedEpochForSubagents`, default `false`): only effective when `requireTrustedEpoch` is on. Live runtime-owned children otherwise use the configuration baseline without reading/writing epoch records or requiring `/compact`, including resumed legacy child sessions. Runtime ownership—not header/meta tags or durable fork lineage—identifies a child. A fork resumed as a top-level agent still follows the main strict switch. Changing this ordinary setting reloads the plugin, so disabling it recovers legacy children without a synthetic compaction. Enabling it explicitly may block old children; subagents cannot perform the user's `/compact` themselves.
+- **Interface language** (`locale`, default `auto`): `auto` reads the desktop language once at activation and falls back to `en` when it cannot be read (missing file, bad JSON, unsupported language) — falling back is always logged, never silent. `zh`/`en` pins the model-visible copy language and **skips that read entirely**. Not a volatile field: a change takes effect when the plugin reloads.
 - Eligibility, protocol receipts, corrupt-history checks and execution guards remain enforced. The three discovery entries cannot be disabled.
 
 Rejected writes show an error, not a success notice. This is the native config surface, with no legacy wrapper/UI compatibility promise. Browser rendering and online installation need separate acceptance; workspace tests do not imply deployment.

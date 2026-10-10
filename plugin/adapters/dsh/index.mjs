@@ -15,6 +15,8 @@
 // 边界：产品代码不含机器绝对路径；宿主模块（defineTool）由工厂注入，
 // 安装树内的默认入口按裸包名动态 import。
 import { randomBytes } from 'node:crypto';
+// 界面语言文件由**本层**读（内核 host-locale 是纯函数，不持有 I/O 能力）。
+import { readFileSync } from 'node:fs';
 import { CONTROLLED_CATEGORIES, DomainError, ENTRY_TOOL_NAMES, createDiscoveryEngine, createText, detectHostLocale, setDomainLocale } from '../../domain/index.mjs';
 import { createEntryDefinitions } from './entries.mjs';
 import { createGuard } from './guard.mjs';
@@ -71,6 +73,30 @@ export const DEFAULT_CATEGORY_CONFIG = Object.freeze({
   other: { title: 'Other', capabilitySummary: 'Anything not covered by the controlled categories.' },
 });
 
+/**
+ * `desktop-locale.json` 的绝对路径。
+ *
+ * 由**宿主包** `@deepseek-ai/dsh-home-paths` 解析 home —— 读环境变量的是宿主包，不是本插件，
+ * 因此本层不需要（也不应该）碰 `process.env`：环境是部署事实，home 的权威在宿主。
+ * 宿主包不可用时返回 null，探测按「读不到」回落 en，不伪造路径。
+ * @returns {Promise<string|null>}
+ */
+async function localeFileOf() {
+  try {
+    const mod = await import('@deepseek-ai/dsh-home-paths');
+    if (typeof mod?.dshHomePath !== 'function') return null;
+    return mod.dshHomePath('desktop-locale.json');
+  } catch (error) {
+    if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error;
+    return null;
+  }
+}
+
+/** 注入给域层的读取函数：域层不持有 I/O 能力，「怎么读」留在适配层。 */
+function readLocaleFile(path) {
+  return readFileSync(path, 'utf8');
+}
+
 function requirePlainObject(value, what) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new DomainError('INCOMPATIBLE_COMPOSITION', `${what} 必须是对象。`);
@@ -114,6 +140,12 @@ export function validateConfig(raw) {
   // resolveBudgets 对 undefined/null 一律回落 DEFAULT_BUDGETS，所以这里放行 null，
   // 只把"既不是缺省也不是 null 的非对象"（字符串 / 数组 / 数字 / 布尔）当形状错误。
   if (config.budgets !== undefined && config.budgets !== null) requirePlainObject(config.budgets, 'budgets');
+
+  // locale：只校验形状。取值交给 domain 的 normalizeLocale 归一（未知语言名回落 en）——
+  // "语言没跟上"比"插件整个起不来"轻，所以不因为一个无法识别的语言名拒绝激活。
+  if (config.locale !== undefined && typeof config.locale !== 'string') {
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'locale must be a string.');
+  }
 
   // alwaysVisible：默认放行 DSH 自带工具，使过滤只作用于后装的插件/MCP 工具。
   //
@@ -218,8 +250,15 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       else if (typeof ctx.logger?.debug === 'function') ctx.logger.debug(`progressive-tools: ${message}`, extra);
     };
 
-    // 面向模型的文案跟随 DSH 界面语言。探测失败回落 en（见 host-locale.mjs）。
-    const locale = detectHostLocale({ log });
+    // 面向模型的文案跟随 DSH 界面语言：Config 的 locale='auto'（默认）时读宿主界面语言文件，
+    // 显式给出语言时不再读文件。路径由宿主 API 解析、读取由本层注入 —— 内核不持有 I/O 能力
+    // （见 host-locale.mjs）。任何失败回落 en。
+    const locale = detectHostLocale({
+      localeFile: await localeFileOf(),
+      localeOverride: config.locale,
+      readFile: readLocaleFile,
+      log,
+    });
     const text = createText(locale);
     // 纯校验函数（catalog/protocol/budgets/list/skills）不收 locale 参数，
     // 在此一次性绑定，使它们的拒绝文案也随界面语言。详见 locale.mjs 的取舍说明。

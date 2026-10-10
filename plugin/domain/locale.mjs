@@ -7,8 +7,10 @@
 //
 // 语言来源：DSH 把界面语言写进 `$DSH_HOME/desktop-locale.json`
 // （形如 {"desktop":"en"}），常量定义在 @deepseek-ai/dsh-client-locale
-// （LOCALE_IDS = ["zh","en"]）。该文件不在宿主公开 API 内，故按约定路径读取，
-// 读取失败一律回落 en——英文是协议文案的安全默认，猜错方向不会误导模型。
+// （LOCALE_IDS = ["zh","en"]）。该文件不在宿主公开 API 内，故按约定路径读取：
+// 路径由适配层经宿主 @deepseek-ai/dsh-home-paths 解析、读取函数由适配层注入，
+// 本模块与 host-locale 都**不持有 I/O 能力**。任何读取失败或未知值一律回落 en——
+// 英文是协议文案的安全默认，猜错方向不会误导模型；Config 的 locale 字段可直接钉住语言。
 //
 // 范围：只收录**模型每轮真正读到的**文案。代码注释、宿主日志字段、诊断
 // visibility 取值一律不进表——它们不是模型可见面，翻译它们只会制造
