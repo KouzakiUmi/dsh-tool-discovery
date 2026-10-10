@@ -368,8 +368,8 @@ balance — not a promise of a 2K initial budget.
 
 This is a working implementation, not a finished product.
 
-- It has not completed full product acceptance. `0.2.1` and `0.2.2` are published to npm; `0.3.0` is
-  **not published yet** — it exists on `main` and as commit-pinned build assets. **No real Profile was
+- It has not completed full product acceptance. `0.2.1`, `0.2.2`, and `0.3.0` are published to npm
+  (`0.3.0` from tag `v0.3.0` through the Trusted Publisher workflow, run 38074858965). **No real Profile was
   installed into, reloaded, or restarted**: the install/start/uninstall/recovery evidence in
   [STORE compatibility](plugin/docs/10-store-compatibility.md) was taken in a disposable `DSH_HOME`,
   so nothing here should be read as an accepted online GUI or as full product acceptance.

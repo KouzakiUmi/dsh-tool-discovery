@@ -16,7 +16,7 @@ DSH STORE 对每个第三方插件都从**固定 Commit**读取 manifest、Bundl
 |---|---|
 | 源码可安装契约（manifest / Patch / 许可证 / `files`） | 见 §3 |
 | 一次性 Profile 的安装、启动、卸载、恢复 | 见 §4（有记录） |
-| npm 发布 | `0.2.1`、`0.2.2` 已发布；发布不等于已安装到任何 Profile |
+| npm 发布 | `0.2.1`、`0.2.2`、`0.3.0` 已发布（`0.3.0` 自 tag `v0.3.0`，run 38074858965，含 SLSA provenance）；发布不等于已安装到任何 Profile |
 | DSH STORE 收录 / 真实 Profile 加载 | **未验证**；本仓库无上架记录，也未对真实 Profile 执行安装 |
 
 ## 2. 兼容矩阵（manifest 声明）
