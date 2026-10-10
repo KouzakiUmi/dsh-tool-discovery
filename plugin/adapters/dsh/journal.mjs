@@ -648,6 +648,11 @@ export function createJournal(deps) {
       }
       if (query === undefined) {
         engine.failClosed(scope);
+        // 走到这里就是「这份缓冲再也不会有读者」——与 failClosedUncertain 一样显式收口。
+        // **不置 sealed**：终态 reason 由本分支自己给出，置 sealed 会把它改写成
+        // journal-sealed，抹掉更精确的归因（FC1 断言依赖这个前缀）。
+        stopBuffering();
+        abandonLiveCalls();
         log('restore:fail-closed', { sessionId, reason: 'sessionQuery-missing' });
         return { mode: 'incompatible', reason: 'sessionQuery-missing' };
       }
@@ -673,7 +678,14 @@ export function createJournal(deps) {
         // D-1:readSession 失败一律 failClosed。本函数只在 session.seq>0（确有历史）时
         // 被 lifecycle 调用；读不到历史就不得把空 pairs 当"全新会话"放行。
         engine.failClosed(scope);
-        log('restore:fail-closed', { sessionId, reason: `readSession-failed:${String(error?.message ?? error)}` });
+        // 同上：这条出口之后也没有任何读者，必须显式收口 —— 否则缓冲会随会话无界累积，
+        // 在途 load 的 engine 预算预留也永不释放（后续 handleLoad 会被误报 BUDGET_EXCEEDED）。
+        stopBuffering();
+        abandonLiveCalls();
+        // 日志只记宿主的**错误码/类别**：message 原文可能带会话存储路径或用户名，而插件日志
+        // 是普通 info 级、会被长期保留。归因仍由固定前缀给出（lifecycle 按此前缀分流）。
+        const code = typeof error?.code === 'string' && error.code.length > 0 ? error.code : 'unknown';
+        log('restore:fail-closed', { sessionId, reason: 'readSession-failed', code });
         return { mode: 'incompatible', reason: 'readSession-failed' };
       }
       const merged = mergeBySeq(snapshotEvents, buffer);

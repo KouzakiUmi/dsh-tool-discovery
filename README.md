@@ -159,7 +159,7 @@ keep the manifest, lockfile and CLI output and report it rather than hand-editin
 
 ## Get the source
 
-The source version on this branch is **`0.2.2`**. Which version a given download
+The source version on this branch is **`0.3.0`**. Which version a given download
 carries is decided by the manifest inside that build's tarball — compare it with the release name
 (`v<version> · <sha>`) rather than assuming that `main` and this document agree.
 
@@ -327,10 +327,11 @@ balance — not a promise of a 2K initial budget.
 
 This is a working implementation, not a finished product.
 
-- It has not completed full product acceptance and is not published to npm. **This round performed
-  no install, reload, or restart, so nothing here should be read as an accepted online GUI or as
-  full product acceptance**: a desktop link to this checkout may exist, but its loaded version was
-  not verified in this round.
+- It has not completed full product acceptance. `0.2.1` and `0.2.2` are published to npm; `0.3.0` is
+  **not published yet** — it exists on `main` and as commit-pinned build assets. **No real Profile was
+  installed into, reloaded, or restarted**: the install/start/uninstall/recovery evidence in
+  [STORE compatibility](plugin/docs/10-store-compatibility.md) was taken in a disposable `DSH_HOME`,
+  so nothing here should be read as an accepted online GUI or as full product acceptance.
 - **The settings UI is covered by unit and integration tests, not by rendered-DOM acceptance.** The
   native config surface, the cache-epoch behaviour, the catalog metadata, and the client-side
   helpers are all tested; the panel has not been exercised in a real browser.

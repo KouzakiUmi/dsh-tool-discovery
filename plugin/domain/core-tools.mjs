@@ -1,18 +1,19 @@
-// DSH core's built-in tool names — the always-visible baseline.
+// DSH 核心自带工具名 —— 常驻名单的默认基线。
 //
-// Why a list at all: the tools registry carries no provenance, so the plugin
-// cannot tell at runtime which tool came from the core install and which from a
-// profile-installed plugin or an MCP server. Everything the core ships is
-// therefore named explicitly.
+// 为什么要显式列一份：工具注册表不携带来源信息，插件在运行时无法区分某个工具来自核心安装、
+// 还是来自 profile 里装的插件或 MCP server。因此核心自带的工具在这里逐一写名。
 //
-// Derivation (2026-10-09, DSH NEXT @ 0.2.1-alpha.1): scanned across upstream preset-standard
-// (@deepseek-ai/dsh-web-app/presets/standard.patch.yml) and core packages. Dynamic subagent
-// tools (subagent, subagent_fork, list_agents), workflow, and exit_plan_mode are incorporated.
+// 派生时点（2026-10-09，DSH NEXT @ 0.2.1-alpha.1）：对照上游
+// @deepseek-ai/dsh-web-app/presets/standard.patch.yml 与各核心包逐项扫描。动态注入的子代理
+// 工具（subagent、subagent_fork、list_agents）、workflow 与 exit_plan_mode 一并收录。
 //
-// This is the default, not a mandatory set: an explicit `alwaysVisible` replaces
-// it entirely (including []), so a deployment can add or remove initial tools
-// without editing this file. Names absent from a particular host are harmless:
-// the projection keeps only the tools that host actually offers.
+// 这是**默认值**，不是强制集合：配置里显式给出的 `alwaysVisible` 会完整替换它（包括 `[]`），
+// 部署因此可以增删初始工具而无需改这个文件。某个宿主没有的名字无害：投影只保留该宿主真正
+// 提供的工具。
+//
+// 注意（已知语义边界）：适配层的"运行时装载自证"会在每次周期边界把 scope 内**可见**的核心
+// 工具重新并进常驻名单 —— 也就是说，把某个核心工具从 `alwaysVisible` 里删掉，只能影响
+// 初始注入，不能阻止它在边界之后回来。这条边界记在 plugin/docs/11-code-review-findings.md。
 export const CORE_TOOL_NAMES = Object.freeze([
   // shell
   'bash', 'pwsh',

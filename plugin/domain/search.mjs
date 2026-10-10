@@ -130,15 +130,31 @@ export function synonymConcepts(text) {
 function queryTermGroups(query) {
   /** @type {Array<Set<string>>} */
   const groups = [];
+  /**
+   * token/词形 → 它所属的组。
+   *
+   * 为什么不是 `groups.find(g => g.has(token))`：那是**对不断增长的数组**做线性扫描，
+   * distinct token 数随查询长度线性增长 ⇒ 整段是 O(L²)。实测 8000 个 CJK 字符要 729ms，
+   * 而查询长度默认没有上限（见 constants.mjs 的 maxQueryCodePoints），等于给了一条
+   * 用一句话把宿主事件循环按住不放的路径。用索引后同样的查询是 O(L)。
+   */
+  const owner = new Map();
   for (const token of baseTokens(query)) {
     if (QUERY_STOPWORDS.has(token)) continue;
-    const seen = groups.find((g) => g.has(token));
-    if (seen) {
-      for (const form of stemForms(token)) seen.add(form);
+    const seen = owner.get(token);
+    if (seen !== undefined) {
+      for (const form of stemForms(token)) {
+        seen.add(form);
+        owner.set(form, seen);
+      }
       continue;
     }
     const group = new Set([token]);
-    for (const form of stemForms(token)) group.add(form);
+    owner.set(token, group);
+    for (const form of stemForms(token)) {
+      group.add(form);
+      owner.set(form, group);
+    }
     groups.push(group);
   }
   return groups;

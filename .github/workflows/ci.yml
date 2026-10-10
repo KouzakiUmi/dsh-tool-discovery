@@ -5,6 +5,10 @@ on:
     branches: ['**']
     tags: ['v*']
   pull_request:
+  # The composition and quality jobs below are gated on `workflow_dispatch`. Without this
+  # trigger they were unreachable even by hand — the gate said "opt-in" while the workflow
+  # offered no way to opt in. Declaring it makes those jobs actually runnable.
+  workflow_dispatch:
 
 # Cancel superseded runs on the same ref instead of racing them.
 concurrency:

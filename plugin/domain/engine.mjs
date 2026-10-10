@@ -12,6 +12,7 @@ import { createCursorStore, paginateCategories, paginateNames, projectState } fr
 import { createRefStore } from './candidate-refs.mjs';
 import { DomainError, toDomainError } from './errors.mjs';
 import { ENTRY_TOOL_NAMES, PROTOCOL_VERSION } from './constants.mjs';
+import { AUTO_LOCALE } from './host-locale.mjs';
 import { assertSkillBudget, projectSkill } from './skills.mjs';
 import { assertActiveBudget } from './budgets.mjs';
 import {
@@ -85,7 +86,10 @@ export function createDiscoveryEngine(config) {
   const newSessionMode = config.newSessionMode === 'restoring' ? 'restoring' : 'ready';
 
   // 面向模型的文案随界面语言变化。缺省英文（见 locale.mjs 的回落理由）。
-  const text = createText(config.locale);
+  // `'auto'` 是**适配层**的哨兵（"跟随宿主界面语言"），到内核时应当已被解析成具体语言；
+  // 直接用公开 API 构造 engine 的调用方若原样传进来，这里按"未指定"处理（→ 默认语言），
+  // 而不是让 normalizeLocale 把一个哨兵值当成无法识别的语言名静默钉死。
+  const text = createText(config.locale === AUTO_LOCALE ? undefined : config.locale);
 
   const clock = config.clock;
   const refStore = createRefStore({ clock, random: config.random, ttlMs: budgets.candidateTtlMs });
@@ -812,6 +816,12 @@ export function createDiscoveryEngine(config) {
     destroySession(sessionId) {
       sessions.delete(sessionId);
       locks.delete(sessionId);
+      // 未决预留也属于这个会话：每条 `pending` 都握着整份 `input`（原始请求）与期望回执，
+      // 而收口只有 applyCanonicalPair / cancelOperation / resetCacheEpoch / dispose 四条路径。
+      // 会话销毁是第五条 —— 漏掉它就把最后一次 load 的现场留到插件结束（实测可复现）。
+      for (const [operationId, op] of pending) {
+        if (op?.sessionId === sessionId) pending.delete(operationId);
+      }
     },
 
     dispose() {

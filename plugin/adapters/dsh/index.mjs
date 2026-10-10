@@ -17,6 +17,7 @@
 import { randomBytes } from 'node:crypto';
 // 界面语言文件由**本层**读（内核 host-locale 是纯函数，不持有 I/O 能力）。
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { CONTROLLED_CATEGORIES, DomainError, ENTRY_TOOL_NAMES, createDiscoveryEngine, createText, detectHostLocale, setDomainLocale } from '../../domain/index.mjs';
 import { createEntryDefinitions } from './entries.mjs';
 import { createGuard } from './guard.mjs';
@@ -24,7 +25,7 @@ import { createLifecycle } from './lifecycle.mjs';
 import { createProjection } from './projection.mjs';
 import { createRegistryAdapter } from './registry.mjs';
 import { buildConfig, publishToolChoices, resolveAlwaysVisible } from './config.mjs';
-import { globalToolInventory, presetToolNamesOf, scopeMountedToolNamesOf } from './tool-inventory.mjs';
+import { globalToolInventory, presetToolNamesOf } from './tool-inventory.mjs';
 import { createTrustedEpochHolder, createTrustedEpochStore, TRUSTED_EPOCH_REASONS } from './trusted-epoch.mjs';
 
 /**
@@ -73,23 +74,68 @@ export const DEFAULT_CATEGORY_CONFIG = Object.freeze({
   other: { title: 'Other', capabilitySummary: 'Anything not covered by the controlled categories.' },
 });
 
-/**
- * `desktop-locale.json` 的绝对路径。
- *
- * 由**宿主包** `@deepseek-ai/dsh-home-paths` 解析 home —— 读环境变量的是宿主包，不是本插件，
- * 因此本层不需要（也不应该）碰 `process.env`：环境是部署事实，home 的权威在宿主。
- * 宿主包不可用时返回 null，探测按「读不到」回落 en，不伪造路径。
- * @returns {Promise<string|null>}
- */
-async function localeFileOf() {
+/** 宿主 profile 上下文（存在时给出 name / patchPath / home）——语言事实的权威入口。 */
+function profileContextOf(ctx) {
   try {
-    const mod = await import('@deepseek-ai/dsh-home-paths');
-    if (typeof mod?.dshHomePath !== 'function') return null;
-    return mod.dshHomePath('desktop-locale.json');
-  } catch (error) {
-    if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error;
+    return ctx.get?.('profileContext') ?? null;
+  } catch {
     return null;
   }
+}
+
+/**
+ * 从 profile patch 文本里取 `- id: locale` 那一项的 `config.preference`。
+ *
+ * 宿主把界面语言同时记在这里（`@deepseek-ai/dsh-client-locale` 的设置项），它与 profile 名
+ * **无关**，所以比 desktop-locale.json 的 per-profile 键更可靠。只扫到下一个 `- id:` 行为止：
+ * patch 里别的条目也可能带 `preference` 字段，正则跨条目匹配会读错。
+ */
+function preferenceFromPatch(text) {
+  let inside = false;
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    if (/^\s*-\s*id\s*:/.test(line)) {
+      inside = /^\s*-\s*id\s*:\s*['"]?locale['"]?\s*$/.test(line);
+      continue;
+    }
+    if (!inside) continue;
+    const match = /^\s*preference\s*:\s*['"]?([A-Za-z][A-Za-z0-9-]*)['"]?\s*$/.exec(line);
+    if (match !== null) return match[1];
+  }
+  return null;
+}
+
+/**
+ * 语言探测的全部注入面。每一项都可能缺（web/headless、更老的宿主），缺了就回落 en ——
+ * 这里不抛错、不伪造路径：探测失败只意味着"语言没跟上"。
+ * @returns {Promise<{localeFile:string|null, localePreference:string|null, profileKey:string|null}>}
+ */
+async function localeSourcesOf(ctx) {
+  const profile = profileContextOf(ctx);
+  let localeFile = null;
+  if (typeof profile?.home === 'string' && profile.home.length > 0) {
+    // profileContext.home 已由宿主规范化（空白 DSH_HOME 不会被解析成 cwd）。
+    localeFile = join(profile.home, 'desktop-locale.json');
+  } else {
+    try {
+      const mod = await import('@deepseek-ai/dsh-home-paths');
+      if (typeof mod?.dshHomePath === 'function') localeFile = mod.dshHomePath('desktop-locale.json');
+    } catch (error) {
+      if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error;
+    }
+  }
+  let localePreference = null;
+  if (typeof profile?.patchPath === 'string' && profile.patchPath.length > 0) {
+    try {
+      localePreference = preferenceFromPatch(readFileSync(profile.patchPath, 'utf8'));
+    } catch {
+      localePreference = null;
+    }
+  }
+  return {
+    localeFile,
+    localePreference,
+    profileKey: typeof profile?.name === 'string' ? profile.name : null,
+  };
 }
 
 /** 注入给域层的读取函数：域层不持有 I/O 能力，「怎么读」留在适配层。 */
@@ -254,7 +300,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
     // 显式给出语言时不再读文件。路径由宿主 API 解析、读取由本层注入 —— 内核不持有 I/O 能力
     // （见 host-locale.mjs）。任何失败回落 en。
     const locale = detectHostLocale({
-      localeFile: await localeFileOf(),
+      ...(await localeSourcesOf(ctx)),
       localeOverride: config.locale,
       readFile: readLocaleFile,
       log,

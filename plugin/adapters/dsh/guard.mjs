@@ -23,14 +23,23 @@ export function createGuard(deps) {
 
   return ctx.tools.guard((exec) => {
     const agent = exec.agent;
-    if (agent === undefined) {
+    // `agent.session` 与 `agent` 同等必需：缺它时 runtimeFor 会抛 TypeError（宿主会把它
+    // 兜成 toolError，body 仍不执行，但那是**非结构化**拒绝、不可归因）。这里给出与
+    // index.mjs 同一句明确文案。
+    if (agent === undefined || agent.session === undefined) {
       return `tool "${exec.name}" is not admitted by this composition: no agent scope (STATE_NOT_READY)`;
     }
     if (ctx.tools.modeFor(agent) !== 'native') {
       return `tool "${exec.name}" is not admitted: INCOMPATIBLE_PRESENTATION (tools mode is not native)`;
     }
     const runtime = lifecycle.runtimeFor(agent.session, agent);
-    if (entryNames.has(exec.name) || frameworkRetained.has(exec.name)) return undefined;
+    // 三入口由协议保证；frameworkRetained 是**部署配置即授权**，且它排在上面的基线门禁
+    // 之前（pending/blocked 时也照放），所以这条放行必须可审计。
+    if (entryNames.has(exec.name)) return undefined;
+    if (frameworkRetained.has(exec.name)) {
+      log('guard:framework-admitted', { sessionId: agent.session.id, name: exec.name });
+      return undefined;
+    }
     // 可信基线未落定（pending）或已封（blocked）时，**任何**常驻名都不得被放行：
     // 这条必须早于 alwaysNameSet 的早退，否则一份不可信（或根本不存在）的名单
     // 就能凭"猜名"真正执行隐藏工具的 body。
@@ -48,6 +57,10 @@ export function createGuard(deps) {
     // 说明它是原本就有的系统工具，动态补入常驻名单并放行，避免产生 TOOL_NOT_LOADED 冲突死锁。
     if (CORE_TOOL_NAMES.includes(exec.name) && ctx.tools.get(exec.name, agent) !== undefined) {
       if (runtime.alwaysNameSet) runtime.alwaysNameSet.add(exec.name);
+      // 可审计：这条放行**不**依赖可信记录、也不要求名字已在常驻集合 —— 它是"宿主自带的
+      // 核心工具不被本插件阻断"这一信任边界。放行同时把名字补进常驻集合，因此它也是一次
+      // 名单变更；留日志才能看清"配置移除了核心工具、模型猜名仍然执行"这条路径被走到过。
+      log('guard:core-self-admitted', { sessionId: agent.session.id, name: exec.name });
       return undefined;
     }
     // 有 listener 在我们的投影之后重加了未披露工具 → 整会话 fail closed

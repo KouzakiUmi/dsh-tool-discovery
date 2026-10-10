@@ -45,7 +45,7 @@ Node：`engines.node` = `^22.19.0 || >=24.0.0`，与 CI 的 `22.19.0` 下限矩�
 | `dsh.bundle.patch` | `./cordis.patch.yml`，包内相对路径 |
 | entry ID 唯一 | `tool-search`：Patch 只新增该行，不覆盖、不禁用任何官方组件 |
 | 生命周期脚本 | **无** `preinstall`/`install`/`postinstall`/`prepare`；打包以 `npm pack --ignore-scripts` 执行 |
-| 运行文件与 `files` | `files` 声明 `plugin/adapters/`、`plugin/domain/`、`plugin/client/`、`cordis.patch.yml`；本机 `npm pack` 载荷 36 项 / 约 152 KB（含自动附带的 `package.json`、`LICENSE`、`README*`、`CHANGELOG.md`） |
+| 运行文件与 `files` | `files` 声明 `plugin/adapters/`、`plugin/domain/`、`plugin/client/`、`cordis.patch.yml`；本机 `npm pack` 载荷 36 项 / 约 152 KiB，除声明项外只自动附带 `package.json`、`LICENSE`、`README*`（`CHANGELOG.md` **不在**载荷内，也不在 STORE 的审查面内） |
 | 运行依赖 | `zod`（运行时 `import('zod')`）；`@deepseek-ai/*` 为 peer，由宿主安装提供 |
 | 兼容声明 | 见 §2 |
 | 自动策略信号 | 见 §3.1（本地镜像复算，**不复述记忆值**） |
@@ -91,6 +91,11 @@ Node：`engines.node` = `^22.19.0 || >=24.0.0`，与 CI 的 `22.19.0` 下限矩�
 
 复算脚本本身不入库：它只是以只读方式调用 STORE 的规则实现，任何持有 STORE 源码的人都能在几分钟内
 重复同一流程（选择器、上限、信号判定都来自上面列出的文件，没有本仓库自造的近似规则）。
+
+本轮同时做了三份独立的**只读**代码审查（权限与安全边界 / 协议与内核 / 客户端与打包面）。
+结论与处置记录在[代码审查发现](<11-code-review-findings.md>)：已整改项各自配了门禁证据，
+未整改项写清了为什么不动、可选方案与代价 —— 其中包括一条与"核心工具能否凭猜名执行"有关的
+信任边界，它需要作者决策而不是由审查顺手改掉。
 
 ## 4. 一次性 Profile 验收（2026-10-10）
 

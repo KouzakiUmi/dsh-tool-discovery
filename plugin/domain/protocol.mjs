@@ -229,13 +229,17 @@ export function errorEnvelope(tool, operation, err) {
 }
 
 /**
+ * 由错误码构造 envelope。
+ *
+ * **注意**：envelope 的 `error` 只含 `code` / `message` / `retryable` / `recovery`
+ * （冻结契约 §10），**不含** `details` —— 过去的第四个形参永远不会被带出去，是死参数，
+ * 已删除；需要补充信息时应当新增契约字段，而不是指望这里透传。
  * @param {string} tool
  * @param {string} operation
  * @param {string} code
- * @param {object} [details]
  */
-export function toErrorEnvelope(tool, operation, code, details) {
-  return errorEnvelope(tool, operation, new DomainError(code, undefined, details));
+export function toErrorEnvelope(tool, operation, code) {
+  return errorEnvelope(tool, operation, new DomainError(code));
 }
 
 export { LIST_VIEWS };

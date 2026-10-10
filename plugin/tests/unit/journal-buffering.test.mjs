@@ -179,13 +179,15 @@ test('JB-U3 冷恢复期间到达的事件仍必须被合并（收口不得提�
 // ---------------------------------------------------------------------------
 
 /** 一条在途 tool_load：journal 侧有配对现场，engine 侧有预算预留与期望回执。 */
-async function liveLoad({ engineConfig = {}, callId = 'live-1', names = ['glob'] } = {}) {
+async function liveLoad({ engineConfig = {}, callId = 'live-1', names = ['glob'], ...rest } = {}) {
   const { engine } = await makeEngine({ bindings: sampleBindings(), engineConfig });
   const scope = { sessionId: 'sess_jb45', actorId: 'actor_jb45' };
   const logs = [];
   const journal = createJournal({
     ctx: {}, session: { inheritedEventCount: 0 }, scope, engine,
-    query: { readSession: async () => ({ inheritedEventCount: 0, events: [] }) },
+    // `query` 必须能区分「没给」与「显式给 undefined」：journal 用 `query === undefined`
+    // 判定"宿主没有公开 query 服务"，默认值会把那个场景吞掉（JB-U8 正是钉它）。
+    query: Object.hasOwn(rest, 'query') ? rest.query : { readSession: async () => ({ inheritedEventCount: 0, events: [] }) },
     log: (event, detail) => logs.push([event, detail]),
   });
   // seq 从 1 起：domain 的 stale-seq 判据要求 pair.seq > lastAppliedSeq（初值非负），
@@ -234,6 +236,48 @@ test('JB-U7 正常成功路径不受影响：回执折叠自己收口，不重�
   assert.deepEqual([...journal.pendingLoadNames()], [], '成功折叠后不得再声称"在途"');
   assert.ok(journal.activeSelectedNames().includes('glob'),
     `回归：正常回执必须照旧激活（修复的是丢弃路径，不是折叠）：${JSON.stringify(journal.activeSelectedNames())}`);
+});
+
+// --- 缺陷 2 的第二个出口：恢复**终态**同样必须收口 ---------------------------
+//
+// 这两条出口（没有 query / readSession 失败）与 failClosedUncertain 不同：它们
+// **不置 sealed**，因此归因字符串保持精确（lifecycle 依赖 `readSession-failed` 前缀）。
+// 但"没有人再读这份副本"这件事是一样的，所以它们同样必须显式收口。
+//
+// 观测面说明（诚实边界）：本场景在 `restore:folded` 之前就返回了，因此**缓冲自身**
+// 没有第二个观测面——本文件不为私有状态开洞（见文件头）。下面的断言钉的是同一出口
+// 可观测的两个后果：engine 侧的预算预留必须释放、归因与 seal 语义不得被改动。
+
+test('JB-U8 没有 sessionQuery 的恢复终态必须释放在途预留', async () => {
+  const { engine, journal, operationId } = await liveLoad({
+    engineConfig: { budgets: { maxActiveTools: 1 } },
+    query: undefined,
+  });
+
+  const outcome = await journal.restore();
+
+  assert.equal(outcome.mode, 'incompatible');
+  assert.equal(outcome.reason, 'sessionQuery-missing', '归因必须保持精确，不得被 sealed 改写');
+  assert.equal(journal.isSealed(), false, '这条出口不改变既有的 seal 语义');
+  assert.equal(engine.getPendingSize(), 0, '终态之后不得残留未决预留');
+  assert.equal(engine.cancelOperation(operationId), false, '预留必须已被显式取消，而不是留到会话结束');
+  assert.deepEqual([...journal.pendingLoadNames()], [], '配对现场与 engine pending 必须同时收口');
+});
+
+test('JB-U9 readSession 失败的恢复终态必须释放在途预留', async () => {
+  const { engine, journal, operationId } = await liveLoad({
+    engineConfig: { budgets: { maxActiveTools: 1 } },
+    query: { readSession: async () => { throw new Error('boom'); } },
+  });
+
+  const outcome = await journal.restore();
+
+  assert.equal(outcome.mode, 'incompatible');
+  assert.equal(outcome.reason, 'readSession-failed', '归因必须保持精确（lifecycle 按此前缀归因）');
+  assert.equal(journal.isSealed(), false, '这条出口不改变既有的 seal 语义');
+  assert.equal(engine.getPendingSize(), 0, '终态之后不得残留未决预留');
+  assert.equal(engine.cancelOperation(operationId), false, '预留必须已被显式取消');
+  assert.deepEqual([...journal.pendingLoadNames()], [], '配对现场与 engine pending 必须同时收口');
 });
 
 // ---------------------------------------------------------------------------
