@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { bootAdapterComposition, forkServices, startFork } from './harness.mjs';
 import { dshModule } from '../../contracts/install-resolver.mjs';
-const { store, queueResponse } = await import('../../fixtures/mock-store.mjs');
+const { store, queueResponse, holdNextResponse } = await import('../../fixtures/mock-store.mjs');
 const { createUserMessage } = await import(dshModule('@deepseek-ai/dsh-llm'));
 const fixtures = ['mock-provider', 'inherited-tools', 'scope-tools'];
 const agentOptions = { provider: 'fixture-mock', model: 'fixture-model' };
@@ -66,28 +66,40 @@ test('SE1: 安装后旧子会话默认不需 /compact，主会话严格模式仍
 test('SE3: 真实 fork 带非空继承前缀和旧 own 请求，安装后默认不需要子代理 compact', async () => {
   store.reset();
   const boot = await bootAdapterComposition({ fixtures, adapterSchema: true, adapter: { alwaysVisible: [] }, extraServices: forkServices() });
-  let root, run;
+  let root, run, gate1, gate2;
   try {
     assert.deepEqual(boot.activationErrors(), []);
     root = await create(boot, 'se-real-fork-parent');
     queueResponse({ text: 'parent prefix' }); await turn(root);
-    queueResponse({ text: 'legacy child own turn' });
     const subagents = boot.ctx.get('subagents');
     assert.ok(subagents && subagents.getProvider('fork'), '必须已激活真实宿主 fork provider');
+    // 0.2.1-alpha.2 会在子代理一轮结束（result 落定）后释放它，而"子代理默认不需要 compact"
+    // 这条性质只在它**仍是子代理**时才有意义。两道响应闸门把活动期钉成可控窗口：第 1 道拦
+    // 首轮响应，第 2 道拦"工具调用之后的那一轮" —— 两轮都发生在它被释放之前。
+    gate1 = holdNextResponse();
+    gate2 = holdNextResponse();
+    queueResponse({ toolCalls: [{ id: 'se3-list', name: 'tool_list', arguments: {} }] });
+    queueResponse({ text: 'continues without compact' });
     run = await startFork(boot.ctx, root.agent);
-    assert.notEqual(await run.result, undefined);
-    assert.ok(run.localAgent);
-    assert.equal(boot.ctx.agents.isOwnedBy(run.id, root.agent), true);
+    await gate1.entered;
+    assert.equal(boot.ctx.agents.isOwnedBy(run.id, root.agent), true, '活动期：子 run 必须在父的所有权下');
+    assert.ok(run.localAgent, '活动期：子 Agent 句柄必须可取');
     const history = await boot.ctx.sessionQuery.readSession(run.id);
     assert.ok(history.inheritedEventCount > 0, '禁止新建空子会话冒充真实 fork');
     assert.ok(history.events.some(event => event.seq >= history.inheritedEventCount && event.type === 'request/header'), '子代理有自己的旧请求历史');
     const entry = entryOf(boot);
     await entry.update({ config: { ...entry.options.config, requireTrustedEpoch: true } }); await boot.loader.await();
     assert.equal((await baseline(boot, { agent: run.localAgent })).baseline.state, 'disabled');
-    queueResponse({ text: 'continues without compact' }); await turn({ agent: run.localAgent });
-    assert.equal(store.requests.length, 3);
+    gate1.release(); gate1 = null;
+    await gate2.entered;
+    assert.equal(store.requests.length, 3, '父一轮 + 子两轮（第二轮仍在活动期内）');
     assert.equal(lifeOf(boot).baselineOf(run.id).state, 'disabled');
-  } finally { await run?.dispose(); await root?.dispose(); await boot.dispose(); }
+    gate2.release(); gate2 = null;
+    assert.notEqual(await run.result, undefined);
+  } finally {
+    gate1?.release(); gate2?.release();
+    await run?.dispose(); await root?.dispose(); await boot.dispose();
+  }
 });
 
 test('SE4: 主严格模式遇到不可用存储，默认子代理不访问 epoch 存储且仍可请求', async () => {

@@ -38,7 +38,7 @@
       "dshReleases": {
         "0.2.0-rc.2": "unknown",
         "0.2.1-alpha.1": "compatible",
-        "0.2.1-alpha.2": "unknown"
+        "0.2.1-alpha.2": "compatible"
       }
     }
   },

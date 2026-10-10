@@ -234,11 +234,19 @@ test('L03: 真实 fork → 父 selected 不继承（own-only 折叠），子 own
   assert.ok(childEv.inheritedEventCount > 0, `real fork must seed a non-empty prefix: ${childEv.inheritedEventCount}`)
   assert.equal(childEv.events[childEv.inheritedEventCount]?.type, 'session/end-seed', 'seed cut must be marked')
 
-  // 策略判据（fork reset 由所有权保证，不靠 revision 碰巧拒绝）：
+  // 策略判据（fork reset 由所有权保证，不靠 revision 碰巧拒绝）。
+  // alpha.2 在 result 落定后释放 idle 子会话并清掉内存 runtime；这里按该会话自己的持久记录
+  // 重建 runtime 再观测恢复结果 —— 与 L03xL01 的跨重启恢复走同一条公开路径。
+  const lifecycle = boot.ctx.get('progressiveDiscovery').lifecycle
+  lifecycle.ensureRuntime(run.localAgent.session, run.localAgent)
+  await lifecycle.whenReady(run.id)
   const runtime = runtimeOf(boot.ctx, run.id)
   const outcome = await runtime.journal.whenRestored()
   assert.equal(outcome.mode, 'ready', `child restore must settle: ${JSON.stringify(outcome)}`)
-  assert.equal(outcome.applied, 0, 'inherited pairs must never be applied (fork reset)')
+  // 0.2.1-alpha.2 会在子代理一轮结束后释放它，因此这里的 runtime 是按该会话自己的持久记录
+  // 重建的：恢复会重放**子自己**的那一条对（下面 selected/operationId 断言钉住它就是
+  // op_c-load）。继承前缀的对既不被应用也不被拒 —— 上限为 1，且绝不来自父。
+  assert.ok(outcome.applied <= 1, `只可能重放该会话自己的对，继承对绝不能：${outcome.applied}`)
   assert.equal(outcome.rejected, 0, 'own-only 折叠：继承前缀的对不得进入子折叠管线（含被拒）')
   const eng = runtime.engine.getState(runtime.scope)
   assert.equal(eng.integrity.applied, 1, 'only the child own load may apply (live canonical pair)')

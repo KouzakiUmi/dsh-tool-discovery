@@ -27,7 +27,7 @@ DSH STORE 对每个第三方插件都从**固定 Commit**读取 manifest、Bundl
 |---|---|---|
 | `0.2.0-rc.2` | `unknown` | 本机无该版本安装，未测 |
 | `0.2.1-alpha.1` | `compatible` | 发布基线：`0.2.1`–`0.2.2` 的单元与组合测试在该 Core 上通过（结论集见 [当前状态](<05-current-status.md>)）。**本次未复跑**——本机 Core 已是 `0.2.1-alpha.2` |
-| `0.2.1-alpha.2` | `unknown` | 本次实测：核心路径 130/133 组合测试通过，安装/启动/卸载/恢复全通；三条真实 fork 门禁因宿主常驻语义变化未通过，见 §5 |
+| `0.2.1-alpha.2` | `compatible` | 本次实测：**133/133 组合测试**与 375/375 单元测试在当前宿主上通过，一次性 Profile 的安装/启动/卸载/恢复全通（§4）。该版本改变了本地 fork 子代理的常驻语义，门禁的取证方式已随之更新（§5） |
 
 peer 范围（安装准入）与上表是**两件不同的事**：`peerDependencies` 写
 `0.2.1-alpha.1 || 0.2.1-alpha.2`，表示这两个运行时都允许安装；`dshReleases` 表示作者掌握的兼容证据。
@@ -68,21 +68,26 @@ Node：`engines.node` = `^22.19.0 || >=24.0.0`，与 CI 的 `22.19.0` 下限矩�
 
 **未做**：真实 Profile 安装、GUI 可见性、真实 provider 出站请求、跨进程重启的会话恢复。
 
-## 5. 已知未覆盖项（`0.2.1-alpha.2`）
+## 5. `0.2.1-alpha.2` 的宿主语义变更与取证方式
 
-`0.2.1-alpha.2` 改变了本地 fork 子会话的生命周期：`result` 落定后，idle 的本地 fork 子 Agent 会从
-live registry 释放（`ctx.agents.get(childId)` → `undefined`），插件也随 `session/disposed` 清掉内存 runtime。
-三条真实 fork 门禁（`L03`、`SE3`、`TF1`）的观测点建立在「子会话常驻」之上，因此在 alpha.2 上未通过：
+alpha.2 改变了本地 fork 子代理的生命周期：`result` 落定后，idle 的本地 fork 子 Agent 会从 live
+registry 释放（`ctx.agents.get(childId)` → `undefined`），插件也随 `session/disposed` 清掉内存
+runtime；此后该会话按**顶层**会话恢复 —— `epoch-policy.isRuntimeSubagent` 只认 live 的父子关系，
+不为「曾经的子代理」保留豁免（该状态由 `SE5` 覆盖）。
 
-- 持久层断言仍然通过：子会话按**当前配置**建立自己的记录、绝不继承父的常驻名单（TF1 的记录断言）；
-- 未通过的只是依赖常驻的内存态观测：子 runtime 是否存在、`agents.isOwnedBy` 的活动期事实、内存基线快照。
+因此三条真实 fork 门禁的**取证方式**必须改变，而不是放宽断言：
 
-这是**门禁观测模型与新宿主语义之间的落差**，不是已定位的产品缺陷。要把 alpha.2 从 `unknown` 提为
-`compatible`，需要先按 residency 语义重写这三条门禁，并在 alpha.2 上复跑（见 §6）。
+| 门禁 | alpha.2 下的取证方式 |
+|---|---|
+| `SE3` | 用 mock provider 的**响应闸门**（`mock-store.holdNextResponse`）把子代理的活动期钉成可控窗口：请求已录制、响应未回放，于是在它仍 live 时观测「子代理默认 `disabled`」；第二轮同样在活动期内取证 |
+| `TF1` | 运行时观测改为**按该会话自己的持久记录重建 runtime** 后再看。`applied` 的期望由「恰好 0」改为「≤1 且必须来自子自己的 `op_tf1-child-load`」——重建会重放子自己那一条对；继承对仍由 `rejected === 0` 与 `selected` 的 name / `operationId` 精确钉住 |
+| `L03` | 同上：按记录重建后再观测恢复结果，`selected` 仍只允许子自己的 `op_c-load`，`rejected === 0` |
+
+结论：`0.2.1-alpha.2` 上组合 **133/133**、单元 **375/375** 全部通过。宿主语义变化记录在测试注释里，
+断言强度未降低 ——「继承前缀的对绝不进入子的折叠管线」这条性质仍由精确的 `selected` /
+`operationId` / `rejected` 断言保证。
 
 ## 6. 后续门槛
 
-1. 按 alpha.2 的 residency 语义重写 `L03` / `SE3` / `TF1` 的观测点（把「活动期内存态」观测与 `result`
-   并发取证，或改为「按该会话自己的持久记录重建后再观测」），并在 alpha.2 上复跑全部组合测试；
-2. 在 alpha.2 上补一次真实 provider 的出站请求验收（当前为 mock provider + 真实 Loader 组合）；
-3. 需要上架时，由作者在 DSH STORE 侧走一次固定 Commit 预检，并按结果更新 §1 的状态表。
+1. 在 `0.2.1-alpha.2` 上补一次**真实 provider** 的出站请求验收（当前为 mock provider + 真实 Loader 组合）；
+2. 需要上架时，由作者在 DSH STORE 侧走一次固定 Commit 预检，并按结果更新 §1 的状态表。

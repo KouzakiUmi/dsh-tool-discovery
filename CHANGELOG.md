@@ -28,17 +28,22 @@ Source version **`0.3.0`**. No product runtime behavior changed; this release ma
 install and compatibility contract explicit, and adapts the composition harness to the current host.
 
 - `dsh.compatibility.dshReleases` now declares each release of the official window explicitly:
-  `0.2.1-alpha.1` **compatible** (the release baseline), `0.2.0-rc.2` and `0.2.1-alpha.2` **unknown**.
-  A version range alone is never treated as compatibility evidence.
+  `0.2.1-alpha.1` **compatible** (the release baseline) and `0.2.1-alpha.2` **compatible** (full
+  suite green on that host), with `0.2.0-rc.2` **unknown**. A version range alone is never treated
+  as compatibility evidence.
 - `peerDependencies` widen from the exact `0.2.1-alpha.1` to `0.2.1-alpha.1 || 0.2.1-alpha.2`.
   Before this release `0.2.2` was **refused** by the DSH CLI on `0.2.1-alpha.2`
   (`incompatible-version`); `0.3.0` installs there.
 - The composition harness now wires the host's real fork seam through a single `forkServices()` /
   `startFork()` pair. `0.2.1-alpha.2` made `workingDirectory` a hard dependency of
   `@deepseek-ai/dsh-subagent` — so mounting only `subagents` + `dsh-subagent-fork-in-process` left
-  the service pending — and replaced `subagents.start()` with `startActivation()`. Six real-fork
-  gates that failed for those two wiring reasons now pass; three remain unadapted to that release's
-  idle-subagent release behavior.
+  the service pending — and replaced `subagents.start()` with `startActivation()`.
+- That release also releases an idle local-fork subagent once its turn settles, so the three
+  real-fork gates take their evidence differently: `SE3` uses a new mock-provider **response gate**
+  (`holdNextResponse`) to pin the subagent's active window, and `TF1` / `L03` observe the runtime
+  rebuilt from that session's own durable record. All **133 composition + 375 unit** tests pass on
+  the current host, and no assertion was loosened — "an inherited prefix pair never folds into the
+  child" is still pinned by exact `selected` / `operationId` / `rejected` assertions.
 - The one-time Profile record for install / start / uninstall / recovery, the per-version matrix,
   its evidence, and the open gaps are recorded in
   [`plugin/docs/10-store-compatibility.md`](plugin/docs/10-store-compatibility.md).

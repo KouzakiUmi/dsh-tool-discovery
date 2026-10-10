@@ -338,7 +338,11 @@ test('TF1: 真实 fork 子无 own 出站 → 以当前配置建自己的记录�
     assert.notEqual(childRecord.key, parentRecordBefore.key,
       '父子必须是两条**不同**的记录（键不同），而不是同一条被覆盖')
 
-    // 运行时观测：子的可信基线确实 trusted 且为 []
+    // 运行时观测：子的可信基线确实 trusted 且为 []。
+    // alpha.2 在 result 落定后释放 idle 子会话并清掉内存 runtime，所以先按**该会话自己的
+    // 持久记录**重建 runtime 再观测：断言不变，且额外覆盖「记录驱动恢复」这条路径。
+    const childSettled = await settleBaseline(boot.ctx, forked.childId, forked.childAgent)
+    assert.equal(childSettled.mode, 'ready', `子基线必须可重建：${JSON.stringify(childSettled)}`)
     const childBaseline = serviceOf(boot.ctx).lifecycle.baselineOf(forked.childId)
     assert.equal(childBaseline.state, 'trusted', `子基线必须已落定：${JSON.stringify(childBaseline)}`)
     assert.deepEqual(childBaseline.names, [],
@@ -373,7 +377,10 @@ test('TF1: 真实 fork 子无 own 出站 → 以当前配置建自己的记录�
     const childRuntime = runtimeOf(boot.ctx, forked.childId)
     const outcome = await childRuntime.journal.whenRestored()
     assert.equal(outcome.mode, 'ready', `子恢复必须落定：${JSON.stringify(outcome)}`)
-    assert.equal(outcome.applied, 0, '继承前缀里的对不得进入子的折叠管线')
+    // alpha.2 下 runtime 是按该会话自己的持久记录重建的：恢复会重放**子自己**的那一条对
+    // （下面 selected 的 name/operationId 断言钉住它只来自子自己的 load）。继承前缀的对
+    // 既不被应用也不被拒 —— 上限为 1，且它们不可能进入 selected。
+    assert.ok(outcome.applied <= 1, `只可能重放该会话自己的对，继承对绝不能：${outcome.applied}`)
     assert.equal(outcome.rejected, 0, '继承前缀不是"被拒"，而是根本不参与（own-only）')
     const childState = childRuntime.engine.getState(childRuntime.scope)
     const childSelected = [...childState.selected.values()]

@@ -52,6 +52,13 @@ class MockAdapter extends LlmAdapter {
       snapshot = JSON.parse(JSON.stringify(rest))
     }
     store.requests.push(snapshot)
+    // 可选响应闸门（见 mock-store.holdNextResponse）：让测试在「请求已录制、响应未回放」的
+    // 窗口里取证。默认没有闸门时行为与之前逐字一致。
+    const gate = store.responseGates.shift()
+    if (gate !== undefined) {
+      gate.notifyEntered()
+      await gate.released
+    }
     const response = store.script.shift()
     if (response === undefined) throw new Error('mock provider: no scripted response queued')
     for (const chunk of responseToChunks(response)) yield chunk
