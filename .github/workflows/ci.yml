@@ -403,6 +403,7 @@ jobs:
     name: Publish to npm (Trusted Publisher)
     if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
     needs: [portable-unit, repo-checks]
+    environment: npm
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
