@@ -805,6 +805,9 @@ export function createDiscoveryEngine(config) {
 
       let applied = 0;
       let rejected = 0;
+      /** 拒绝原因分布（reducePair 的 reason）：restore:folded 日志据此可取证
+       * "哪个周期/哪对回执为什么没被认出来"，而不是只有一个总数。 */
+      const rejectedReasons = {};
       let cur = st;
       for (const p of deduped) {
         const out = reducePair(cur, p, {
@@ -816,7 +819,11 @@ export function createDiscoveryEngine(config) {
         });
         cur = out.state;
         if (out.applied) applied += 1;
-        else rejected += 1;
+        else {
+          rejected += 1;
+          const reason = out.reason ?? 'unknown';
+          rejectedReasons[reason] = (rejectedReasons[reason] ?? 0) + 1;
+        }
       }
       // 与当前资格取交集:不再解析的定义作废
       for (const [toolId, sel] of cur.selected) {
@@ -825,7 +832,7 @@ export function createDiscoveryEngine(config) {
       }
       cur = setSessionMode(cur, 'ready');
       sessions.set(scope.sessionId, cur);
-      return { mode: 'ready', applied, rejected, coldCandidateRestores: cur.integrity.coldCandidateRestores };
+      return { mode: 'ready', applied, rejected, rejectedReasons, coldCandidateRestores: cur.integrity.coldCandidateRestores };
     },
 
     /**

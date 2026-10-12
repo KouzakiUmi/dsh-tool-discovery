@@ -38,6 +38,11 @@ what is verified, what is unverified, and what this version refuses to support â
 - Add real-host regression gates and expand the real React/DOM probe; its persistence channel is a
   controlled fixture, not the active user's configuration. These changes are uninstalled and unreleased;
   independent security-boundary approval remains a separate gate.
+- Observability-only fixes (no behaviour change): fail-closed projections whose engine never reached
+  `ready` now log like the other fail-closed classes; restore-replay compaction settlements log the
+  same anomalies the live path logs; `restore:folded` reports the per-reason distribution of rejected
+  pairs; the self-admission view failure and the pending-refresh failure are logged with session
+  context instead of silently swallowed.
 - Redesign the plugin's GUI home: the settings surface moves from a plugins-tab page to its own
   top-level settings section (Settings â†’ Tool discovery, a `settings.section` contribution), laid out
   as a status strip, three-entry reference cards, feature switches, the manual initial list, and
