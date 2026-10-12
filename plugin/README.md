@@ -10,7 +10,7 @@ current state, start at [`docs/README.md`](<docs/README.md>) and
 |---|---|
 | [`domain/`](<domain/>) | The kernel: catalog, search, listing, state machine, budgets, error codes. No I/O and no DSH dependency, so it unit-tests on its own. |
 | [`adapters/dsh/`](<adapters/dsh/>) | The DSH adapter: entry definitions, registry, journal, projection, guard, lifecycle, and the schemastery `Config` schema. Everything host-specific lives here. |
-| [`client/`](<client/>) | The settings-panel browser half: an official ModuleLoader lazy CJS factory, JSX-free and build-free, plus the isomorphic pure logic it inlines. |
+| [`client/`](<client/>) | The plugin-home browser half (its own top-level settings page): an official ModuleLoader lazy CJS factory, JSX-free and build-free, plus the isomorphic pure logic it inlines. |
 | [`contracts/`](<contracts/>) | Runtime contract checks against a real Loader. |
 | [`fixtures/`](<fixtures/>) | Fixtures and mock provider/store used by the composition suites. |
 | [`tests/unit/`](<tests/unit/>) | Kernel unit tests. |
@@ -96,5 +96,5 @@ The unit suite runs the client factory in a `vm` with only React supplied, asser
 helpers against their isomorphic twin in `plugin/client/model.mjs`. The composition suites exercise
 the native `Config` surface, the mutable settings cycle, and the catalog metadata integration.
 
-**No suite renders the settings panel in a real DOM or browser.** There is no rendered-UI acceptance
-test, so the panel's runtime appearance remains unverified.
+**No suite renders the settings page in a real DOM or browser.** There is no rendered-UI acceptance
+test, so the page's runtime appearance remains unverified.

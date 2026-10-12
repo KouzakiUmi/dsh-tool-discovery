@@ -38,6 +38,15 @@ what is verified, what is unverified, and what this version refuses to support �
 - Add real-host regression gates and expand the real React/DOM probe; its persistence channel is a
   controlled fixture, not the active user's configuration. These changes are uninstalled and unreleased;
   independent security-boundary approval remains a separate gate.
+- Redesign the plugin's GUI home: the settings surface moves from a plugins-tab page to its own
+  top-level settings section (Settings → Tool discovery, a `settings.section` contribution), laid out
+  as a status strip, three-entry reference cards, feature switches, the manual initial list, and
+  advanced fields. Behaviour, the native config surface, and the save paths are unchanged; there is
+  still no rendered-DOM acceptance.
+- Re-lay the README pair on the dsh-subusage structure (pain-point table, quick start, technical
+  half) without changing any factual claim, and refresh the docs status bookkeeping: `05` now carries
+  a dated current test baseline and the npm-published versions, and the docs index status table
+  splits npm publishing from DSH STORE listing.
 
 ## [0.3.0] — 2026-10-10 — DSH STORE contract and `0.2.1-alpha.2` installability
 

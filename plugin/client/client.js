@@ -1,5 +1,8 @@
 // plugin/client/client.js
-// 设置面板（浏览器半边）：官方 ModuleLoader 惰性 CJS factory，**无 JSX、无构建**。
+// 插件主页（设置 → 工具发现，顶层 `settings.section` 区）：官方 ModuleLoader 惰性 CJS
+// factory，**无 JSX、无构建**。布局参照 dsh-subusage 的设置页形态：页头 + 状态条 +
+// 分区卡片（三入口说明 / 可选功能 / 初始工具名单 / 高级配置），全部走 `--dsw-alias-*`
+// 设计令牌，深浅色自动适配。
 //
 // 取舍说明（此前这里有一条未经验证的推断，已删）：
 //   共享 settings 包只提供 configForms / settingsSchema / describe 镜像这些**服务**，
@@ -100,11 +103,33 @@ window.__ModuleLoader__.load({
 
     // 独立命名空间：不要占用 settings.plugins，那会与别的插件的字符串撞车。
     const NS = 'toolDiscovery.settings';
-    const SLOT = 'settings.plugins.tab';
+    // 主页挂顶层设置区。`settings.section` 是 list slot：必须给 id（SlotCore 会拒收
+    // 无 id 的条目），label 由 settings-general 的 useSections 经 resolveSlotLabel 解析
+    // 后按 order 排序渲染；组件收到 renderSlot 传入的 { close } 与 inject() 合并 props。
+    const SLOT = 'settings.section';
+    const SECTION_ID = 'tool-discovery';
+    // configForms 命名空间 = cordis.patch.yml 的 `- id: tool-search`，与槽位 id 无关。
     const PLUGIN_TAB_ID = 'tool-search';
 
     const en = {
       nav: 'Tool discovery',
+      hero: 'The first request no longer carries every tool’s full schema: the model picks capabilities through the three small entries below, and a selected tool’s real native schema arrives on the next turn, then runs through the host’s own approval and sandbox chain like any other tool.',
+      entriesGroup: 'Three entries',
+      entryListAnswer: 'Which tools are discoverable in this category?',
+      entryListResult: 'Returns paginated full tool names',
+      entrySearchAnswer: 'Which tool suits this task?',
+      entrySearchResult: 'Returns top-K candidate cards (short purpose + ref/revision)',
+      entryLoadAnswer: 'I want these tools.',
+      entryLoadResult: 'Returns a versioned success receipt; the real schema is disclosed next turn',
+      activeNo: 'Does not change the active set',
+      activeYes: 'Changes the active set after a successful load',
+      invariants: 'Two invariants bound the design: within one cache epoch the disclosed set only grows (the wire recorded at first disclosure never changes), and only a successful compaction resets the epoch — the model cannot unload, action "unload" is rejected. Disclosure is not execution permission: every call still passes the host’s own approval, sandbox, and permission chain.',
+      statFixed: 'fixed entries',
+      statCatalog: 'catalog tools',
+      statSelected: 'initial list',
+      statMissing: 'unregistered',
+      statUnknown: 'unconfirmed',
+      statNoMeta: 'catalog metadata unavailable',
       features: 'Optional features',
       initialTools: 'Inject initial tools',
       initialToolsHelp: 'Enabled by default. When disabled, configured initial tools are not injected automatically; tool_load can still load them. Takes effect in a new session or after successful compaction.',
@@ -145,6 +170,23 @@ window.__ModuleLoader__.load({
     };
     const zh = {
       nav: '工具发现',
+      hero: '首轮请求不再携带全部工具的完整 schema：模型通过下面三个小入口挑选能力，选中的工具在下一轮才拿到真实原生 schema，之后与普通工具一样走宿主原生的审批与沙箱链调用。',
+      entriesGroup: '三个入口',
+      entryListAnswer: '某类别里有哪些可发现工具？',
+      entryListResult: '返回分页的完整工具名',
+      entrySearchAnswer: '哪个工具适合当前任务？',
+      entrySearchResult: '返回 Top-K 候选卡（短用途 + ref/revision）',
+      entryLoadAnswer: '我要用哪些工具？',
+      entryLoadResult: '返回版本化成功回执；下一轮披露真实 schema',
+      activeNo: '不改变激活集合',
+      activeYes: '成功 load 后改变激活集合',
+      invariants: '两条不变量框住整个设计：一个缓存周期内已披露集合只增不改（首披露时记录的 wire 不再变化），只有一次成功的压缩才会重置周期——模型不能卸载，action "unload" 会被拒绝。披露不是执行许可：每次调用仍走宿主原生的审批、沙箱与权限链。',
+      statFixed: '常驻入口',
+      statCatalog: '目录工具',
+      statSelected: '初始名单',
+      statMissing: '未登记',
+      statUnknown: '未确认',
+      statNoMeta: '目录元数据不可用',
       features: '可选功能',
       initialTools: '自动注入初始工具',
       initialToolsHelp: '默认开启。关闭后不自动注入下方配置的工具，仍可通过 tool_load 加载。在新会话或成功压缩后生效。',
@@ -276,6 +318,23 @@ window.__ModuleLoader__.load({
         error ? h('p', { role: 'alert' }, error) : null);
     }
 
+    // ---- 设计令牌（--dsw-alias-* 均带兜底值；跟随宿主深浅色主题） ------------------
+    const S = {
+      section: { maxWidth: '720px', display: 'flex', flexDirection: 'column', gap: '16px', color: 'var(--dsw-alias-label-primary, inherit)' },
+      title: { margin: 0, fontSize: '18px', fontWeight: '600' },
+      hero: { margin: 0, fontSize: '13px', lineHeight: '20px', color: 'var(--dsw-alias-label-tertiary, inherit)' },
+      chips: { display: 'flex', flexWrap: 'wrap', gap: '6px' },
+      chip: { height: '22px', lineHeight: '22px', padding: '0 10px', fontSize: '12px', borderRadius: '999px', background: 'var(--dsw-alias-fill-tsp-secondary, rgba(128,128,128,.15))', color: 'var(--dsw-alias-label-secondary, inherit)', whiteSpace: 'nowrap' },
+      groupHead: { margin: 0, fontSize: '12px', fontWeight: '600', letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--dsw-alias-label-tertiary, inherit)' },
+      cards: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '12px' },
+      card: { border: '.5px solid var(--dsw-alias-settings-card-stroke, rgba(128,128,128,.25))', borderRadius: 'var(--dsw-radius-xl, 14px)', background: 'var(--dsw-alias-settings-card-fill, transparent)', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '6px' },
+      cardTitle: { fontSize: '13px', fontWeight: '600' },
+      cardText: { margin: 0, fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-secondary, inherit)' },
+      cardMeta: { margin: 0, fontSize: '11px', lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary, inherit)' },
+      badge: (on) => ({ alignSelf: 'flex-start', fontSize: '11px', lineHeight: '16px', padding: '1px 8px', borderRadius: '999px', background: on ? 'var(--dsw-alias-state-business-primary, rgba(64,120,255,.18))' : 'var(--dsw-alias-fill-tsp-secondary, rgba(128,128,128,.15))', color: on ? 'var(--dsw-alias-state-business-primary, inherit)' : 'var(--dsw-alias-label-tertiary, inherit)' }),
+      note: { margin: 0, fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary, inherit)' },
+    };
+
     /** 叶子组件：只收 props，不读 ctx。 */
     function SettingsPanel ({ t, snapshot, error, notice, busy, onToggle, onRestore, onFeature, onSetting }) {
       const [query, setQuery] = useState('');
@@ -285,11 +344,31 @@ window.__ModuleLoader__.load({
       const built = buildRows(snapshot?.meta, selected);
       const visible = filterRows(built.rows, query);
 
-      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '12px' } },
-        snapshot?.status !== 'ready' ? h('p', { role: 'status' }, t('loading')) : null,
-        snapshot?.writable === false ? h('p', { role: 'status' }, t('readOnly')) : null,
-        busy ? h('p', { role: 'status' }, t('saving')) : null,
-        h('h3', null, t('features')),
+      return h('div', { style: S.section },
+        h('h2', { style: S.title }, t('nav')),
+        h('p', { style: S.hero }, t('hero')),
+        h('div', { style: S.chips },
+          h('span', { style: S.chip }, `${t('statFixed')}: ${built.fixed.length}`),
+          h('span', { style: S.chip }, `${t('statCatalog')}: ${built.rows.length}`),
+          h('span', { style: S.chip }, `${t('statSelected')}: ${built.selectedCount}`),
+          built.missingCount > 0 ? h('span', { style: S.chip }, `${t('statMissing')}: ${built.missingCount}`) : null,
+          built.unknownCount > 0 ? h('span', { style: S.chip }, `${t('statUnknown')}: ${built.unknownCount}`) : null,
+          snapshot?.metaAvailable === false ? h('span', { style: S.chip }, t('statNoMeta')) : null),
+        snapshot?.status !== 'ready' ? h('p', { role: 'status', style: S.note }, t('loading')) : null,
+        snapshot?.writable === false ? h('p', { role: 'status', style: S.note }, t('readOnly')) : null,
+        busy ? h('p', { role: 'status', style: S.note }, t('saving')) : null,
+        h('h3', { style: S.groupHead }, t('entriesGroup')),
+        h('div', { style: S.cards },
+          ...[['tool_list', 'entryListAnswer', 'entryListResult', false],
+            ['tool_search', 'entrySearchAnswer', 'entrySearchResult', false],
+            ['tool_load', 'entryLoadAnswer', 'entryLoadResult', true]].map(([name, answer, result, activates]) =>
+            h('div', { key: name, style: S.card },
+              h('code', { style: S.cardTitle }, name),
+              h('p', { style: S.cardText }, t(answer)),
+              h('p', { style: S.cardMeta }, t(result)),
+              h('span', { style: S.badge(activates) }, t(activates ? 'activeYes' : 'activeNo'))))),
+        h('p', { style: S.note }, t('invariants')),
+        h('h3', { style: S.groupHead }, t('features')),
         ...featureChoices(snapshot?.value).map(([key, label, help, checked]) => h('section', { key },
           h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
             h('input', {
@@ -299,8 +378,8 @@ window.__ModuleLoader__.load({
               onChange: (event) => onFeature(key, event.target.checked),
             }), t(label)),
           h('p', { id: `tool-discovery-${key}-help`, style: { margin: '4px 0', fontSize: '12px' } }, t(help)))),
-        h('h3', { style: { margin: 0, fontSize: '15px', fontWeight: '600' } }, t('title')),
-        h('p', { style: { margin: 0, fontSize: '13px' } }, t('intro')),
+        h('h3', { style: S.groupHead }, t('title')),
+        h('p', { style: S.note }, t('intro')),
 
         h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
           h('input', {
@@ -335,10 +414,10 @@ window.__ModuleLoader__.load({
                 row.status === 'registered' ? null : h('span', { style: { marginLeft: '8px', fontSize: '11px' } }, `(${t(row.status === 'unknown' ? 'unknown' : 'missing')})`)),
             ))),
 
-        h('p', { style: { fontSize: '12px', margin: 0 } }, t('pending')),
+        h('p', { style: S.note }, t('pending')),
         h('details', null,
-          h('summary', null, t('advanced')),
-          h('p', { style: { fontSize: '12px' } }, t('reload')),
+          h('summary', { style: S.groupHead }, t('advanced')),
+          h('p', { style: S.note }, t('reload')),
           h('label', { htmlFor: 'tool-discovery-locale' }, t('locale')),
           h('select', { id: 'tool-discovery-locale', value: locale, disabled,
             onChange: event => onSetting('locale', event.target.value) },
@@ -349,9 +428,9 @@ window.__ModuleLoader__.load({
             disabled: disabled || !snapshot?.meta?.constraints,
             keys: snapshot?.meta?.constraints?.[name === 'budgets' ? 'budgetKeys' : 'categoryKeys'], onSave: onSetting,
           })),
-          h('p', null, `${t('framework')}: ${(snapshot?.value?.frameworkRetained ?? []).join(', ') || '—'}`)),
-        error ? h('p', { role: 'alert', style: { fontSize: '12px', margin: 0 } }, error) : null,
-        notice ? h('p', { style: { fontSize: '12px', margin: 0 } }, notice) : null)
+          h('p', { style: S.note }, `${t('framework')}: ${(snapshot?.value?.frameworkRetained ?? []).join(', ') || '—'}`)),
+        error ? h('p', { role: 'alert', style: S.note }, error) : null,
+        notice ? h('p', { role: 'status', style: S.note }, notice) : null)
     }
 
     /**
@@ -476,9 +555,11 @@ window.__ModuleLoader__.load({
       const Root = createTabRoot(ctx, t);
       ctx.slots.inject(SLOT, () => ctx.slots.register({
         name: SLOT,
-        id: PLUGIN_TAB_ID,
-        order: 20,
+        id: SECTION_ID,
+        order: 24,
         label: () => t('nav'),
+        locale: NS,
+        inject: () => ({}),
       }, Root));
     }
 
@@ -486,7 +567,7 @@ window.__ModuleLoader__.load({
     exports.__test = {
       buildRows, filterRows, toggleName, isDefaultSelection, featureChoices, saveSetting, validAdvancedSetting,
       ownView, alwaysVisibleNode, readMeta, createTabRoot, createSnapshotSource, SettingsPanel,
-      FIXED_ENTRIES, NS, PLUGIN_TAB_ID, SLOT,
+      FIXED_ENTRIES, NS, PLUGIN_TAB_ID, SECTION_ID, SLOT,
     };
 
     exports.apply = apply;

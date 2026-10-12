@@ -1,43 +1,36 @@
-# DSH Tool Discovery
+<div align="center">
+  <img src="assets/title.jpg" width="100%" alt="DSH Tool Discovery — three small control entries up front; a tool's real schema is disclosed on demand in the next turn (repository banner)">
 
-![DSH Tool Discovery](assets/title.jpg)
+  # DSH Tool Discovery
 
-English | [中文](README.zh.md)
+  **Hundreds of tool schemas stay out of the first request: three small entries up front, the real schema arrives on demand.**
 
-[![npm version](https://img.shields.io/npm/v/dsh-tool-discovery)](https://www.npmjs.com/package/dsh-tool-discovery)
-[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![DSH](https://img.shields.io/badge/DSH-0.2.1--alpha.1%20%7C%200.2.1--alpha.2-informational)](plugin/docs/10-store-compatibility.md)
+  English | [中文](README.zh.md)
 
-Give a model a few small control entries instead of hundreds of tools, and let it load the
-capability it actually needs, on demand.
+  [![npm version](https://img.shields.io/npm/v/dsh-tool-discovery)](https://www.npmjs.com/package/dsh-tool-discovery)
+  [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+  [![DSH](https://img.shields.io/badge/DSH-0.2.1--alpha.1%20%7C%200.2.1--alpha.2-informational)](plugin/docs/10-store-compatibility.md)
 
-This is a DSH plugin. On the first request the model sees three fixed entries — `tool_list`,
-`tool_search`, `tool_load` — plus a short summary of each capability category, **plus the default
-initial set**: DSH's own core tools (the manual baseline) and the tools registered by the current
-agent's own preset, which is retained by default. Other ordinary tools are not disclosed up front.
-When the model decides it needs one, it calls `tool_load`, and that tool's real native schema
-appears in the **next** request. The model then calls the tool normally, through DSH's own approval,
-sandbox, and permission chain.
+  **Install with one command** → [Quick start](#quick-start)
+</div>
 
-Two invariants bound the whole design:
+---
 
-- **Loaded order and content are append-only within a cache epoch.** A load never moves or rewrites
-  an already-disclosed entry — the wire recorded at first disclosure is what keeps being sent, so a
-  host-side tool upgrade cannot silently mutate a definition the model has already read.
-- **Only a successful compaction resets the epoch.** A manual `/compact` and DSH's automatic
-  compaction both qualify; a failed, cancelled, or summary-less compaction does not. The model cannot
-  unload: `action: "unload"` is rejected, so between two successful compactions the disclosed set
-  only grows.
+## Why you need it
 
-Frozen wire is not execution permission. A disclosed tool still goes through the host's own
-approval, sandbox, and authorization checks on every call, exactly as if it had never been mediated
-by this plugin.
-
-Progressive disclosure is about context, not speed: a request that carries only what the model is
-likely to use does not have to carry everything the host could have offered. The kernel holds no
-tools of its own and never bypasses the host.
+| Without it | With it |
+|---|---|
+| Every registered tool's full JSON Schema is injected on the first request, whether the task needs it or not | The first request carries three small entries plus a bounded category summary; a real native schema appears only in the **next** turn after the model explicitly selects the tool |
+| A host-side tool upgrade can silently rewrite a definition the model has already read mid-session | Disclosed wire is **append-only** within a cache epoch — the definition recorded at first disclosure is the one that keeps being sent |
+| Guessing which category holds which tool | `tool_search` returns top-K candidate cards (short purpose + ref/revision), `tool_list` pages complete names; neither changes the active set |
+| No answer to "what is active right now?" | `tool_load` receipts are versioned canonical records; the `view: "state"` projection lists `selected` / `advertised` / `invalidated` |
 
 ## The three entries
+
+This is a DSH plugin. On the first request the model sees the three entries below plus a short
+summary of each capability category, **plus the default initial set**: DSH's own core tools (the
+manual baseline) and the tools registered by the current agent's own preset, which is retained by
+default. Other ordinary tools are not disclosed up front.
 
 | Entry | Answers | Changes what is active? |
 |---|---|---|
@@ -47,18 +40,60 @@ tools of its own and never bypasses the host.
 
 `tool_load` never runs the target tool. It records the selection, and disclosure happens on the
 following turn. Reaching for a tool that has not been loaded is refused, and unloading is not a
-model action at all — only a successful compaction clears the disclosed set.
+model action at all — `action: "unload"` is rejected, so between two successful compactions the
+disclosed set only grows.
+
+## Two invariants bound the whole design
+
+- **Loaded order and content are append-only within a cache epoch.** A load never moves or rewrites
+  an already-disclosed entry — the wire recorded at first disclosure is what keeps being sent, so a
+  host-side tool upgrade cannot silently mutate a definition the model has already read.
+- **Only a successful compaction resets the epoch.** A manual `/compact` and DSH's automatic
+  compaction both qualify; a failed, cancelled, or summary-less compaction does not.
+
+Frozen wire is not execution permission. A disclosed tool still goes through the host's own
+approval, sandbox, and authorization checks on every call, exactly as if it had never been mediated
+by this plugin.
+
+Progressive disclosure is about context, not speed: a request that carries only what the model is
+likely to use does not have to carry everything the host could have offered. The kernel holds no
+tools of its own and never bypasses the host.
+
+## Quick start
+
+```sh
+# DSH profile install — name the package, then the full tarball URL
+dsh plugin --profile <profile> add \
+  dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz
+```
+
+1. Install and enable the bundle, then reload or restart for the host side to pick it up
+   (refreshing the page alone does not guarantee a host upgrade).
+2. Open **Settings → Tool discovery** — the plugin's own page: optional feature switches, the
+   application-wide tool catalog (filter, checkboxes, **Restore DSH default**), and advanced
+   budget / language fields.
+3. Back in a session the three entries are live. Nothing else changes: every tool call keeps
+   going through DSH's own approval, sandbox, and permission chain.
+
+`<build-tag>` is a commit-derived release tag such as `build-80216ba3effa`. Full install/update
+rules — npm package for Node projects, tag pinning, CLI-vs-Core version caveats — are in
+[Install and update](#install-and-update). Configuration knobs are in
+[Configuration](#configuration).
+
+---
+
+# Technical documentation
 
 ## Requirements
 
 - DSH Core **`0.2.1-alpha.1` or `0.2.1-alpha.2`** — the declared peer range is exactly these two
   releases, and both are declared `compatible`. `0.2.1-alpha.1` is the release baseline every
-  earlier result was taken on; `0.2.1-alpha.2` passes the full suite on the current host (137
-  composition + 401 unit), with the gates accounting for that release's fork-subagent residency
-  change. The per-version matrix, its evidence, and the one-time Profile record are in
+  earlier result was taken on; `0.2.1-alpha.2` passes the full suite on the current host, with the
+  gates accounting for that release's fork-subagent residency change. The per-version matrix, its
+  evidence, and the one-time Profile record are in
   [STORE compatibility](plugin/docs/10-store-compatibility.md). Any other version is untested.
 - The native **`@deepseek-ai/schemastery`** peer is required for the config surface and the settings
-  panel. Without it the discovery domain still runs normally, but there is no Config and the plugin
+  page. Without it the discovery domain still runs normally, but there is no Config and the plugin
   logs `ConfigUnavailable` instead of silently pretending a settings page exists.
 - **Native** tool display mode. Other display modes are refused at activation rather than
   downgraded silently.
@@ -131,107 +166,14 @@ dsh plugin --profile <profile> update \
   dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz
 ```
 
-`<build-tag>` is a commit-derived release tag such as `build-80216ba3effa`. Because the tag carries
-the commit, a later build never replaces an older one, and two builds can legitimately share one
-manifest version — maintainers bump `version`, CI does not — so pin the tag whose commit you tested,
-always give the package name explicitly, and read the version from the release name (`v<version> ·
-<sha>`) or from the manifest inside that tarball instead of assuming what `main` currently says.
+Because the tag carries the commit, a later build never replaces an older one, and two builds can
+legitimately share one manifest version — maintainers bump `version`, CI does not — so pin the tag
+whose commit you tested, always give the package name explicitly, and read the version from the
+release name (`v<version> · <sha>`) or from the manifest inside that tarball instead of assuming
+what `main` currently says.
 
 For a Node project, install the public package from npm with `npm install dsh-tool-discovery`. The
 DSH profile installation commands above continue to use the DSH CLI and a GitHub Release asset.
-
-## Publishing to npm
-
-The initial `0.2.1` publication was a one-time bootstrap because npm only lets a maintainer attach a
-Trusted Publisher after the package exists. The npm account's two-factor check was completed with
-Windows Hello. The Trusted Publisher is now registered for:
-
-| Setting | Value |
-| --- | --- |
-| Provider | GitHub Actions |
-| Organization/user | `KouzakiUmi` |
-| Repository | `dsh-tool-discovery` |
-| Workflow filename | `ci.yml` |
-| Environment | None |
-| Allowed publishing | `npm publish`; `npm stage publish` (npm default) |
-
-npm also enables `npm stage publish` for new Trusted Publisher configurations. For each stable
-release, bump `package.json`, commit the change, create the matching `v<version>` tag, and push it.
-The `publish-npm` job waits for portable tests and repository checks, verifies the tag, then publishes
-with OIDC and provenance. A staged version stays unpublished until a maintainer reviews and approves
-it with two-factor authentication.
-
-The workflow requires Node 24 and npm 11.5.1 or newer. It does not use an `NPM_TOKEN` GitHub
-secret. Pre-release tags are not published by this job.
-
-**Nothing here was executed in this round.** No install, reload or restart was performed, no profile
-was touched, and installation through this channel is therefore **not verified here**. What was
-checked is only that an already-published release and its asset metadata exist (a read-only `gh
-release view`: tag, target commit, asset name); no payload was downloaded, unpacked or installed, and
-the artifact of a *future* build — including its digest — can only be verified after that release
-runs. Exact flags and spec forms come from the target CLI's own `plugin --help`. If an install fails,
-keep the manifest, lockfile and CLI output and report it rather than hand-editing a profile.
-
-## Get the source
-
-The source version on this branch is **`0.3.0`**. Which version a given download
-carries is decided by the manifest inside that build's tarball — compare it with the release name
-(`v<version> · <sha>`) rather than assuming that `main` and this document agree.
-
-```sh
-git clone https://github.com/KouzakiUmi/dsh-tool-discovery
-cd dsh-tool-discovery
-```
-
-It is plain JavaScript with no build step. The manifest declares a runtime `dependencies` entry,
-`zod` (`^4.4.3`) — the trusted-epoch record table is handed to the host's storage domain as a zod
-schema — and declares the host packages it needs as `peerDependencies`, provided by the DSH
-installation. Nothing is vendored, and there is no build step that could paper over a missing host
-package.
-
-## Verify it yourself
-
-Run from the repository root:
-
-```sh
-npm test                          # unit suite — trust the output of this command
-npm run test:composition          # composition gates (real DSH Loader) — trust the output
-npm run test:all                  # both, in order
-npm run check                     # package identity + docs consistency (needs only Node)
-npm run clean                     # remove regenerable test residue
-```
-
-Most of the unit suite needs nothing but Node. Two files —
-`plugin/tests/unit/client.test.mjs` and `plugin/tests/unit/settings.test.mjs` — are
-host-bound: they import React and `@deepseek-ai/schemastery` at module top level out of an
-installed DSH, resolved through `plugin/contracts/install-resolver.mjs`. Run the suite where
-such an installation is present; if it is not at the default location, point
-`DSH_INSTALL_ROOT` at it.
-
-CI's portable unit job therefore runs everything except exactly those two files, which it
-reports as skipped with the reason. That job is the portable subset, not the whole unit
-proof: the full suite, both host-bound files included, is what the local `npm test` run
-against a real DSH root exercises. Nothing here claims browser or DOM rendering coverage.
-
-Counts move as suites are added, so they are deliberately not written down here. Treat the actual
-output of these two commands as the source of truth; a number printed in this file would drift.
-
-`test:composition` runs every `plugin/tests/composition/gate-*.test.mjs` file against a real Loader:
-adapter gates, lifecycle, recovery and fork, event-`seq`, cache epoch, settings, tool churn and the
-trusted-epoch suites. A new gate file is picked up by the glob; nothing else needs editing. See
-[07 — recovery and fork coverage](plugin/docs/07-lifecycle-recovery-coverage.md).
-
-The composition suites boot a real Cordis Loader against an installed DSH, so they need the host to
-be present. They resolve packages from that installation; if it is not at the default location,
-point `DSH_INSTALL_ROOT` at it. These commands install and restart nothing, and they do not touch
-your DSH profile; they do create temporary session files under `plugin/fixtures/tmp/` (ignored by
-Git) and remove them when each test process exits. Set `DSH_KEEP_TMP=1` to keep them for debugging;
-`npm run clean` removes any leftovers.
-
-The quality tooling is published, but the full suite needs the frozen scoring dataset, which is
-not published — so it does not complete on a public checkout. See
-[current status](plugin/docs/05-current-status.md) for what that dataset covers and where it
-stands.
 
 ## Configuration
 
@@ -263,16 +205,29 @@ To start with only the three discovery entries, set `alwaysAllowPresetTools: fal
 The three entries cannot be removed. Names that are not native-visible in the current agent are
 not granted merely because the settings catalog contains them.
 
-### Settings panel
+### Settings page: the Tool discovery home
 
-With the native `schemastery` peer present, DSH's own settings page renders a **Tool discovery** tab
-for this plugin: optional feature switches and an **application-wide registration catalog**, including
-preloaded presets even before any session exists. The catalog reads all current registration layers,
-not session eligibility, discovery/loading state, or outbound headers. It supports a name filter,
-checkboxes and **Restore DSH default**; selection writes only the root `alwaysVisible` field.
-Missing names are labelled **not registered in the application catalog**, never as an execution
-failure. If the installed SDK cannot supply a complete registry, absent names are **unconfirmed**.
-Global registration does not promise execution permission in every session.
+With the native `schemastery` peer present, the plugin contributes its own top-level settings page —
+**Settings → Tool discovery** (a `settings.section` contribution, the plugin's home in the GUI). It
+is laid out as an at-a-glance home rather than a bare form:
+
+- **Status strip** — live counts from the same metadata the panel edits: fixed entries, catalog
+  tools, initial-list size, and how many names are *not registered* in the application catalog or
+  *unconfirmed*.
+- **Three entries reference cards** — `tool_list` / `tool_search` / `tool_load`: what each answers,
+  what it returns, and which one changes the active set, plus the two invariants above.
+- **Optional feature switches** and the **manual initial tool list** — an application-wide
+  registration catalog, including preloaded presets even before any session exists. The catalog
+  reads all current registration layers, not session eligibility, discovery/loading state, or
+  outbound headers. It supports a name filter, checkboxes and **Restore DSH default**; selection
+  writes only the root `alwaysVisible` field. Missing names are labelled **not registered in the
+  application catalog**, never as an execution failure. If the installed SDK cannot supply a
+  complete registry, absent names are **unconfirmed**. Global registration does not promise
+  execution permission in every session.
+- **Advanced** — interface language, JSON editors for `budgets` and `categoryConfig`, and
+  `frameworkRetained` shown read-only.
+
+Every switch and field:
 
 - **Inject initial tools** (`initialToolsEnabled`, default `true`): disabling preserves the configured list but stops automatic initial injection; `tool_load` still works. This switch and the list apply in a **new session or after successful compaction**, not mid-epoch.
 - **Always allow tools specified by the preset** (`alwaysAllowPresetTools`, default `true`): retain only tools registered by the exact preset revision the current agent joined, intersected with its native-visible capabilities. Other presets and later agent-only tools do not become trusted. Independent of manual injection; uses the same new-session/successful-compaction boundary. It preserves the initial set, not arbitrary execution or native permission bypass.
@@ -282,9 +237,13 @@ Global registration does not promise execution permission in every session.
 - **Make the initial list an exact set** (`respectAlwaysVisible`, default `false`): **off with initial injection enabled**, DSH core tools that the current scope actually offers are auto-enrolled and can be called without a load — fewer round-trips, and a new upstream core tool keeps working without waiting for a plugin update. **On**, your `alwaysVisible` (plus preset retention) is the *ceiling*: a core tool you left out has to be loaded like any other tool. Refusing it is not a deadlock — an omitted core tool is simply **not in the protected baseline**, so one ordinary `tool_load` admits it on the next request (`tolerantLoadProtected` is about something else: re-loading a tool that is *already* resident stays idempotent). Two caveats: a session already running under strict mode keeps admitting what its durable record already lists until the next user `/compact`; and this is not a volatile field — changing it reloads the plugin.
 - Eligibility, protocol receipts, corrupt-history checks and execution guards remain enforced. The three discovery entries cannot be disabled.
 
-The tab also exposes **idempotent baseline loading** (`tolerantLoadProtected`) and **exact initial list** (`respectAlwaysVisible`) switches. Advanced settings include language selection and JSON editors for `budgets` and `categoryConfig`, listing supported keys and rejecting malformed JSON, unknown keys, invalid limits and incomplete category copy before saving. Small budget limits may block tasks or add round-trips. `frameworkRetained` is displayed read-only, not editable here.
+The page also exposes **idempotent baseline loading** (`tolerantLoadProtected`) and **exact initial
+list** (`respectAlwaysVisible`) switches. The advanced JSON editors list supported keys and reject
+malformed JSON, unknown keys, invalid limits and incomplete category copy before saving. Small
+budget limits may block tasks or add round-trips. `frameworkRetained` is displayed read-only, not
+editable here.
 
-An omitted `alwaysVisible` displays the actual schema defaults. All mutation controls are disabled during loading, read-only state or an in-flight save to prevent concurrent overwrites. Restore-default is disabled without metadata and avoids unchanged writes. Rejected writes show an error, not a success notice. Non-volatile fields reload the plugin when saved; the tab warns about this. This is the native config surface, with no legacy wrapper/UI compatibility promise. The standalone real-DOM probe uses a controlled persistence channel, not the active user's configuration, and does not imply online installation or deployment.
+An omitted `alwaysVisible` displays the actual schema defaults. All mutation controls are disabled during loading, read-only state or an in-flight save to prevent concurrent overwrites. Restore-default is disabled without metadata and avoids unchanged writes. Rejected writes show an error, not a success notice. Non-volatile fields reload the plugin when saved; the page warns about this. This is the native config surface, with no legacy wrapper/UI compatibility promise. The standalone real-DOM probe uses a controlled persistence channel, not the active user's configuration, and does not imply online installation or deployment.
 
 ### Budgets: hard caps are off by default
 
@@ -355,6 +314,100 @@ cap does not make output unbounded — it only means there is no extra ceiling b
 `initialSchemaTargetTokens` and `maxInitialBytes` are historical target values. Nothing in the
 current code path enforces them, so they are **not** a measured guarantee of a 2K initial budget.
 
+## Verify it yourself
+
+Run from the repository root:
+
+```sh
+npm test                          # unit suite — trust the output of this command
+npm run test:composition          # composition gates (real DSH Loader) — trust the output
+npm run test:all                  # both, in order
+npm run check                     # package identity + docs consistency (needs only Node)
+npm run clean                     # remove regenerable test residue
+```
+
+Most of the unit suite needs nothing but Node. Two files —
+`plugin/tests/unit/client.test.mjs` and `plugin/tests/unit/settings.test.mjs` — are
+host-bound: they import React and `@deepseek-ai/schemastery` at module top level out of an
+installed DSH, resolved through `plugin/contracts/install-resolver.mjs`. Run the suite where
+such an installation is present; if it is not at the default location, point
+`DSH_INSTALL_ROOT` at it.
+
+CI's portable unit job therefore runs everything except exactly those two files, which it
+reports as skipped with the reason. That job is the portable subset, not the whole unit
+proof: the full suite, both host-bound files included, is what the local `npm test` run
+against a real DSH root exercises. Nothing here claims browser or DOM rendering coverage.
+
+Counts move as suites are added, so they are deliberately not written down here. Treat the actual
+output of these two commands as the source of truth; a number printed in this file would drift.
+
+`test:composition` runs every `plugin/tests/composition/gate-*.test.mjs` file against a real Loader:
+adapter gates, lifecycle, recovery and fork, event-`seq`, cache epoch, settings, tool churn and the
+trusted-epoch suites. A new gate file is picked up by the glob; nothing else needs editing. See
+[07 — recovery and fork coverage](plugin/docs/07-lifecycle-recovery-coverage.md).
+
+The composition suites boot a real Cordis Loader against an installed DSH, so they need the host to
+be present. They resolve packages from that installation; if it is not at the default location,
+point `DSH_INSTALL_ROOT` at it. These commands install and restart nothing, and they do not touch
+your DSH profile; they do create temporary session files under `plugin/fixtures/tmp/` (ignored by
+Git) and remove them when each test process exits. Set `DSH_KEEP_TMP=1` to keep them for debugging;
+`npm run clean` removes any leftovers.
+
+The quality tooling is published, but the full suite needs the frozen scoring dataset, which is
+not published — so it does not complete on a public checkout. See
+[current status](plugin/docs/05-current-status.md) for what that dataset covers and where it
+stands.
+
+## Get the source
+
+The source version on this branch is **`0.3.1`** (in development; the versions published to npm so
+far are `0.2.1`, `0.2.2` and `0.3.0`). Which version a given download
+carries is decided by the manifest inside that build's tarball — compare it with the release name
+(`v<version> · <sha>`) rather than assuming that `main` and this document agree.
+
+```sh
+git clone https://github.com/KouzakiUmi/dsh-tool-discovery
+cd dsh-tool-discovery
+```
+
+It is plain JavaScript with no build step. The manifest declares a runtime `dependencies` entry,
+`zod` (`^4.4.3`) — the trusted-epoch record table is handed to the host's storage domain as a zod
+schema — and declares the host packages it needs as `peerDependencies`, provided by the DSH
+installation. Nothing is vendored, and there is no build step that could paper over a missing host
+package.
+
+## Publishing to npm
+
+The initial `0.2.1` publication was a one-time bootstrap because npm only lets a maintainer attach a
+Trusted Publisher after the package exists. The npm account's two-factor check was completed with
+Windows Hello. The Trusted Publisher is now registered for:
+
+| Setting | Value |
+| --- | --- |
+| Provider | GitHub Actions |
+| Organization/user | `KouzakiUmi` |
+| Repository | `dsh-tool-discovery` |
+| Workflow filename | `ci.yml` |
+| Environment | None |
+| Allowed publishing | `npm publish`; `npm stage publish` (npm default) |
+
+npm also enables `npm stage publish` for new Trusted Publisher configurations. For each stable
+release, bump `package.json`, commit the change, create the matching `v<version>` tag, and push it.
+The `publish-npm` job waits for portable tests and repository checks, verifies the tag, then publishes
+with OIDC and provenance. A staged version stays unpublished until a maintainer reviews and approves
+it with two-factor authentication.
+
+The workflow requires Node 24 and npm 11.5.1 or newer. It does not use an `NPM_TOKEN` GitHub
+secret. Pre-release tags are not published by this job.
+
+**Nothing here was executed in this round.** No install, reload or restart was performed, no profile
+was touched, and installation through this channel is therefore **not verified here**. What was
+checked is only that an already-published release and its asset metadata exist (a read-only `gh
+release view`: tag, target commit, asset name); no payload was downloaded, unpacked or installed, and
+the artifact of a *future* build — including its digest — can only be verified after that release
+runs. Exact flags and spec forms come from the target CLI's own `plugin --help`. If an install fails,
+keep the manifest, lockfile and CLI output and report it rather than hand-editing a profile.
+
 ## Architecture and what it costs
 
 A stable wire plus append-only disclosure reduce the number of *unnecessary* prefix changes in the
@@ -377,7 +430,7 @@ This is a working implementation, not a finished product.
   so nothing here should be read as an accepted online GUI or as full product acceptance.
 - **The settings UI is covered by unit and integration tests, not by rendered-DOM acceptance.** The
   native config surface, the cache-epoch behaviour, the catalog metadata, and the client-side
-  helpers are all tested; the panel has not been exercised in a real browser.
+  helpers are all tested; the page has not been exercised in a real browser.
 - **No token saving is claimed.** The point of the design is to carry less in each request; the
   actual reduction has not been measured, and neither has latency.
 - Retrieval quality — how often the right tool is found — has not been measured either.
