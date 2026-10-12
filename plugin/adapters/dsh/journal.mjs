@@ -777,14 +777,30 @@ export function createJournal(deps) {
    * 冷恢复重放专用的压缩结算：推进 `currentEpoch` 与折叠下界，但**不**触发任何
    * onEpochReset / onUserCompactionComplete —— 重放期间 runtime 还没建好名单，
    * 更不能把历史里的命令当成迁移授权。
+   *
+   * 判据与 live 的 settleCompactionEnd 完全一致，日志点也对齐（加 `restoring: true`
+   * 标记区分来源）：否则冷恢复后"这个周期为什么没被认出来"无法取证 —— live 路径
+   * 对孤立 end / turn 不匹配 / 重复摘要 / 失败都有日志，重放路径却一行不留。
    */
   function settleCompactionEndQuiet(event) {
     const id = event.data?.compactionId;
     const open = typeof id === 'string' ? openCompactions.get(id) : undefined;
-    if (open === undefined || !openCompactions.delete(id)) return;
-    if (event.data?.turn !== open.turn) return;
-    if (open.summaries.length !== 1) return;
-    if (event.data?.error !== undefined) return;
+    if (open === undefined || !openCompactions.delete(id)) {
+      log('compaction:end-without-start', { sessionId, seq: event.seq, restoring: true });
+      return;
+    }
+    if (event.data?.turn !== open.turn) {
+      log('compaction:turn-mismatch-no-reset', { sessionId, seq: event.seq, restoring: true });
+      return;
+    }
+    if (open.summaries.length !== 1) {
+      log('compaction:not-successful-no-reset', { sessionId, seq: event.seq, summaries: open.summaries.length, restoring: true });
+      return;
+    }
+    if (event.data?.error !== undefined) {
+      log('compaction:not-successful-no-reset', { sessionId, seq: event.seq, error: true, restoring: true });
+      return;
+    }
     lastSuccessCompactionEndSeq = event.seq;
     currentEpoch = compactedEpochIdentity(id, event.seq);
   }

@@ -38,6 +38,11 @@ what is verified, what is unverified, and what this version refuses to support �
 - Add real-host regression gates and expand the real React/DOM probe; its persistence channel is a
   controlled fixture, not the active user's configuration. These changes are uninstalled and unreleased;
   independent security-boundary approval remains a separate gate.
+- Observability-only fixes (no behaviour change): fail-closed projections whose engine never reached
+  `ready` now log like the other fail-closed classes; restore-replay compaction settlements log the
+  same anomalies the live path logs; `restore:folded` reports the per-reason distribution of rejected
+  pairs; the self-admission view failure and the pending-refresh failure are logged with session
+  context instead of silently swallowed.
 
 ## [0.3.0] — 2026-10-10 — DSH STORE contract and `0.2.1-alpha.2` installability
 
