@@ -24,6 +24,13 @@ what is verified, what is unverified, and what this version refuses to support â
 
 ## [Unreleased]
 
+- Release owned discovery runtimes through the plugin's Cordis effect on unload. Invalidate only the
+  old activation's pending assembly, restoration and pre-step waits with an explicit `STATE_NOT_READY`
+  error, preventing the tested unsent requests from carrying unloaded schemas; a restarted activation
+  remains usable. Add six real-fiber regression gates and five portable activation-lifetime tests,
+  including abort-listener cleanup. Already-sent requests are not recalled; this is not full browser
+  HMR or production-installation acceptance.
+
 - Fix the active discovery badge's foreground/background contrast and count only registered catalog
   rows in the home status strip. Keep unsaved JSON editor drafts across settings-section navigation
   within the same plugin activation; a changed saved field resets its own draft.

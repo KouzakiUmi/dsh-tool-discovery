@@ -479,6 +479,10 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       disposers.push(typeof disposer === 'function' ? disposer : () => {});
     };
 
+    // Cordis 自动回收监听/工具注册，但不认识下面的自有 runtime/engine/journal/ledger。
+    // 与存储子 fiber 同样用 effect 持有 cleanup；失败激活已清空 disposers，后续释放为幂等空操作。
+    ctx.effect(() => rollback, 'progressive discovery lifecycle');
+
     try {
       const lifecycle = createLifecycle({
         ctx,
@@ -576,11 +580,13 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       // 这里在 next() 之后等本次新 epoch 的 put 落定；期间尊重宿主取消信号，
       // 不新增任何超时。
       own(ctx.on('agent/pre-step', async (payload, next) => {
-        const decision = await next();
+        lifecycle.assertActive();
+        const decision = await lifecycle.waitForActive(next());
         const sessionId = payload?.agent?.session?.id;
         if (typeof sessionId === 'string') {
           await lifecycle.awaitEpochRecord(sessionId, payload?.signal);
         }
+        lifecycle.assertActive();
         return decision;
       }));
       // 工具集变了（MCP 接入/断开、插件热注册）→ 目录元数据跟着更新，设置面板重读。

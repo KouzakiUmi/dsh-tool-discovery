@@ -53,6 +53,9 @@ export function createProjection(deps) {
   // 常驻工具名单**不在**这里取用：它是 per-runtime 的（见 lifecycle.adoptEpochNames），
   // 成功压缩会重开一个周期并换上新名单，apply 期的静态快照到那时已经过期。
   const log = deps.log ?? (() => {});
+  // 生产 lifecycle 持有 activation；独立投影 fixture 不持有插件生命周期。
+  const assertActive = () => lifecycle.assertActive?.();
+  const waitForActive = (pending) => lifecycle.waitForActive?.(pending) ?? pending;
 
   /**
    * 宿主本轮给出的全量工具 → name → schema 索引。
@@ -163,25 +166,25 @@ export function createProjection(deps) {
    */
   async function awaitRestore(runtime, signal) {
     const sessionId = runtime.scope.sessionId;
+    if (signal?.aborted === true) throw signal.reason ?? new Error(`assemble aborted before the restore of "${sessionId}" settled`);
     const pending = Promise.resolve(lifecycle.whenReady(sessionId));
     const report = (outcome) => {
       log('projection:restore-wait', { sessionId, mode: outcome?.mode, restoring: runtime.restoring });
       return outcome?.mode;
     };
     if (signal === undefined || signal === null || typeof signal.addEventListener !== 'function') {
-      return report(await pending);
+      return report(await waitForActive(pending));
     }
-    if (signal.aborted === true) throw signal.reason ?? new Error(`assemble aborted before the restore of "${sessionId}" settled`);
     /** @type {(() => void)|undefined} */
     let onAbort;
     try {
-      return report(await Promise.race([
+      return report(await waitForActive(Promise.race([
         pending,
         new Promise((_resolve, reject) => {
           onAbort = () => reject(signal.reason ?? new Error(`assemble aborted while the restore of "${sessionId}" is still pending`));
           signal.addEventListener('abort', onAbort, { once: true });
         }),
-      ]));
+      ])));
     } finally {
       if (onAbort !== undefined) signal.removeEventListener('abort', onAbort);
     }
@@ -206,6 +209,7 @@ export function createProjection(deps) {
   }
 
   return ctx.on('system-prompt/assemble', async (assembly, context, next) => {
+    assertActive();
     const previous = context?.agent;
     // **进入本次 assemble 就先把上一份"尚未发送的刷新入口"作废**：上一次 pre-step 的
     // assembly 已经被用掉了（而且宿主很可能已经冻结它），此后任何压缩都不该再去改写
@@ -215,7 +219,8 @@ export function createProjection(deps) {
       const prior = lifecycle.sessions?.get(previous.session.id);
       if (prior !== undefined) prior.refreshPendingProjection = null;
     }
-    const transformed = await next();
+    const transformed = await waitForActive(next());
+    assertActive();
     const agent = context?.agent;
     if (agent === undefined) return transformed;
 
@@ -230,10 +235,12 @@ export function createProjection(deps) {
     // 冷恢复未落定就先等它落定：否则这一轮会把已披露工具整段丢掉（见文件头
     //「冷恢复窗口」）。仍在恢复 = 不发请求；已决失败 = 只留基线（fail closed）。
     if (runtime.restoring) await awaitRestore(runtime, context?.signal);
+    assertActive();
     // 可信基线（trusted-epoch.mjs）：pending/blocked 一律**不发请求**。
     // 这不是"缩水兜底"——发一份只带三入口的请求等于承认"没有授权也照发"，
     // 那正是本轮要移除的出站授信。
     await enforceTrustedBaseline(runtime, context?.signal);
+    assertActive();
     if (runtime.pendingProjectionError !== undefined && runtime.pendingProjectionError !== null) {
       // 就地刷新失败过：这份还没发送的 assembly 仍是旧样子，绝不能发出去。
       const error = runtime.pendingProjectionError;
@@ -245,6 +252,7 @@ export function createProjection(deps) {
 
     // 留一份"尚未发送"的刷新入口。只保留最新一份：连续两次 assemble 以后一份为准。
     runtime.refreshPendingProjection = () => {
+      assertActive();
       try {
         const next_kept = project(runtime, scope, incoming);
         kept.splice(0, kept.length, ...next_kept);

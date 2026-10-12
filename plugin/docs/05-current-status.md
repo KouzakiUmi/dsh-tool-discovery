@@ -1,6 +1,6 @@
 # 05 · 当前状态
 
-截至 **2026-10-12**（Asia/Hong_Kong；最后一次取证运行 2026-10-11）。本文件只记录**有证据的结论**，并把每项标为 **已验证 / 未验证 / 不支持**。协议判据见[02](<02-protocol-and-data-model.md>)，矩阵见[03](<03-implementation-and-acceptance.md>)，接口事实见[04](<04-runtime-evidence.md>)，可信周期细节见[08](<08-trusted-epoch-baselines.md>)。
+截至 **2026-10-13**（Asia/Hong_Kong；最后一次取证运行 2026-10-13）。本文件只记录**有证据的结论**，并把每项标为 **已验证 / 未验证 / 不支持**。协议判据见[02](<02-protocol-and-data-model.md>)，矩阵见[03](<03-implementation-and-acceptance.md>)，接口事实见[04](<04-runtime-evidence.md>)，可信周期细节见[08](<08-trusted-epoch-baselines.md>)。
 
 > **维护方式**：本文件是**当前快照**，不是流水账。过程叙述（每一轮修了什么、谁复核、命令与日志）归 [`CHANGELOG.md`](../../CHANGELOG.md)、[08](<08-trusted-epoch-baselines.md>) 与私有证据 `plugin/reports/**` / `plugin/audits/**`；这里只留结论、数字与未覆盖项。旧版逐轮叙述可在 git 历史中取回。
 
@@ -21,13 +21,15 @@
 | 质量验证器 | **20 PASS / 1 FAIL**（exit 1，类别资格 H037 ×2、H044 ×1）；digest 全 PASS、冻结数据未改；**评分 still not ready** | `npm run check:quality` |
 
 - 上表两行测试数字来自 **`0.2.1` 树的最新运行**：共 **508** 项测试全部通过（unit **375** / composition **133**，0 fail / 0 skip，exit 0）。新增 `plugin/tests/unit/load-tolerance.test.mjs` 与 `plugin/tests/composition/gate-runtime-verification.test.mjs`。仓库检查同轮跑出：`npm run check`（exit 0，16 份文档链接全部可解析）与 `git diff --check`（exit 0）。
-- **当前测试基线（2026-10-12 复跑，`0.3.1` 树，Core `0.2.1-alpha.1` 默认安装根）**：单元 **412 pass / 0 fail / 0 skip**、组合 **139 pass / 0 fail / 0 skip**（均 exit 0，合计 551）。此前 2026-10-11 于 Core `0.2.1-alpha.2` 的 `0.3.0` 树复跑为 401/137（逐版本证据见 [10 §2](<10-store-compatibility.md>)）；上表 375/133 是 2026-10-09 的 `0.2.1` 树取证。三组数字**不是同一次运行**，不可混称；此后计数以最新一次为准，历史数字按取证时点原样保留。
-- 本轮核心修复：运行时实际装载工具自省自证（避免 `subagent` 等官方核心系统工具被误判拦截），以及常驻工具容错幂等 Load（`tolerantLoadProtected`，避免模型遭遇死锁）。上游核心工具名单扩展为 37 项。
-- 本轮只重跑了测试套件与仓库一致性检查；质量工装/质量验证器保留此前结果，**未重跑**。回归见[基础可选开关](<../tests/composition/gate-optional-settings.test.mjs>)、[全局目录与 preset](<../tests/composition/gate-global-tools-preset.test.mjs>)、[子代理开关](<../tests/composition/gate-subagent-epoch-option.test.mjs>)：真实 Loader 覆盖预加载 preset 无会话登记、会话限制不影响全局目录、preset 卸载、当前修订隔离、默认放行与 opt-out/load-use、原生 deny、严格基线与 volatile 更新；子代理覆盖旧会话 owned resume、非空继承前缀的真实 fork、不可用存储、严格开关重挂载恢复、子代理作为顶层恢复时撤销豁免及四项开关矩阵。不是浏览器、外部 wire 或独立安全签署；**独立安全复核仍在进行中**。
+- **历史测试基线（2026-10-12 复跑，`0.3.1` 树，Core `0.2.1-alpha.1` 默认安装根）**：单元 **412 pass / 0 fail / 0 skip**、组合 **139 pass / 0 fail / 0 skip**（均 exit 0，合计 551）。此前 2026-10-11 于 Core `0.2.1-alpha.2` 的 `0.3.0` 树复跑为 401/137（逐版本证据见 [10 §2](<10-store-compatibility.md>)）；上表 375/133 是 2026-10-09 的 `0.2.1` 树取证。三组数字**不是同一次运行**，不可混称；此后计数以最新一次为准，历史数字按取证时点原样保留。
+- **修复前基线（2026-10-13 复跑，`0.3.1` 树，与上述各行不是同一次运行）**：单元 **414 pass / 0 fail / 0 skip**、组合 **139 pass / 0 fail / 0 skip**（均 exit 0，合计 553）；`node scripts/check-repo.mjs` 通过（**18 份文档、243 条链接**全部可解析，修复前采样）。本轮测试宿主**实际解析**的宿主包为 `@deepseek-ai/cordis` `4.0.5-alpha.1`、`@deepseek-ai/dsh-tools` 与 `@deepseek-ai/dsh-agent-loop` `0.2.1-alpha.2`——版本口径以宿主安装内实际解析的包为准，**不把 CLI 包版本当作 Core 版本引用**。
+- **当前测试基线（2026-10-13，卸载及旧 activation 请求修复后）**：主代理亲跑单元 **419 pass / 0 fail / 0 skip**、组合 **145 pass / 0 fail / 0 skip**，均 exit 0（合计 564）；具体命令、独立复核与未覆盖范围见 §2.8。质量验证器本轮未重跑，不升级其此前失败结论。
+- 此前核心修复：运行时实际装载工具自省自证（避免 `subagent` 等官方核心系统工具被误判拦截），以及常驻工具容错幂等 Load（`tolerantLoadProtected`，避免模型遭遇死锁）。上游核心工具名单扩展为 37 项。
+- 此前一轮只重跑了测试套件与仓库一致性检查；质量工装/质量验证器保留此前结果，**未重跑**。回归见[基础可选开关](<../tests/composition/gate-optional-settings.test.mjs>)、[全局目录与 preset](<../tests/composition/gate-global-tools-preset.test.mjs>)、[子代理开关](<../tests/composition/gate-subagent-epoch-option.test.mjs>)：真实 Loader 覆盖预加载 preset 无会话登记、会话限制不影响全局目录、preset 卸载、当前修订隔离、默认放行与 opt-out/load-use、原生 deny、严格基线与 volatile 更新；子代理覆盖旧会话 owned resume、非空继承前缀的真实 fork、不可用存储、严格开关重挂载恢复、子代理作为顶层恢复时撤销豁免及四项开关矩阵。不是浏览器、外部 wire 或独立安全签署；**独立安全复核仍在进行中**。
 - 以上是**各自标注时点的复跑**，不是“独立签署”：作者复跑与非作者复核是两回事，各子系统的复核范围见 §0.1 / §0.2 / §5 与 [08 §5](<08-trusted-epoch-baselines.md>)。数字会随测试增减漂移，以命令实际输出为准。
 - 质量验证器的结论**依赖私有的 `quality/queries/` 与 `quality/labels/`**，只在完整内部资料下成立；无这两者的 checkout 无法复现该退出码。
 - **入口执行语义**（已定案，见 §2.5）：入口 `execute` 对业务失败**返回 `ok:false` + `error.code` 的 JSON 串，不外抛**；“execute 单点抛错”的旧说法是错的。
-- **仍未验证**（不因任一结果而升级）：外部真实 provider wire、token / TTFT、检索质量门槛、**L04 compaction**、**L08 crash/fsync 窗口**、**L10 HMR**、**S12 非 native 组合**、**S13 同 session 多活动 agent**、多 scope 并发压力、回执 meta 通道、产品验收与安装生效。
+- **仍未验证**（不因任一结果而升级）：外部真实 provider wire、token / TTFT、检索质量门槛、**L04 compaction 的未覆盖窗口**（真实手动/自动压缩范围已由 CE8/CE9 实证，见 §2.7；crash/fsync、GUI 自然操作仍未驱动）、**L08 crash/fsync 窗口**、**L10 HMR**、**S12 非 native 组合**、**S13 同 session 多活动 agent**、多 scope 并发压力、回执 meta 通道、产品验收与安装生效。
 
 ### 0.1 可信周期基线（trusted-epoch，**WIP / 验收未完成**）
 
@@ -146,13 +148,29 @@
 - **定位并修复的真缺陷**：移除 → 重加 → 重新 `tool_load` 后，该工具**永久**停在 `TOOL_NOT_ADVERTISED`。根因：宿主 `@deepseek-ai/dsh-agent-loop` 的 `buildRequest` **只在 header 变化时**才 append `request/header`；出站 wire 逐字未变时宿主不发事件，而 `invalidateTool` 与 `reducePair` 已清掉 `advertised`，记账永远补不回来。修法在 [`journal.mjs`](../adapters/dsh/journal.mjs) 的 `applyAdvertisementPass` / `replayAdvertisements`：记住最后一次观测到的 header，在 load 折叠成功后据此重放一次对账。**没有放宽任何拒绝判据**。
 - **由此确立的实现事实**：`request/header` **不是**“每个出站请求都有”的事件；任何依赖“下一轮必然有 header 事件来刷新记账”的写法都会踩这个坑。
 
+### 2.7 缓存周期压缩（CE8 / CE9，2026-10-13 订正）
+
+此前本文件把 L04 compaction 记为完全未驱动；现按已并入的真实 Loader 门禁订正覆盖范围（[`gate-cache-epoch.test.mjs`](../tests/composition/gate-cache-epoch.test.mjs)）：
+
+- **CE8**（真实手动压缩 + 保存重启）：宿主真实压缩服务 `compactNow` 生成合法 summary / shadow / end（`shadowedSeqs` 非空，**非 no-op**）；成功压缩清空 frozen 披露段；以同数据目录**重启组合并冷恢复**后旧工具不复活（下一请求只剩三个入口、`selected` 为空），新周期重新 `tool_load` 后可执行（body 计数 1）。
+- **CE9**（真实自动压力压缩）：自动压力钩子触发真实摘要请求（`purpose === 'compaction'`）与成功的 `compaction/end` 事件；下一请求只保留常驻入口，`selected` 清空、frozen 清空。
+
+**仍未驱动**：crash / fsync 窗口、GUI 自然压缩操作、完整产品验收；本节不升级这些项，也不把整个 HMR/压缩面记为通过。
+
+### 2.8 插件卸载与旧 activation 请求失效（2026-10-13，工作区窄修复）
+
+- Cordis effect 释放插件自有 runtime：卸载后 `sessions` 清空，engine / journal / ledger 的 dispose 各执行一次；重复释放幂等，失败激活仍走整组 rollback。
+- 只失效本次插件 activation 的等待，不 abort 宿主/用户 signal。所测 assemble / pre-step downstream `next()` 与冷恢复 query 等待跨卸载或 restart 时，旧请求在闸门释放前明确报 `STATE_NOT_READY`，mock provider 请求数为 0；旧 lifecycle 不得重建 runtime，新 activation 可正常发送请求。
+- 正式回归：[真实 fiber 门禁](../tests/composition/gate-plugin-disposal.test.mjs)（PD1–PD6）与 [activation 单测](../tests/unit/activation-lifetime.test.mjs)（AL1–AL5，包括新增 abort listener 在成功/失败/释放后归零）。主代理亲跑 `node --test plugin/tests/unit/*.test.mjs` **419 pass / 0 fail / 0 skip**、`node --test "plugin/tests/composition/gate-*.test.mjs"` **145 pass / 0 fail / 0 skip**，均 exit 0。作者过程证据：`plugin/reports/plugin-disposal-fix-20261013.md` §5；**非作者 GPT-6.1 Sol high 第二轮有界 PASS，无必修项**：独立原反例 **8/8**、自建场景 **10/10**、相关正式回归 **28/28** 均 exit 0，屏障与 ledger 的进程内变异负控制有效；报告 `plugin/audits/plugin-disposal-review-20261013.round2.md`。主代理核对最终三份生产文件与两份正式测试的 SHA256，并亲跑 `node plugin/audits/plugin-disposal-review-20261013.round2.mjs` **10/10，exit 0**（hash 稳定、unhandledRejections 为空）。本签署不替其它功能补签。
+- **保留残余**：迟到读仍可能回填被外部持有的旧 journal 缓存，旧 engine 仍可能出现 incompatible 空状态；本节不承诺卸载后零内部写入、GC 定量释放或已发送请求回撤。浏览器真实 HMR、任意第三方 waterfall 调度、外部真实 provider wire、生产安装及完整产品验收均未覆盖；不替其它功能补签。
+
 ## 3. 未验证
 
 - **外部真实 provider wire**：现有录制面是最终请求对象，不是外部 wire。
 - **token 与 TTFT**：初始工具相关 token、P95 检索延迟、首次有效工具延迟的 A/B/C 实验全部未做。
 - **搜索质量门槛**：held-out Recall@5、负例误命中率、模型正确选定率均未产出；数据本身尚不可发布。检索改动目前靠单测与手工探针，没有指标回归保护。
-- **冷恢复端到端链路**（L01/L04/L08）：分支语义与 fork / unload / 候选 / 资格恢复已有实证（[07](<07-lifecycle-recovery-coverage.md>)）；**L04 compaction、L08 crash/fsync 窗口仍未驱动**。
-- **fork / compaction / resume 全量语义**（L01/L03/L04）：真实宿主 fork seam 的恢复与不继承语义已实证；**L04 compaction 仍未驱动**，仅内核单测层覆盖。
+- **冷恢复端到端链路**（L01/L04/L08）：分支语义与 fork / unload / 候选 / 资格恢复已有实证（[07](<07-lifecycle-recovery-coverage.md>)）；L04 的真实手动/自动压缩范围已由 CE8/CE9 实证（见 §2.7），**L08 crash/fsync 窗口与 GUI 自然压缩操作仍未驱动**。
+- **fork / compaction / resume 全量语义**（L01/L03/L04）：真实宿主 fork seam 的恢复与不继承语义已实证；压缩折叠在内核单测层覆盖，真实手动/自动压缩已由 CE8/CE9 实证（见 §2.7），**compaction 的 crash/fsync 窗口仍未驱动**。
 - **canonical `tool/result` 的 seq 门禁**：8 项 event-seq 套件；该层源码曾由独立会话复审通过，**范围限当时 3 个 code 文件**。真实总线方法学已定（`session.append` 以自身 `SessionSeq` 校验才 emit；合法伪造 seq 被 projection 拒、畸形 seq 被 `SessionSeq` 拒，journal 均未收到）。**仅正常 bus 路径已实证**；异常防御回归是直驱 `journal.onEvent` 的合成，真实宿主畸形总线与持久化损坏日志的端到端取证价值仍未验。出站 mock provider 录制只是装配证据，**不是真实 provider wire**。
 - **子代理真实委派链**：fork 走真实宿主 seam 已覆盖；**普通 spawn** 仍以 scope 注册模拟。
 - **非 native 展示模式、完整 prompt 组合、其它 waterfall 重新加工具**（S12）：未组合测试。
