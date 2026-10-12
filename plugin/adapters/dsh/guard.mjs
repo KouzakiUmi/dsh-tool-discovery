@@ -65,7 +65,11 @@ export function createGuard(deps) {
     // 工具必须像其它工具一样先 tool_load（名单层也同步不再自证补入）。被拒之后模型 load 一次
     // 即可 —— 被排除的名字**不在**受保护的基线里，engine 的 protected 判据不会拦它。
     // （`tolerantLoadProtected` 管的是另一件事：**已在名单里**的工具重复 load 保持幂等。）
-    if (respectAlwaysVisible() !== true
+    //
+    // `runtime.initialToolsEnabled !== false` 是本周期**快照**：用户禁用初始注入后，宿主自带的
+    // 核心工具不再被猜名自证补入 —— 否则一次猜名调用就能悄悄绕开关把名字塞回常驻名单。
+    // 快照在 runtime 建立与成功压缩两处刷新，周期中途改 volatile 开关不改变本周期行为。
+    if (respectAlwaysVisible() !== true && runtime.initialToolsEnabled !== false
       && CORE_TOOL_NAMES.includes(exec.name) && ctx.tools.get(exec.name, agent) !== undefined) {
       if (runtime.alwaysNameSet) runtime.alwaysNameSet.add(exec.name);
       // 可审计：这条放行**不**依赖可信记录、也不要求名字已在常驻集合 —— 它是"宿主自带的

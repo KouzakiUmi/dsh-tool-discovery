@@ -21,7 +21,7 @@
 // Schema 由调用方注入（工厂 deps.Schema），生产默认按裸包名动态 import —— 与
 // defineTool 同一形状，因此工作区（无 node_modules）也不会因本模块而无法加载。
 import { CORE_TOOL_NAMES } from '../../domain/core-tools.mjs';
-import { ENTRY_TOOL_NAMES } from '../../domain/constants.mjs';
+import { ENTRY_TOOL_NAMES, DEFAULT_BUDGETS, OPTIONAL_LIMIT_KEYS, CONTROLLED_CATEGORIES } from '../../domain/constants.mjs';
 
 /** meta key：设置面板读取的当前工具目录。 */
 export const INITIAL_TOOL_CHOICES = 'initialToolChoices';
@@ -65,6 +65,10 @@ export function buildConfig(Schema) {
     .default([...DEFAULT_ALWAYS_VISIBLE])
     .volatile()
     .description('Manual initial tool list. Replaces the DSH default list; current-preset retention is controlled separately. The three discovery entries are always present and cannot be removed.');
+  alwaysVisible.meta = { ...alwaysVisible.meta, settingConstraints: {
+    budgetKeys: Object.keys(DEFAULT_BUDGETS), optionalLimitKeys: [...OPTIONAL_LIMIT_KEYS],
+    categoryKeys: [...CONTROLLED_CATEGORIES],
+  } };
   return Schema.object({
     alwaysVisible,
     initialToolsEnabled: Schema.boolean()

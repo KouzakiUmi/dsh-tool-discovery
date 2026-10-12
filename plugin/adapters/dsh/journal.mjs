@@ -222,6 +222,15 @@ export function createJournal(deps) {
    * @type {any[]|null}
    */
   let latestHeaderTools = null;
+  // 仅保存本周期实际出站 wire 的首见内容/顺序，不授予任何执行或披露资格。
+  // 常驻授权仍由配置快照/可信记录给出，按需授权仍由 canonical load 链给出。
+  const disclosedWire = new Map();
+  function rememberDisclosedWire(tools) {
+    for (const tool of tools ?? []) {
+      if (typeof tool?.name !== 'string' || disclosedWire.has(tool.name)) continue;
+      disclosedWire.set(tool.name, JSON.parse(JSON.stringify(wireOfSchema(tool))));
+    }
+  }
   let restorePromise;
   /**
    * fork 继承边界（own-only 折叠的权威事实）：只折叠/观测 seq >= ownSeqStart 的事件。
@@ -357,6 +366,7 @@ export function createJournal(deps) {
       return;
     }
 
+    rememberDisclosedWire(headerTools);
     const byName = new Map(headerTools.map((tool) => [tool.name, tool]));
     applyAdvertisementPass(byName, event.seq);
   }
@@ -448,6 +458,7 @@ export function createJournal(deps) {
     // 再逐条 cancelOperation —— 两处都做会让"谁收口"变得不可读。
     liveCalls.clear();
     engine.resetCacheEpoch(scope, 'compaction-end');
+    disclosedWire.clear();
     // 周期重开：此刻（且仅此刻）取此刻的配置、换上新的常驻名单，并刷新那份**尚未发送**
     // 的投影（见 projection.mjs 的"未发送刷新"段：宿主在 pre-step 之后会返回旧 assembly）。
     //
@@ -738,6 +749,13 @@ export function createJournal(deps) {
       }
       const pairs = foldPairs(ownEvents).filter((p) => p.seq > lastSuccessCompactionEndSeq);
       const outcome = engine.restore(pairs, scope);
+      // 只恢复 own 当前周期内的首见 wire；名单/执行资格绝不从 header 恢复。
+      disclosedWire.clear();
+      for (const event of ownEvents) {
+        if (event.seq > lastSuccessCompactionEndSeq && event.type === 'request/header') {
+          rememberDisclosedWire(event.data?.header?.tools);
+        }
+      }
       stopBuffering();
       log('restore:folded', {
         sessionId,
@@ -838,6 +856,7 @@ export function createJournal(deps) {
     currentRequestId,
     activeSelectedNames,
     pendingLoadNames,
+    disclosedWire: () => [...disclosedWire.values()],
     /**
      * 本会话**当前**缓存周期身份。只来自本会话自己的成功 canonical 压缩边界
      * （`initial` 或 `compactionId@endSeq`）；冷恢复重放推进它，live 压缩也推进它。
@@ -863,6 +882,7 @@ export function createJournal(deps) {
       // 会话释放后不再有任何读者；留着它只会让迟到的重放复活授权。
       latestHeaderTools = null;
       latestHeaderSeq = undefined;
+      disclosedWire.clear();
     },
     /**
      * 显式结束恢复缓冲（幂等）。lifecycle 在**不读快照**的 bootstrap 路径上调用：

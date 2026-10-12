@@ -189,7 +189,7 @@ test('C-U11: 可选功能默认值与 Config 一致，保存只修改指定字�
   assert.equal(config.dict.requireTrustedEpochForSubagents.meta.default, false)
   assert.notEqual(config.dict.requireTrustedEpochForSubagents.meta.volatile, true)
   const states = Object.fromEntries(t.featureChoices({}).map(([key, _label, _help, checked]) => [key, checked]))
-  assert.deepEqual(states, { initialToolsEnabled: true, alwaysAllowPresetTools: true, requireTrustedEpoch: false, requireTrustedEpochForSubagents: false })
+  assert.deepEqual(states, { initialToolsEnabled: true, alwaysAllowPresetTools: true, requireTrustedEpoch: false, requireTrustedEpochForSubagents: false, tolerantLoadProtected: true, respectAlwaysVisible: false })
   const enabled = t.featureChoices({ requireTrustedEpoch: true, initialToolsEnabled: false })
   assert.equal(enabled.find(row => row[0] === 'requireTrustedEpoch')[3], true)
   assert.equal(enabled.find(row => row[0] === 'initialToolsEnabled')[3], false)
@@ -285,6 +285,52 @@ test('C-U10: 包声明契约 —— dsh.client.platform/exports/files 符合官�
     'files 必须覆盖 plugin/client/（npm pack 后 bundle 不丢）')
   assert.equal(typeof mod.apply, 'function', 'factory 产物必须带 Cordis 形态的 apply')
   assert.ok(Array.isArray(mod.inject), 'factory 产物必须声明 inject 服务键')
+})
+
+test('C-U13: all editable Config fields have a save path; trusted framework stays read-only', async () => {
+  const { exports: mod } = loadClient()
+  const t = mod.__test
+  const calls = []
+  const form = { mutate: async ops => { calls.push(ops); return true } }
+  const values = { alwaysVisible: [], initialToolsEnabled: false, alwaysAllowPresetTools: false,
+    requireTrustedEpoch: false, requireTrustedEpochForSubagents: false, tolerantLoadProtected: false,
+    respectAlwaysVisible: true, locale: 'zh', budgets: { maxActiveTools: 3 }, categoryConfig: {} }
+  const schema = buildConfig(Schema)
+  assert.deepEqual(Object.keys(schema.dict).sort(), [...Object.keys(values), 'frameworkRetained'].sort())
+  for (const [key, value] of Object.entries(values)) {
+    assert.equal(await t.saveSetting(form, key, value), true, `${key} missing from settings save path`)
+  }
+  assert.equal(await t.saveSetting(form, 'frameworkRetained', ['read']), false)
+  assert.equal(calls.length, Object.keys(values).length)
+})
+
+test('C-U14: fixed entries never become editable even when present in metadata', () => {
+  const { exports: mod } = loadClient()
+  const meta = { choices: [{ name: 'tool_load' }, { name: 'read' }] }
+  assert.deepEqual([...mod.__test.buildRows(meta, []).rows].map(r => r.name), ['read'])
+  assert.deepEqual(model.buildRows(meta, []).rows.map(r => r.name), ['read'])
+})
+
+test('C-U15: omitted alwaysVisible renders real schema default, not an empty list', () => {
+  const { exports: mod } = loadClient()
+  const { ctx } = fakeCtx(realSchemaEnvelope(['read']), undefined, async () => true)
+  const snapshot = mod.__test.createSnapshotSource(ctx).getSnapshot()
+  assert.deepEqual([...snapshot.value.alwaysVisible], [...DEFAULT_ALWAYS_VISIBLE])
+  assert.equal(snapshot.metaAvailable, true)
+})
+
+test('C-U16: advanced validation follows real host metadata and blocks invalid activation config', () => {
+  const { exports: mod } = loadClient()
+  const t = mod.__test
+  const node = t.alwaysVisibleNode({ schema: realSchemaEnvelope([]) }, { rehydrate })
+  const constraints = t.readMeta(node).constraints
+  assert.ok(constraints.budgetKeys.includes('maxActiveTools'))
+  for (const value of [{ maxActiveTools: 2 }, { maxLoadBatch: null }, null, {}]) assert.equal(t.validAdvancedSetting('budgets', value, constraints), true)
+  for (const value of [{ unknown: 1 }, { maxActiveTools: 0 }, { maxActiveTools: 1.5 }, { defaultSearchLimit: null }, [], 'bad']) assert.equal(t.validAdvancedSetting('budgets', value, constraints), false)
+  assert.equal(t.validAdvancedSetting('categoryConfig', { files: { title: 'Files', capabilitySummary: 'Read' } }, constraints), true)
+  for (const value of [{ bad: { title: 'Bad', capabilitySummary: 'Bad' } }, { files: { title: 'Files' } }, null]) assert.equal(t.validAdvancedSetting('categoryConfig', value, constraints), false)
+  assert.equal(t.validAdvancedSetting('locale', 'zh', constraints), true)
+  assert.equal(t.validAdvancedSetting('locale', 'invalid', constraints), false)
 })
 
 test('C-U09: 快照源不吞错误 —— mutate 的两条失败路径都不产生未处理拒绝', async () => {

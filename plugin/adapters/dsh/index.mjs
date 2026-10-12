@@ -416,9 +416,12 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
      * 只在 lifecycle 的两个**周期边界**被读（建立 runtime / 成功压缩后重开），
      * 周期中途配置变更因此不改变任何在跑的会话。
      */
-    const getAlwaysVisible = () => {
+    const getInitialToolsEnabled = () => {
       const enabled = ctx.fiber?.config?.initialToolsEnabled ?? config.initialToolsEnabled;
-      if ((typeof enabled?.get === 'function' ? enabled.get() : enabled) === false) return [];
+      return (typeof enabled?.get === 'function' ? enabled.get() : enabled) !== false;
+    };
+    const getAlwaysVisible = () => {
+      if (!getInitialToolsEnabled()) return [];
       const live = ctx.fiber?.config?.alwaysVisible;
       if (live !== undefined) return resolveAlwaysVisible(live);
       return resolveAlwaysVisible(config.alwaysVisible);
@@ -486,6 +489,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
         query,
         log,
         getAlwaysVisible,
+        getInitialToolsEnabled,
         getPresetTools,
         onRuntimeCreated,
         trustedEpoch: trustedEpoch,

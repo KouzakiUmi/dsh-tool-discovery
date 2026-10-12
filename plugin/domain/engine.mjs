@@ -709,6 +709,7 @@ export function createDiscoveryEngine(config) {
         now: clock.now(),
         locale: config.locale,
         registeredInScope: call.registeredInScope ?? null,
+        pendingLoad: call.pendingLoad === true,
         isEntryOrFramework,
       });
     },
