@@ -92,8 +92,14 @@ export function createLifecycle(deps) {
             if (visible.has(coreName)) candidates.add(coreName);
           }
         }
-      } catch {
-        // 异常容错
+      } catch (reason) {
+        // 异常容错：自证失败只影响"核心工具免 load 放行"这一便利路径，不放大为
+        // runtime 建立失败；但绝不能无声 —— 否则模型只会看到 TOOL_NOT_LOADED，
+        // 而日志里没有任何"为什么没自证补入"的线索。
+        log('lifecycle:always-self-admit-view-failed', {
+          agentId: agentScope?.id,
+          error: String(reason),
+        });
       }
     }
 

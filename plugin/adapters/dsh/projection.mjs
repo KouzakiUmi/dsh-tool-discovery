@@ -131,11 +131,17 @@ export function createProjection(deps) {
       }
     }
 
-    if (runtime.restoring || runtime.compositionBypass !== null) {
+    // 三类 fail-closed 都要留痕：restoring、compositionBypass、以及 journal sealed /
+    // readSession 失败 / restore rejected 后的 engine mode !== 'ready'（此时 restoring
+    // 已归 false、bypass 为 null，旧条件漏掉这一类 —— 缩水投影每轮发出却无迹可循）。
+    // project 只在 awaitRestore 之后与压缩边界刷新时被调，restoring 在此恒为 false，
+    // 但字段保留以便日志自证。
+    if (!ready) {
       log('projection:fail-closed', {
         sessionId: runtime.scope.sessionId,
         restoring: runtime.restoring,
         bypass: runtime.compositionBypass,
+        engineMode: engineState.mode,
         kept: kept.map((t) => t.name),
       });
     }
@@ -252,7 +258,7 @@ export function createProjection(deps) {
         // 数组被冻结 / 投影判据被触发：**记录现场并让下一次发请求中止**，
         // 绝不吞掉还继续发一份仍带旧名单的数组。
         runtime.pendingProjectionError = error;
-        log('projection:pending-refresh-failed', { error: String(error) });
+        log('projection:pending-refresh-failed', { sessionId: runtime.scope.sessionId, error: String(error) });
         return false;
       }
     };
