@@ -176,6 +176,8 @@ test('C-U12: 目录完整性随真实 schema 元数据传递，未确认状态�
   const partial = t.buildRows(partialMeta, ['missing'])
   assert.equal(partial.rows.find(row => row.name === 'missing').status, 'unknown')
   assert.equal(partial.missingCount, 0)
+  assert.equal(actual.rows.filter(row => row.available).length, 1, '未登记的已选项不属于目录计数')
+  assert.equal(partial.rows.filter(row => row.available).length, 1, '未确认的已选项不属于目录计数')
   assert.equal(t.readMeta(undefined).catalogComplete, false)
 })
 
@@ -331,6 +333,27 @@ test('C-U16: advanced validation follows real host metadata and blocks invalid a
   for (const value of [{ bad: { title: 'Bad', capabilitySummary: 'Bad' } }, { files: { title: 'Files' } }, null]) assert.equal(t.validAdvancedSetting('categoryConfig', value, constraints), false)
   assert.equal(t.validAdvancedSetting('locale', 'zh', constraints), true)
   assert.equal(t.validAdvancedSetting('locale', 'invalid', constraints), false)
+})
+
+test('C-U17: active badge uses separate foreground and background tokens', () => {
+  const { exports: mod } = loadClient()
+  const active = mod.__test.S.badge(true)
+  assert.notEqual(active.background, active.color)
+  assert.ok(!active.background.includes('--dsw-alias-state-business-primary'))
+  assert.ok(active.color.includes('--dsw-alias-state-business-primary'))
+})
+
+test('C-U18: JSON drafts survive editor recreation, reset on saved changes, and stay activation-local', () => {
+  const { exports: mod } = loadClient()
+  const store = mod.__test.createDraftStore()
+  assert.equal(store.read('budgets', null), 'null')
+  store.write('budgets', null, '{unfinished')
+  store.write('categoryConfig', {}, '{"files":')
+  assert.equal(store.read('budgets', null), '{unfinished')
+  assert.equal(store.read('categoryConfig', {}), '{"files":')
+  assert.equal(store.read('budgets', { maxActiveTools: 3 }), JSON.stringify({ maxActiveTools: 3 }, null, 2))
+  assert.equal(store.read('categoryConfig', {}), '{"files":')
+  assert.equal(mod.__test.createDraftStore().read('budgets', null), 'null')
 })
 
 test('C-U09: 快照源不吞错误 —— mutate 的两条失败路径都不产生未处理拒绝', async () => {

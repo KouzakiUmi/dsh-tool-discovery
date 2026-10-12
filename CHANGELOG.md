@@ -24,6 +24,12 @@ what is verified, what is unverified, and what this version refuses to support â
 
 ## [Unreleased]
 
+- Fix the active discovery badge's foreground/background contrast and count only registered catalog
+  rows in the home status strip. Keep unsaved JSON editor drafts across settings-section navigation
+  within the same plugin activation; a changed saved field resets its own draft.
+- Clarify the README and home copy: default core/preset tools already disclose full schemas on the
+  first request; only other tools wait for explicit selection and next-turn disclosure.
+
 - Freeze initial/baseline tool wire and its first-disclosed order within an epoch, including own-only
   cold recovery. Header observations supply bytes only, never tool selection or authorization; successful
   compaction releases the snapshot. Later baseline additions append after already-disclosed tools.
@@ -43,6 +49,15 @@ what is verified, what is unverified, and what this version refuses to support â
   same anomalies the live path logs; `restore:folded` reports the per-reason distribution of rejected
   pairs; the self-admission view failure and the pending-refresh failure are logged with session
   context instead of silently swallowed.
+- Redesign the plugin's GUI home: the settings surface moves from a plugins-tab page to its own
+  top-level settings section (Settings â†’ Tool discovery, a `settings.section` contribution), laid out
+  as a status strip, three-entry reference cards, feature switches, the manual initial list, and
+  advanced fields. Behaviour, the native config surface, and the save paths are unchanged; there is
+  still no rendered-DOM acceptance.
+- Re-lay the README pair on the dsh-subusage structure (pain-point table, quick start, technical
+  half) without changing any factual claim, and refresh the docs status bookkeeping: `05` now carries
+  a dated current test baseline and the npm-published versions, and the docs index status table
+  splits npm publishing from DSH STORE listing.
 
 ## [0.3.0] â€” 2026-10-10 â€” DSH STORE contract and `0.2.1-alpha.2` installability
 

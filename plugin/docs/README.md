@@ -137,11 +137,12 @@
 | 事项 | 当前状态 | 判据出处 |
 |---|---|---|
 | 源码基线**发布** | **已完成**：`main` 已发布，每次绿的 `main` 构建自动产出 GitHub Release 资产（构建产物，**不是**验收声明） | [05 §0](<05-current-status.md>) |
-| 工作区独立门禁（单测 / 组合 / 质量工装） | 逐项数字与签署范围只在 05 一处维护，本文**不复写计数** | [05 §0、§1](<05-current-status.md>) |
+| 工作区独立门禁（单测 / 组合 / 质量工装） | 逐项数字与签署范围只在 05 一处维护，本文**不复写计数**（10 / 11 里出现的数字是各自取证轮次的记录，不作当前口径） | [05 §0、§1](<05-current-status.md>) |
 | 恢复与 fork 覆盖增强 | **已并入基线** | [07](<07-lifecycle-recovery-coverage.md>) |
 | 可信周期基线 | **WIP，验收未完成** | [08](<08-trusted-epoch-baselines.md>) |
 | 产品验收（`03 §11` 发布门槛全通过） | **未达成**：性能 / 真实 wire / 检索门槛仍未验证 | [03 §11](<03-implementation-and-acceptance.md>)、[05 §3](<05-current-status.md>) |
-| npm 发布 / 插件市场上架 | **未做** | [05 §1](<05-current-status.md>) |
+| npm 发布 | **已完成**：`0.2.1` / `0.2.2` / `0.3.0` 已发布（Trusted Publisher + provenance，见根 README「发布到 npm」） | [05 §0、§1](<05-current-status.md>)、[10](<10-store-compatibility.md>) |
+| DSH STORE 收录 / 真实 Profile 加载 | **未验证**：本仓库无上架记录，也未对真实 Profile 执行安装 | [05 §1](<05-current-status.md>)、[10 §1](<10-store-compatibility.md>) |
 | 安装到用户 profile 并在 GUI 生效 | **未做** | [05 §3](<05-current-status.md>) |
 
 ## 6. 阅读顺序

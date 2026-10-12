@@ -1,34 +1,35 @@
-# DSH Tool Discovery
+<div align="center">
+  <img src="assets/title.jpg" width="100%" alt="DSH Tool Discovery —— 首轮提供三个小入口与初始集合，其它工具的真实 schema 按需在下一轮披露（仓库横幅图）">
 
-![DSH Tool Discovery](assets/title.jpg)
+  # DSH Tool Discovery
 
-[English](README.md) | 中文
+  **三个小入口与初始工具集合在前，其它工具的真实 schema 按需到场。**
 
-[![npm version](https://img.shields.io/npm/v/dsh-tool-discovery)](https://www.npmjs.com/package/dsh-tool-discovery)
-[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![DSH](https://img.shields.io/badge/DSH-0.2.1--alpha.1%20%7C%200.2.1--alpha.2-informational)](plugin/docs/10-store-compatibility.md)
+  [English](README.md) | 中文
 
-与其把上百个工具一次性交给模型，不如只给几个小型控制入口，让模型按需加载真正需要的能力。
+  [![npm version](https://img.shields.io/npm/v/dsh-tool-discovery)](https://www.npmjs.com/package/dsh-tool-discovery)
+  [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+  [![DSH](https://img.shields.io/badge/DSH-0.2.1--alpha.1%20%7C%200.2.1--alpha.2-informational)](plugin/docs/10-store-compatibility.md)
 
-这是一个 DSH 插件。首轮请求里模型看到三个固定入口——`tool_list`、`tool_search`、`tool_load`——
-外加每个能力类别的一段简短摘要，**以及默认初始集合**：DSH 自带的核心工具（手动基线）与当前
-agent 自己 preset 登记的工具（默认保留）。其它普通工具首轮不披露。模型判断需要某个工具时调用 `tool_load`，该工具的真实原生 schema 会在**下一次**请求中
-披露。之后模型照常调用该工具，仍然走 DSH 自身的审批、沙箱与权限链。
+  **安装只需一条命令** → [快速开始](#快速开始)
+</div>
 
-整个设计受两条不变量约束：
+---
 
-- **同一缓存周期内，已披露内容与顺序只增不改。** 加载不会移动或改写已披露条目：首次披露时记录的
-  wire 会被持续原样发送，因此宿主侧工具升级不会静默改写模型已经读过的定义。
-- **只有成功压缩才会重置周期。** 手动 `/compact` 与 DSH 自动压缩都算；失败、取消或没有摘要的压缩
-  不算。模型无法卸载：`action: "unload"` 会被拒绝，因此两次成功压缩之间已披露集合只增不减。
+## 为什么需要它
 
-冻结 wire 不等于执行权限。已披露的工具每次调用仍要经过宿主自身的审批、沙箱与授权检查，与它从未
-被本插件中介过完全一样。
-
-渐进式披露解决的是上下文，不是速度：只携带模型大概率会用到的内容，就不必携带宿主本可以提供的
-全部内容。内核自身不持有任何工具，也从不绕过宿主。
+| 没有它 | 有了它 |
+|---|---|
+| 每个已注册工具的完整 JSON Schema 都在首轮注入，无论任务是否用得上 | 首轮带三个小入口、有界类别摘要，以及默认初始集合的完整 schema（DSH 核心工具与当前 preset 保留的工具）；其它工具的真实原生 schema 在模型显式选定后的**下一轮**出现 |
+| 宿主侧工具升级可以在会话中途悄悄改写模型已经读过的定义 | 一个缓存周期内已披露的 wire **只增不改**——首披露时记录的定义就是它一直被发送的定义 |
+| 哪个类别里有什么工具，全靠猜 | `tool_search` 给 Top-K 候选卡（短用途 + ref/revision），`tool_list` 给分页的完整名称；两者都不改变激活集合 |
+| 「现在到底激活了哪些工具」没有答案 | `tool_load` 回执是版本化的 canonical 记录；`view: "state"` 投影列出 `selected` / `advertised` / `invalidated` |
 
 ## 三个入口
+
+这是一个 DSH 插件。首轮请求里模型看到下面三个固定入口，外加每个能力类别的一段简短摘要，
+**以及默认初始集合**：DSH 自带的核心工具（手动基线）与当前 agent 自己 preset 登记的工具
+（默认保留）。其它普通工具首轮不披露。
 
 | 入口 | 回答的问题 | 改变激活集合？ |
 |---|---|---|
@@ -37,15 +38,48 @@ agent 自己 preset 登记的工具（默认保留）。其它普通工具首轮
 | `tool_load` | 我要用这些工具。 | 是 |
 
 `tool_load` 不会执行目标工具，它只记录选择，披露发生在下一轮。调用未加载的工具会被拒绝；卸载根本
-不是模型的动作——只有一次成功压缩才会清空已披露集合。
+不是模型的动作——`action: "unload"` 会被拒绝，因此两次成功压缩之间已披露集合只增不减。
+
+## 两条不变量框住整个设计
+
+- **同一缓存周期内，已披露内容与顺序只增不改。** 加载不会移动或改写已披露条目：首次披露时记录的
+  wire 会被持续原样发送，因此宿主侧工具升级不会静默改写模型已经读过的定义。
+- **只有成功压缩才会重置周期。** 手动 `/compact` 与 DSH 自动压缩都算；失败、取消或没有摘要的压缩
+  不算。
+
+冻结 wire 不等于执行权限。已披露的工具每次调用仍要经过宿主自身的审批、沙箱与授权检查，与它从未
+被本插件中介过完全一样。
+
+渐进式披露解决的是上下文，不是速度：只携带模型大概率会用到的内容，就不必携带宿主本可以提供的
+全部内容。内核自身不持有任何工具，也从不绕过宿主。
+
+## 快速开始
+
+```sh
+# DSH profile 安装 —— 先写包名，再给完整 tarball URL
+dsh plugin --profile <profile> add \
+  dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz
+```
+
+1. 安装并启用 bundle，按部署方式重载或重启（只刷新页面不保证 Host 升级）。
+2. 打开 **设置 → 工具发现**——插件自己的主页：可选功能开关、应用全局工具目录（按名称筛选、
+   勾选、**恢复 DSH 默认**），以及高级的预算 / 语言字段。
+3. 回到会话，三个入口即已生效。其余一切不变：每次工具调用仍走 DSH 自身的审批、沙箱与权限链。
+
+`<build-tag>` 是提交级 Release 标签，例如 `build-80216ba3effa`。完整的安装 / 更新规则（Node 项目的
+npm 包、标签钉住、CLI 与 Core 版本的区别）见[安装与更新](#安装与更新)；配置项见[配置](#配置)。
+
+---
+
+# 技术文档
 
 ## 环境要求
 
 - DSH Core **`0.2.1-alpha.1` 或 `0.2.1-alpha.2`**——声明的 peer 范围正是这两个发行版，且都声明为
-  `compatible`：`0.2.1-alpha.1` 是发布基线；`0.2.1-alpha.2` 在当前宿主上通过全套测试（组合 137 + 单元 401），
+  `compatible`：`0.2.1-alpha.1` 是发布基线；`0.2.1-alpha.2` 在当前宿主上通过全套测试，
   门禁已计入该版本的子代理常驻语义变化。逐版本矩阵、证据与一次性 Profile 记录见
   [上架与兼容声明](plugin/docs/10-store-compatibility.md)。其它版本未测试。
-- 原生 **`@deepseek-ai/schemastery`** peer 是配置面与设置面板的前提。缺少它时发现内核仍正常运行，
+- 原生 **`@deepseek-ai/schemastery`** peer 是配置面与设置页的前提。缺少它时发现内核仍正常运行，
   但没有 Config，插件会记录 `ConfigUnavailable`，而不是假装存在一个设置页。
 - **native** 工具展示模式。其它展示模式在激活期即被拒绝，不会静默降级。
 - **每会话单个活动 agent**。单会话内多 agent 并发不受支持——请求无法无歧义地归属。
@@ -109,82 +143,6 @@ dsh plugin --profile <profile> update \
 Node 项目可通过 `npm install dsh-tool-discovery` 从 npm 安装。本节上面的 DSH profile 安装命令仍由 DSH CLI
 从 GitHub Release 资产安装。
 
-## 发布到 npm
-
-npm 只允许在包已经存在后登记 Trusted Publisher。初始 `0.2.1` 发布已完成，npm 账号的双重验证使用了
-Windows Hello。当前 Trusted Publisher 配置如下：
-
-| 设置 | 值 |
-| --- | --- |
-| 提供方 | GitHub Actions |
-| 组织/用户 | `KouzakiUmi` |
-| 仓库 | `dsh-tool-discovery` |
-| 工作流文件名 | `ci.yml` |
-| 环境 | 无 |
-| 发布权限 | `npm publish`、`npm stage publish`（npm 默认） |
-
-每次发布稳定版本时，先更新并提交 `package.json`，再创建并推送同版本的 `v<version>` 标签。
-`publish-npm` 任务会等待便携测试和仓库检查通过，核对标签后通过 OIDC 发布并生成 provenance。
-暂存发布仍需维护者审核并通过双重验证后才会公开。
-
-工作流需要 Node 24 和 npm 11.5.1 或更高版本，不使用 GitHub 的 `NPM_TOKEN` secret。预发布标签不会触发 npm 发布。
-
-**本轮没有执行上述任何命令。** 未安装、未重载、未重启，也没有改动任何 profile，因此这条渠道的
-**安装行为在本轮未验证**。核到的只是「某个已发布的 Release 及其资产元数据存在」（只读 `gh release
-view`：标签、目标提交、资产名）；没有下载、解包或安装任何产物，而**未来**构建的产物（含其摘要）
-只能在该次发布跑完后才能核对。确切的参数与 spec 形式以目标 CLI 自己的 `plugin --help` 为准。安装
-失败时请保留 manifest、lockfile 与 CLI 输出并如实报告，不要手改 profile。
-
-## 获取源码
-
-本分支的源码版本为 **`0.3.0`**。某次下载究竟带哪个版本，由该构建 tarball 里的清单决定
-——请与 Release 名（`v<version> · <sha>`）对照，而不是假设 `main` 与本文一致。
-
-```sh
-git clone https://github.com/KouzakiUmi/dsh-tool-discovery
-cd dsh-tool-discovery
-```
-
-纯 JavaScript，无构建步骤。清单里声明了一个运行时 `dependencies` 项 `zod`（`^4.4.3`）——可信周期
-记录表要以 zod schema 交给宿主的 storage domain——所需宿主包则声明为 `peerDependencies`，由 DSH
-安装提供。项目不做 vendored 副本，也不存在可以拿来掩盖宿主包缺失的构建步骤。
-
-## 自行验证
-
-在仓库根目录执行：
-
-```sh
-npm test                          # 单元测试 —— 以该命令的实际输出为准
-npm run test:composition          # 组合门禁（真实 DSH Loader）—— 以实际输出为准
-npm run test:all                  # 依次运行以上两者
-npm run check                     # 包身份 + 文档一致性检查（只需 Node）
-npm run clean                     # 清除可再生的测试残留
-```
-
-单测大部分只需要 Node。其中两个文件依赖宿主：`plugin/tests/unit/client.test.mjs` 与
-`plugin/tests/unit/settings.test.mjs` 在模块顶层就通过 `plugin/contracts/install-resolver.mjs`
-从已安装的 DSH 里取 React 与 `@deepseek-ai/schemastery`。要在装有该 DSH 的机器上跑完整套件；
-安装不在默认位置时用 `DSH_INSTALL_ROOT` 指向它。
-
-因此 CI 的便携单测作业只跑除这两个文件以外的全部用例，并明确把这两个文件按宿主依赖跳过
-并给出原因。该作业是便携子集，不等于整份单测证明：含这两个宿主文件在内的完整套件，由本地
-在真实 DSH 安装根上执行的 `npm test` 覆盖。此处不声称任何浏览器或 DOM 渲染层面的覆盖。
-
-用例数会随测试增减而变化，因此这里**刻意不写死数字**。以这两条命令的实际输出为准；写在本文件
-里的数字必然过时。
-
-`test:composition` 会在真实 Loader 上运行 `plugin/tests/composition/gate-*.test.mjs` 的全部文件：
-适配器门禁、生命周期、恢复与 fork、事件 `seq`、缓存周期、设置、工具增减，以及可信周期各套。新增
-门禁文件会被 glob 自动纳入，无需改其它地方。详见 [07 · 恢复与 fork 覆盖](plugin/docs/07-lifecycle-recovery-coverage.md)。
-
-组合测试会针对已安装的 DSH 启动真实 Cordis Loader，因此需要宿主在场。它们从该安装解析包；若
-安装不在默认位置，请用 `DSH_INSTALL_ROOT` 指向它。这些命令不安装、不重启，也不会改动你的
-DSH profile；但会在被 Git 忽略的 `plugin/fixtures/tmp/` 下创建临时会话文件，并在每个测试进程退出时
-清除。设置 `DSH_KEEP_TMP=1` 可保留现场用于排查；`npm run clean` 清除任何残留。
-
-质量工装是公开的，但完整跑完需要冻结的评分数据集，而该数据集未公开，因此在公开检出上无法跑完。
-该数据集覆盖什么、当前处于什么状态，见[当前状态](plugin/docs/05-current-status.md)。
-
 ## 配置
 
 插件没有必需配置，所有字段都是插件自身配置命名空间里的**扁平根字段**——在当前的原生配置面上
@@ -212,13 +170,23 @@ preset 保留是独立来源：`alwaysAllowPresetTools` 开启时，当前实际
 `initialToolsEnabled: false`，或同时设 `alwaysVisible: []` 与 `respectAlwaysVisible: true`（显式框架保留仍可能贡献工具）。三个入口不可删除。
 设置页全局目录中存在某工具，不意味着它会被授予所有会话。
 
-### 设置面板
+### 设置页：工具发现主页
 
-在原生 `schemastery` peer 在场时，DSH 自带设置页会为本插件渲染一个**工具发现**标签页，含可选功能开关与
-**应用全局登记目录**。目录读取当前全部注册层，包括无需创建会话就已预加载的 preset；不读取会话资格、
-发现/加载状态或历史请求头。支持按名称筛选、勾选切换与**恢复 DSH 默认**，勾选只写根级 `alwaysVisible`。
-完整目录中缺少名字时标注为**未在应用全局目录登记**，不断言调用失败；宿主 SDK 无法提供完整目录时，
-未列出的名字标注为**全局登记状态尚未确认**。全局已登记不保证每个会话都具备执行权限。
+在原生 `schemastery` peer 在场时，插件贡献自己的顶层设置页——**设置 → 工具发现**（一个
+`settings.section` 贡献，即本插件在 GUI 里的主页）。它按「一眼看懂的主页」组织，而不是一张裸表单：
+
+- **状态条**——与面板所编辑的同一份元数据上的实时计数：常驻入口、目录工具、初始名单大小，
+  以及多少名字**未在应用全局目录登记**或**尚未确认**。
+- **三个入口参考卡**——`tool_list` / `tool_search` / `tool_load`：各自回答什么、返回什么、
+  哪个会改变激活集合，外加上述两条不变量。
+- **可选功能开关**与**手动初始工具名单**——**应用全局登记目录**。目录读取当前全部注册层，包括
+  无需创建会话就已预加载的 preset；不读取会话资格、发现/加载状态或历史请求头。支持按名称筛选、
+  勾选切换与**恢复 DSH 默认**，勾选只写根级 `alwaysVisible`。完整目录中缺少名字时标注为**未在
+  应用全局目录登记**，不断言调用失败；宿主 SDK 无法提供完整目录时，未列出的名字标注为**全局登记
+  状态尚未确认**。全局已登记不保证每个会话都具备执行权限。
+- **高级**——界面语言、`budgets` 与 `categoryConfig` 的 JSON 编辑器，`frameworkRetained` 只读展示。
+
+每个开关与字段：
 
 - **自动注入初始工具**（`initialToolsEnabled`，默认 `true`）：关闭不删除勾选名单，不自动注入这些工具，仍可用 `tool_load` 加载。开关和名单改动在**新会话或成功压缩后**采用，当前周期不改变。
 - **永远放行 preset 规定的工具**（`alwaysAllowPresetTools`，默认 `true`）：只读取当前 agent 实际绑定的 preset 修订自身登记、且该 agent 原生目录仍允许的工具。不根据会话 header 中的 preset 名或设置页全局目录授信；其它 preset、后装 agent-only 工具不会被自动放行。与手动注入独立，在新会话或成功压缩后采用；保留初始集合，不绕过原生权限和执行校验。
@@ -228,9 +196,9 @@ preset 保留是独立来源：`alwaysAllowPresetTools` 开启时，当前实际
 - **让初始名单成为精确集合**（`respectAlwaysVisible`，默认 `false`）：**关闭**且初始注入开启时，当前 scope 真实提供的 DSH 核心工具会被自动并入常驻名单，且不经 load 即可调用——省一次往返，上游新增的核心工具也不必等插件更新。**打开**后，你的 `alwaysVisible`（加 preset 保留项）就是**上限**：没列出的核心工具必须像别的工具一样先 load。被拒不会死锁——被排除的核心工具**不在受保护的基线里**，一次普通 `tool_load` 就能在下一轮把它放行（`tolerantLoadProtected` 管的是另一件事：**已在名单里**的工具重复 load 保持幂等）。两点注意：已经在严格模式下跑的会话，仍会按它落盘的记录继续放行到下一次用户 `/compact`；本字段非 volatile，改动在插件重载后生效。
 - 工具资格、协议回执、历史损坏校验和执行门禁始终有效，不提供关闭这些保护的开关。三个发现入口始终保留。
 
-面板还提供**容忍重复加载初始工具**（`tolerantLoadProtected`）、**精确初始名单**（`respectAlwaysVisible`）开关；高级配置中可选择语言，并编辑 `budgets` 与 `categoryConfig` JSON。JSON 编辑器显示支持的键，在保存前拒绝语法错误、未知键、非法限额和不完整的类别文案；较小预算可能增加往返或阻断任务。`frameworkRetained` 仅只读展示，不可由此页面修改。
+主页还提供**容忍重复加载初始工具**（`tolerantLoadProtected`）、**精确初始名单**（`respectAlwaysVisible`）开关；高级配置中可选择语言，并编辑 `budgets` 与 `categoryConfig` JSON。JSON 编辑器显示支持的键，在保存前拒绝语法错误、未知键、非法限额和不完整的类别文案；较小预算可能增加往返或阻断任务。`frameworkRetained` 仅只读展示，不可由此页面修改。
 
-省略 `alwaysVisible` 时展示宿主 schema 的实际默认名单。加载中、只读或保存进行中禁用所有修改控件，防止并发写覆盖；元数据缺失时不可恢复默认，名单已经默认时不重复写。保存失败会显示错误，不宣称生效。非 volatile 字段保存会重载插件，页面提供提示。该面板即原生配置面；不承诺旧包装配置或旧版设置 UI 的兼容性。独立浏览器 DOM 探针使用真实渲染器及受控保存通道，不代表在线配置持久化或当前 GUI 已部署新代码。
+省略 `alwaysVisible` 时展示宿主 schema 的实际默认名单。加载中、只读或保存进行中禁用所有修改控件，防止并发写覆盖；元数据缺失时不可恢复默认，名单已经默认时不重复写。保存失败会显示错误，不宣称生效。非 volatile 字段保存会重载插件，页面提供提示。该主页即原生配置面；不承诺旧包装配置或旧版设置 UI 的兼容性。独立浏览器 DOM 探针使用真实渲染器及受控保存通道，不代表在线配置持久化或当前 GUI 已部署新代码。
 
 ### 预算：硬上限默认关闭
 
@@ -283,7 +251,8 @@ preset 保留是独立来源：`alwaysAllowPresetTools` 开启时，当前实际
 
 前三项是**护栏**：它们才是这个卖点的执行机制，而既然不会卸载，关掉它们就等于长会话只增不减。
 后两项是**交互边界**：保护宿主免受单次异常调用，不改变日常使用。`maxListResultBytes` 现在还覆盖
-`view: "state"`——超限的状态响应会以 `BUDGET_EXCEEDED` 明确失败，而不是被静默返回超限内容。
+`view: "state"`——超限时先裁剪诊断性的 `invalidated` 列表（带显式 `invalidatedTruncated` 标记），
+`selected` 与 `advertised` 永不裁剪；连空列表都放不下时才以 `BUDGET_EXCEEDED` 明确失败。
 
 即使所有硬上限都关闭，以下仍然有界：默认页大小（`defaultListLimit`，20）、默认候选数
 （`defaultSearchLimit`，5）、分页本身，以及各项 TTL。关闭硬上限不会让输出变得无界，只是表示在
@@ -291,6 +260,82 @@ preset 保留是独立来源：`alwaysAllowPresetTools` 开启时，当前实际
 
 `initialSchemaTargetTokens` 与 `maxInitialBytes` 是历史目标值，当前代码路径并未强制它们，因此
 **不是**"实测保证的初始 2K 预算"。
+
+## 自行验证
+
+在仓库根目录执行：
+
+```sh
+npm test                          # 单元测试 —— 以该命令的实际输出为准
+npm run test:composition          # 组合门禁（真实 DSH Loader）—— 以实际输出为准
+npm run test:all                  # 依次运行以上两者
+npm run check                     # 包身份 + 文档一致性检查（只需 Node）
+npm run clean                     # 清除可再生的测试残留
+```
+
+单测大部分只需要 Node。其中两个文件依赖宿主：`plugin/tests/unit/client.test.mjs` 与
+`plugin/tests/unit/settings.test.mjs` 在模块顶层就通过 `plugin/contracts/install-resolver.mjs`
+从已安装的 DSH 里取 React 与 `@deepseek-ai/schemastery`。要在装有该 DSH 的机器上跑完整套件；
+安装不在默认位置时用 `DSH_INSTALL_ROOT` 指向它。
+
+因此 CI 的便携单测作业只跑除这两个文件以外的全部用例，并明确把这两个文件按宿主依赖跳过
+并给出原因。该作业是便携子集，不等于整份单测证明：含这两个宿主文件在内的完整套件，由本地
+在真实 DSH 安装根上执行的 `npm test` 覆盖。此处不声称任何浏览器或 DOM 渲染层面的覆盖。
+
+用例数会随测试增减而变化，因此这里**刻意不写死数字**。以这两条命令的实际输出为准；写在本文件
+里的数字必然过时。
+
+`test:composition` 会在真实 Loader 上运行 `plugin/tests/composition/gate-*.test.mjs` 的全部文件：
+适配器门禁、生命周期、恢复与 fork、事件 `seq`、缓存周期、设置、工具增减，以及可信周期各套。新增
+门禁文件会被 glob 自动纳入，无需改其它地方。详见 [07 · 恢复与 fork 覆盖](plugin/docs/07-lifecycle-recovery-coverage.md)。
+
+组合测试会针对已安装的 DSH 启动真实 Cordis Loader，因此需要宿主在场。它们从该安装解析包；若
+安装不在默认位置，请用 `DSH_INSTALL_ROOT` 指向它。这些命令不安装、不重启，也不会改动你的
+DSH profile；但会在被 Git 忽略的 `plugin/fixtures/tmp/` 下创建临时会话文件，并在每个测试进程退出时
+清除。设置 `DSH_KEEP_TMP=1` 可保留现场用于排查；`npm run clean` 清除任何残留。
+
+质量工装是公开的，但完整跑完需要冻结的评分数据集，而该数据集未公开，因此在公开检出上无法跑完。
+该数据集覆盖什么、当前处于什么状态，见[当前状态](plugin/docs/05-current-status.md)。
+
+## 获取源码
+
+本分支的源码版本为 **`0.3.1`**（开发中；已发布到 npm 的是 `0.2.1`、`0.2.2`、`0.3.0`）。某次下载究竟带哪个版本，由该构建 tarball 里的清单决定
+——请与 Release 名（`v<version> · <sha>`）对照，而不是假设 `main` 与本文一致。
+
+```sh
+git clone https://github.com/KouzakiUmi/dsh-tool-discovery
+cd dsh-tool-discovery
+```
+
+纯 JavaScript，无构建步骤。清单里声明了一个运行时 `dependencies` 项 `zod`（`^4.4.3`）——可信周期
+记录表要以 zod schema 交给宿主的 storage domain——所需宿主包则声明为 `peerDependencies`，由 DSH
+安装提供。项目不做 vendored 副本，也不存在可以拿来掩盖宿主包缺失的构建步骤。
+
+## 发布到 npm
+
+npm 只允许在包已经存在后登记 Trusted Publisher。初始 `0.2.1` 发布已完成，npm 账号的双重验证使用了
+Windows Hello。当前 Trusted Publisher 配置如下：
+
+| 设置 | 值 |
+| --- | --- |
+| 提供方 | GitHub Actions |
+| 组织/用户 | `KouzakiUmi` |
+| 仓库 | `dsh-tool-discovery` |
+| 工作流文件名 | `ci.yml` |
+| 环境 | 无 |
+| 发布权限 | `npm publish`、`npm stage publish`（npm 默认） |
+
+每次发布稳定版本时，先更新并提交 `package.json`，再创建并推送同版本的 `v<version>` 标签。
+`publish-npm` 任务会等待便携测试和仓库检查通过，核对标签后通过 OIDC 发布并生成 provenance。
+暂存发布仍需维护者审核并通过双重验证后才会公开。
+
+工作流需要 Node 24 和 npm 11.5.1 或更高版本，不使用 GitHub 的 `NPM_TOKEN` secret。预发布标签不会触发 npm 发布。
+
+**本轮没有执行上述任何命令。** 未安装、未重载、未重启，也没有改动任何 profile，因此这条渠道的
+**安装行为在本轮未验证**。核到的只是「某个已发布的 Release 及其资产元数据存在」（只读 `gh release
+view`：标签、目标提交、资产名）；没有下载、解包或安装任何产物，而**未来**构建的产物（含其摘要）
+只能在该次发布跑完后才能核对。确切的参数与 spec 形式以目标 CLI 自己的 `plugin --help` 为准。安装
+失败时请保留 manifest、lockfile 与 CLI 输出并如实报告，不要手改 profile。
 
 ## 架构与其代价
 
@@ -310,7 +355,7 @@ preset 保留是独立来源：`alwaysAllowPresetTools` 开启时，当前实际
   里的安装 / 启动 / 卸载 / 恢复证据取自一次性的 `DSH_HOME`，因此这里任何内容都不应被读作"已验收的在线 GUI"
   或"完整产品验收"。
 - **设置 UI 有单测与集成测试覆盖，但没有渲染 DOM 的验收。** 原生配置面、缓存周期行为、目录元数据
-  以及客户端辅助函数都已测试；面板本身未在真实浏览器中跑过。
+  以及客户端辅助函数都已测试；主页本身未在真实浏览器中跑过。
 - **不声称任何 token 节省。** 设计的出发点是让每次请求携带更少内容；实际缩减幅度没有测量过，
   延迟也没有。
 - 检索质量——能否稳定找到正确的工具——同样没有测量。
