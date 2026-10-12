@@ -113,7 +113,7 @@ window.__ModuleLoader__.load({
 
     const en = {
       nav: 'Tool discovery',
-      hero: 'The first request no longer carries every tool’s full schema: the model picks capabilities through the three small entries below, and a selected tool’s real native schema arrives on the next turn, then runs through the host’s own approval and sandbox chain like any other tool.',
+      hero: 'The first request carries the three small entries below plus full schemas for the configured initial set (core tools and the current preset’s retained tools by default). Other tools disclose their real native schemas on the turn after explicit selection, and every call still follows the host’s own approval and sandbox chain.',
       entriesGroup: 'Three entries',
       entryListAnswer: 'Which tools are discoverable in this category?',
       entryListResult: 'Returns paginated full tool names',
@@ -170,7 +170,7 @@ window.__ModuleLoader__.load({
     };
     const zh = {
       nav: '工具发现',
-      hero: '首轮请求不再携带全部工具的完整 schema：模型通过下面三个小入口挑选能力，选中的工具在下一轮才拿到真实原生 schema，之后与普通工具一样走宿主原生的审批与沙箱链调用。',
+      hero: '首轮携带下面三个小入口，以及配置的初始集合的完整 schema（默认含核心工具与当前 preset 保留的工具）。其它工具在显式选定后的下一轮披露真实原生 schema；每次调用仍走宿主原生的审批与沙箱链。',
       entriesGroup: '三个入口',
       entryListAnswer: '某类别里有哪些可发现工具？',
       entryListResult: '返回分页的完整工具名',
@@ -291,9 +291,24 @@ window.__ModuleLoader__.load({
       return false;
     }
 
-    // 草稿与服务端已保存值分离；修订变化时重建编辑器，避免恢复默认/外部更新留下旧草稿。
-    function JsonSetting ({ t, name, value, disabled, keys, onSave }) {
-      const [draft, setDraft] = useState(JSON.stringify(value, null, 2));
+    // 每次插件装配独有的内存草稿，不随 settings.section 卸载而丢失，也不写入持久配置。
+    // 已保存字段变化时丢弃该字段的旧草稿；其它字段更新不影响正在编辑的内容。
+    function createDraftStore () {
+      const drafts = new Map();
+      return {
+        read (name, value) {
+          const saved = JSON.stringify(value, null, 2);
+          if (drafts.get(name)?.saved !== saved) drafts.set(name, { saved, text: saved });
+          return drafts.get(name).text;
+        },
+        write (name, value, text) {
+          drafts.set(name, { saved: JSON.stringify(value, null, 2), text });
+        },
+      };
+    }
+
+    function JsonSetting ({ t, name, value, disabled, keys, onSave, draftStore }) {
+      const [draft, setDraft] = useState(() => draftStore.read(name, value));
       const [error, setError] = useState(null);
       const submit = () => {
         let parsed;
@@ -313,7 +328,10 @@ window.__ModuleLoader__.load({
         h('code', { style: { display: 'block', fontSize: '11px', overflowWrap: 'anywhere' } }, (keys ?? []).join(', ')),
         h('textarea', { id: `tool-discovery-${name}`, rows: 6, value: draft, disabled,
           style: { width: '100%', boxSizing: 'border-box', fontFamily: 'monospace' },
-          onChange: event => setDraft(event.target.value) }),
+          onChange: event => {
+            draftStore.write(name, value, event.target.value);
+            setDraft(event.target.value);
+          } }),
         h('button', { type: 'button', disabled, onClick: submit }, t('apply')),
         error ? h('p', { role: 'alert' }, error) : null);
     }
@@ -331,12 +349,12 @@ window.__ModuleLoader__.load({
       cardTitle: { fontSize: '13px', fontWeight: '600' },
       cardText: { margin: 0, fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-secondary, inherit)' },
       cardMeta: { margin: 0, fontSize: '11px', lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary, inherit)' },
-      badge: (on) => ({ alignSelf: 'flex-start', fontSize: '11px', lineHeight: '16px', padding: '1px 8px', borderRadius: '999px', background: on ? 'var(--dsw-alias-state-business-primary, rgba(64,120,255,.18))' : 'var(--dsw-alias-fill-tsp-secondary, rgba(128,128,128,.15))', color: on ? 'var(--dsw-alias-state-business-primary, inherit)' : 'var(--dsw-alias-label-tertiary, inherit)' }),
+      badge: (on) => ({ alignSelf: 'flex-start', fontSize: '11px', lineHeight: '16px', padding: '1px 8px', borderRadius: '999px', background: 'var(--dsw-alias-fill-tsp-secondary, rgba(128,128,128,.15))', color: on ? 'var(--dsw-alias-state-business-primary, inherit)' : 'var(--dsw-alias-label-tertiary, inherit)' }),
       note: { margin: 0, fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary, inherit)' },
     };
 
     /** 叶子组件：只收 props，不读 ctx。 */
-    function SettingsPanel ({ t, snapshot, error, notice, busy, onToggle, onRestore, onFeature, onSetting }) {
+    function SettingsPanel ({ t, snapshot, error, notice, busy, onToggle, onRestore, onFeature, onSetting, draftStore }) {
       const [query, setQuery] = useState('');
       const disabled = busy === true || snapshot?.status !== 'ready' || snapshot?.writable === false;
       const locale = snapshot?.value?.locale ?? 'auto';
@@ -349,7 +367,7 @@ window.__ModuleLoader__.load({
         h('p', { style: S.hero }, t('hero')),
         h('div', { style: S.chips },
           h('span', { style: S.chip }, `${t('statFixed')}: ${built.fixed.length}`),
-          h('span', { style: S.chip }, `${t('statCatalog')}: ${built.rows.length}`),
+          h('span', { style: S.chip }, `${t('statCatalog')}: ${built.rows.filter(row => row.available).length}`),
           h('span', { style: S.chip }, `${t('statSelected')}: ${built.selectedCount}`),
           built.missingCount > 0 ? h('span', { style: S.chip }, `${t('statMissing')}: ${built.missingCount}`) : null,
           built.unknownCount > 0 ? h('span', { style: S.chip }, `${t('statUnknown')}: ${built.unknownCount}`) : null,
@@ -424,7 +442,7 @@ window.__ModuleLoader__.load({
             ...[...new Set(['auto', 'en', 'zh', locale])].map(value => h('option', { key: value, value }, ['auto', 'en', 'zh'].includes(value) ? t(value) : value))),
           ...['budgets', 'categoryConfig'].map(name => h(JsonSetting, {
             key: `${name}:${JSON.stringify(snapshot?.value?.[name])}`,
-            t, name, value: snapshot?.value?.[name] ?? (name === 'budgets' ? null : {}),
+            t, name, draftStore, value: snapshot?.value?.[name] ?? (name === 'budgets' ? null : {}),
             disabled: disabled || !snapshot?.meta?.constraints,
             keys: snapshot?.meta?.constraints?.[name === 'budgets' ? 'budgetKeys' : 'categoryKeys'], onSave: onSetting,
           })),
@@ -491,6 +509,7 @@ window.__ModuleLoader__.load({
     function createTabRoot (ctx, t) {
       const source = createSnapshotSource(ctx);
       const { subscribe, getSnapshot, form } = source;
+      const draftStore = createDraftStore();
 
       return function SettingsTabRoot () {
         const [error, setError] = useState(null);
@@ -543,7 +562,7 @@ window.__ModuleLoader__.load({
           }
           return write(value, key);
         }, []);
-        return h(SettingsPanel, { t, snapshot, error, notice, busy, onToggle, onRestore, onFeature, onSetting });
+        return h(SettingsPanel, { t, snapshot, error, notice, busy, onToggle, onRestore, onFeature, onSetting, draftStore });
       };
     }
 
@@ -567,7 +586,7 @@ window.__ModuleLoader__.load({
     exports.__test = {
       buildRows, filterRows, toggleName, isDefaultSelection, featureChoices, saveSetting, validAdvancedSetting,
       ownView, alwaysVisibleNode, readMeta, createTabRoot, createSnapshotSource, SettingsPanel,
-      FIXED_ENTRIES, NS, PLUGIN_TAB_ID, SECTION_ID, SLOT,
+      FIXED_ENTRIES, NS, PLUGIN_TAB_ID, SECTION_ID, SLOT, createDraftStore, S,
     };
 
     exports.apply = apply;

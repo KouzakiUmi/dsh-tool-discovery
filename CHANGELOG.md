@@ -24,6 +24,12 @@ what is verified, what is unverified, and what this version refuses to support â
 
 ## [Unreleased]
 
+- Fix the active discovery badge's foreground/background contrast and count only registered catalog
+  rows in the home status strip. Keep unsaved JSON editor drafts across settings-section navigation
+  within the same plugin activation; a changed saved field resets its own draft.
+- Clarify the README and home copy: default core/preset tools already disclose full schemas on the
+  first request; only other tools wait for explicit selection and next-turn disclosure.
+
 - Freeze initial/baseline tool wire and its first-disclosed order within an epoch, including own-only
   cold recovery. Header observations supply bytes only, never tool selection or authorization; successful
   compaction releases the snapshot. Later baseline additions append after already-disclosed tools.

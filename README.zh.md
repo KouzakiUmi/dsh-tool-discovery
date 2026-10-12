@@ -1,9 +1,9 @@
 <div align="center">
-  <img src="assets/title.jpg" width="100%" alt="DSH Tool Discovery —— 首轮只给三个小入口，真实工具 schema 按需在下一轮披露（仓库横幅图）">
+  <img src="assets/title.jpg" width="100%" alt="DSH Tool Discovery —— 首轮提供三个小入口与初始集合，其它工具的真实 schema 按需在下一轮披露（仓库横幅图）">
 
   # DSH Tool Discovery
 
-  **首轮请求不再背着一座工具 schema 大山：三个小入口在前，真实 schema 按需到场。**
+  **三个小入口与初始工具集合在前，其它工具的真实 schema 按需到场。**
 
   [English](README.md) | 中文
 
@@ -20,7 +20,7 @@
 
 | 没有它 | 有了它 |
 |---|---|
-| 每个已注册工具的完整 JSON Schema 都在首轮注入，无论任务是否用得上 | 首轮只带三个小入口加一份有界类别摘要；模型显式选定后，真实原生 schema 才在**下一轮**出现 |
+| 每个已注册工具的完整 JSON Schema 都在首轮注入，无论任务是否用得上 | 首轮带三个小入口、有界类别摘要，以及默认初始集合的完整 schema（DSH 核心工具与当前 preset 保留的工具）；其它工具的真实原生 schema 在模型显式选定后的**下一轮**出现 |
 | 宿主侧工具升级可以在会话中途悄悄改写模型已经读过的定义 | 一个缓存周期内已披露的 wire **只增不改**——首披露时记录的定义就是它一直被发送的定义 |
 | 哪个类别里有什么工具，全靠猜 | `tool_search` 给 Top-K 候选卡（短用途 + ref/revision），`tool_list` 给分页的完整名称；两者都不改变激活集合 |
 | 「现在到底激活了哪些工具」没有答案 | `tool_load` 回执是版本化的 canonical 记录；`view: "state"` 投影列出 `selected` / `advertised` / `invalidated` |

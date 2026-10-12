@@ -1,9 +1,9 @@
 <div align="center">
-  <img src="assets/title.jpg" width="100%" alt="DSH Tool Discovery — three small control entries up front; a tool's real schema is disclosed on demand in the next turn (repository banner)">
+  <img src="assets/title.jpg" width="100%" alt="DSH Tool Discovery — three small control entries plus the initial set up front; other tools' real schemas are disclosed on demand in the next turn (repository banner)">
 
   # DSH Tool Discovery
 
-  **Hundreds of tool schemas stay out of the first request: three small entries up front, the real schema arrives on demand.**
+  **Three small entries and the initial tool set up front; other tools' real schemas arrive on demand.**
 
   English | [中文](README.zh.md)
 
@@ -20,7 +20,7 @@
 
 | Without it | With it |
 |---|---|
-| Every registered tool's full JSON Schema is injected on the first request, whether the task needs it or not | The first request carries three small entries plus a bounded category summary; a real native schema appears only in the **next** turn after the model explicitly selects the tool |
+| Every registered tool's full JSON Schema is injected on the first request, whether the task needs it or not | The first request carries three small entries, a bounded category summary, and full schemas for the default initial set (DSH core tools and the current preset's retained tools); other tools' real native schemas appear in the **next** turn after explicit selection |
 | A host-side tool upgrade can silently rewrite a definition the model has already read mid-session | Disclosed wire is **append-only** within a cache epoch — the definition recorded at first disclosure is the one that keeps being sent |
 | Guessing which category holds which tool | `tool_search` returns top-K candidate cards (short purpose + ref/revision), `tool_list` pages complete names; neither changes the active set |
 | No answer to "what is active right now?" | `tool_load` receipts are versioned canonical records; the `view: "state"` projection lists `selected` / `advertised` / `invalidated` |
