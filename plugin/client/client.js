@@ -23,7 +23,7 @@ window.__ModuleLoader__.load({
     var exports = module.exports;
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
     const React = require('react');
-    const { createElement: h, useState, useSyncExternalStore, useCallback } = React;
+    const { createElement: h, useState, useRef, useSyncExternalStore, useCallback } = React;
 
     // ---- 纯逻辑（与 plugin/client/model.mjs 同构） ----------------------------
     const FIXED_ENTRIES = ['tool_list', 'tool_search', 'tool_load'];
@@ -61,6 +61,7 @@ window.__ModuleLoader__.load({
         choices: Array.isArray(node?.meta?.initialToolChoices) ? node.meta.initialToolChoices : [],
         default: Array.isArray(node?.meta?.default) ? [...node.meta.default] : [],
         catalogComplete: node?.meta?.toolDirectory?.scope === 'application' && node.meta.toolDirectory.complete === true,
+        constraints: node?.meta?.settingConstraints,
       };
     }
 
@@ -69,7 +70,7 @@ window.__ModuleLoader__.load({
       const fixed = FIXED_ENTRIES;
       const available = new Set();
       for (const choice of meta?.choices ?? []) {
-        if (typeof choice?.name === 'string') available.add(choice.name);
+        if (typeof choice?.name === 'string' && !fixed.includes(choice.name)) available.add(choice.name);
       }
       const chosen = new Set();
       for (const name of selected ?? []) {
@@ -126,6 +127,21 @@ window.__ModuleLoader__.load({
       pending: 'Takes effect in the next new session, or after a successful compaction. The current session keeps the list it started with.',
       saved: 'Saved.',
       failed: 'Not saved — the host rejected the write. Retry.',
+      tolerantLoad: 'Allow idempotent loading of initial tools',
+      tolerantLoadHelp: 'On by default. Off rejects repeated loads of baseline tools. Changing this reloads the plugin.',
+      exactList: 'Use an exact initial tool list (including DSH core tools)',
+      exactListHelp: 'Off by default: when initial injection is enabled, registered core tools are also included. Turn on to require tool_load for unlisted core tools. Changing this reloads the plugin.',
+      advanced: 'Advanced configuration',
+      reload: 'These fields reload the plugin when saved; this may reset in-memory state and block existing sessions in strict mode.',
+      locale: 'Model-facing language', auto: 'Follow interface', en: 'English', zh: 'Chinese',
+      budgets: 'Budget overrides (JSON)',
+      budgetsHelp: 'null disables overrides. Use an object of budget keys and positive integers or null for individual hard limits. Small limits can block normal tasks or add model round-trips; they do not guarantee lower token costs.',
+      categoryConfig: 'Category navigation copy (JSON)',
+      categoryConfigHelp: 'Use an object keyed by category, with title and capabilitySummary. An empty object uses localized defaults. Categories do not grant permissions.',
+      framework: 'Trusted framework entries (read-only)',
+      apply: 'Save', invalidJson: 'Enter a JSON object (or null for budget overrides).',
+      invalidValue: 'Invalid configuration: check known keys, positive integer limits, or category title/capabilitySummary fields.',
+      loading: 'Configuration is loading or unavailable.', readOnly: 'This configuration is read-only.', saving: 'Saving…',
     };
     const zh = {
       nav: '工具发现',
@@ -151,6 +167,21 @@ window.__ModuleLoader__.load({
       pending: '改动在下一个新会话、或一次成功压缩之后生效；当前会话保持它开始时的名单。',
       saved: '已保存。',
       failed: '未保存——宿主拒绝了这次写入，可重试。',
+      tolerantLoad: '容忍重复加载初始工具',
+      tolerantLoadHelp: '默认开启，重复加载常驻工具保持幂等；关闭后拒绝此类重复加载。修改会重新加载插件。',
+      exactList: '使用精确初始名单（含 DSH 核心工具）',
+      exactListHelp: '默认关闭：初始注入开启时还会加入已登记的核心工具。开启后，名单外的核心工具也需 tool_load。修改会重新加载插件。',
+      advanced: '高级配置',
+      reload: '保存这些字段会重新加载插件，可能重置内存状态；严格模式下可能阻断存量会话。',
+      locale: '模型可见文案语言', auto: '跟随界面', en: '英语', zh: '中文',
+      budgets: '预算覆盖（JSON）',
+      budgetsHelp: 'null 表示不覆盖。对象可填写预算键与正整数，单项硬限额可用 null 关闭。较小上限可能阻断正常任务或增加模型往返，不保证降低 token 成本。',
+      categoryConfig: '类别导航文案（JSON）',
+      categoryConfigHelp: '以类别为键，填写 title 与 capabilitySummary；空对象使用本地化默认值。类别不授予权限。',
+      framework: '可信框架保留项（只读）',
+      apply: '保存', invalidJson: '请输入 JSON 对象（预算覆盖也可为 null）。',
+      invalidValue: '配置无效：请检查支持的键、正整数上限、或类别的 title/capabilitySummary 字段。',
+      loading: '配置正在加载或暂不可用。', readOnly: '当前配置为只读。', saving: '正在保存…',
     };
 
     /** 从 describe 镜像里取出本插件这一行。 */
@@ -188,29 +219,83 @@ window.__ModuleLoader__.load({
         ['alwaysAllowPresetTools', 'presetTools', 'presetToolsHelp', value?.alwaysAllowPresetTools !== false],
         ['requireTrustedEpoch', 'strictEpoch', 'strictEpochHelp', value?.requireTrustedEpoch === true],
         ['requireTrustedEpochForSubagents', 'childEpoch', 'childEpochHelp', value?.requireTrustedEpochForSubagents === true],
+        ['tolerantLoadProtected', 'tolerantLoad', 'tolerantLoadHelp', value?.tolerantLoadProtected !== false],
+        ['respectAlwaysVisible', 'exactList', 'exactListHelp', value?.respectAlwaysVisible === true],
       ];
     }
 
+    const BOOLEAN_SETTINGS = featureChoices({}).map(([key]) => key);
     function saveSetting(form, key, value) {
-      if (!['alwaysVisible', 'initialToolsEnabled', 'alwaysAllowPresetTools', 'requireTrustedEpoch', 'requireTrustedEpochForSubagents'].includes(key)) return Promise.resolve(false);
+      if (![...BOOLEAN_SETTINGS, 'alwaysVisible', 'locale', 'budgets', 'categoryConfig'].includes(key)) return Promise.resolve(false);
       return form.mutate([{ op: 'set', path: [key], value }]);
     }
 
+    function validAdvancedSetting(key, value, constraints) {
+      if (key === 'locale') return typeof value === 'string' && ['auto', 'en', 'zh'].includes(value);
+      if (key === 'budgets' && value === null) return true;
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+      if (key === 'budgets') {
+        if (!Array.isArray(constraints?.budgetKeys)) return false;
+        return Object.entries(value).every(([name, limit]) => constraints.budgetKeys.includes(name)
+          && ((limit === null && constraints.optionalLimitKeys?.includes(name))
+            || (typeof limit === 'number' && Number.isInteger(limit) && limit > 0)));
+      }
+      if (key === 'categoryConfig') {
+        if (!Array.isArray(constraints?.categoryKeys)) return false;
+        return Object.entries(value).every(([name, card]) => constraints.categoryKeys.includes(name)
+          && card !== null && typeof card === 'object' && !Array.isArray(card)
+          && typeof card.title === 'string' && typeof card.capabilitySummary === 'string');
+      }
+      return false;
+    }
+
+    // 草稿与服务端已保存值分离；修订变化时重建编辑器，避免恢复默认/外部更新留下旧草稿。
+    function JsonSetting ({ t, name, value, disabled, keys, onSave }) {
+      const [draft, setDraft] = useState(JSON.stringify(value, null, 2));
+      const [error, setError] = useState(null);
+      const submit = () => {
+        let parsed;
+        try {
+          parsed = JSON.parse(draft);
+          if ((parsed === null && name !== 'budgets') || (parsed !== null && (typeof parsed !== 'object' || Array.isArray(parsed)))) throw new Error('shape');
+        } catch {
+          setError(t('invalidJson'));
+          return;
+        }
+        setError(null);
+        onSave(name, parsed);
+      };
+      return h('section', null,
+        h('label', { htmlFor: `tool-discovery-${name}` }, t(name)),
+        h('p', { style: { fontSize: '12px' } }, t(`${name}Help`)),
+        h('code', { style: { display: 'block', fontSize: '11px', overflowWrap: 'anywhere' } }, (keys ?? []).join(', ')),
+        h('textarea', { id: `tool-discovery-${name}`, rows: 6, value: draft, disabled,
+          style: { width: '100%', boxSizing: 'border-box', fontFamily: 'monospace' },
+          onChange: event => setDraft(event.target.value) }),
+        h('button', { type: 'button', disabled, onClick: submit }, t('apply')),
+        error ? h('p', { role: 'alert' }, error) : null);
+    }
+
     /** 叶子组件：只收 props，不读 ctx。 */
-    function SettingsPanel ({ t, snapshot, error, notice, onToggle, onRestore, onFeature }) {
+    function SettingsPanel ({ t, snapshot, error, notice, busy, onToggle, onRestore, onFeature, onSetting }) {
       const [query, setQuery] = useState('');
+      const disabled = busy === true || snapshot?.status !== 'ready' || snapshot?.writable === false;
+      const locale = snapshot?.value?.locale ?? 'auto';
       const selected = Array.isArray(snapshot?.value?.alwaysVisible) ? snapshot.value.alwaysVisible : [];
       const built = buildRows(snapshot?.meta, selected);
       const visible = filterRows(built.rows, query);
 
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '12px' } },
+        snapshot?.status !== 'ready' ? h('p', { role: 'status' }, t('loading')) : null,
+        snapshot?.writable === false ? h('p', { role: 'status' }, t('readOnly')) : null,
+        busy ? h('p', { role: 'status' }, t('saving')) : null,
         h('h3', null, t('features')),
         ...featureChoices(snapshot?.value).map(([key, label, help, checked]) => h('section', { key },
           h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
             h('input', {
-              type: 'checkbox', checked,
+              type: 'checkbox', checked, id: `tool-discovery-${key}`,
               'aria-describedby': `tool-discovery-${key}-help`,
-              disabled: snapshot?.status !== 'ready' || snapshot?.writable === false,
+              disabled,
               onChange: (event) => onFeature(key, event.target.checked),
             }), t(label)),
           h('p', { id: `tool-discovery-${key}-help`, style: { margin: '4px 0', fontSize: '12px' } }, t(help)))),
@@ -226,7 +311,7 @@ window.__ModuleLoader__.load({
             onChange: (event) => setQuery(event.target.value),
           }),
           h('button', {
-            type: 'button',
+            type: 'button', disabled: disabled || snapshot?.metaAvailable === false,
             onClick: () => { setQuery(''); onRestore(selected); },
           }, t('restore'))),
 
@@ -242,7 +327,7 @@ window.__ModuleLoader__.load({
               h('input', {
                 type: 'checkbox',
                 id: `initial-tool-${row.name}`,
-                checked: row.selected,
+                checked: row.selected, disabled,
                 onChange: () => onToggle(selected, row.name),
               }),
               h('label', { htmlFor: `initial-tool-${row.name}`, style: { fontSize: '13px' } },
@@ -251,6 +336,20 @@ window.__ModuleLoader__.load({
             ))),
 
         h('p', { style: { fontSize: '12px', margin: 0 } }, t('pending')),
+        h('details', null,
+          h('summary', null, t('advanced')),
+          h('p', { style: { fontSize: '12px' } }, t('reload')),
+          h('label', { htmlFor: 'tool-discovery-locale' }, t('locale')),
+          h('select', { id: 'tool-discovery-locale', value: locale, disabled,
+            onChange: event => onSetting('locale', event.target.value) },
+            ...[...new Set(['auto', 'en', 'zh', locale])].map(value => h('option', { key: value, value }, ['auto', 'en', 'zh'].includes(value) ? t(value) : value))),
+          ...['budgets', 'categoryConfig'].map(name => h(JsonSetting, {
+            key: `${name}:${JSON.stringify(snapshot?.value?.[name])}`,
+            t, name, value: snapshot?.value?.[name] ?? (name === 'budgets' ? null : {}),
+            disabled: disabled || !snapshot?.meta?.constraints,
+            keys: snapshot?.meta?.constraints?.[name === 'budgets' ? 'budgetKeys' : 'categoryKeys'], onSave: onSetting,
+          })),
+          h('p', null, `${t('framework')}: ${(snapshot?.value?.frameworkRetained ?? []).join(', ') || '—'}`)),
         error ? h('p', { role: 'alert', style: { fontSize: '12px', margin: 0 } }, error) : null,
         notice ? h('p', { style: { fontSize: '12px', margin: 0 } }, notice) : null)
     }
@@ -285,7 +384,9 @@ window.__ModuleLoader__.load({
           // 之间猜宿主键名。
           choices: meta.choices,
           defaults: meta.default,
-          value: formSnapshot.value,
+          metaAvailable: node !== undefined,
+          value: { ...formSnapshot.value, alwaysVisible: Array.isArray(formSnapshot.value?.alwaysVisible)
+            ? formSnapshot.value.alwaysVisible : [...meta.default] },
           revision: formSnapshot.revision,
           status: formSnapshot.status,
           writable: formSnapshot.writable,
@@ -315,34 +416,55 @@ window.__ModuleLoader__.load({
       return function SettingsTabRoot () {
         const [error, setError] = useState(null);
         const [notice, setNotice] = useState(null);
+        const [busy, setBusy] = useState(false);
+        const writing = useRef(false);
         const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
         /** 一次写入：false 或抛错都是"没被宿主接受"，必须显式呈现。 */
         const write = useCallback(async (value, key = 'alwaysVisible') => {
+          const current = getSnapshot();
+          if (writing.current || current.status !== 'ready' || current.writable === false) return false;
+          writing.current = true;
+          setBusy(true);
           setError(null);
+          setNotice(null);
           let ok = false;
           try {
             ok = await saveSetting(form, key, value);
           } catch (reason) {
             logSaveFailure(reason);
-            ok = false;
+          } finally {
+            writing.current = false;
+            setBusy(false);
           }
           if (ok) setNotice(t('saved'));
-          else { setNotice(null); setError(t('failed')); }
+          else setError(t('failed'));
           return ok;
         }, []);
 
-        const onToggle = useCallback((current, name) => write(toggleName(current, name)), [snapshot]);
-        const onRestore = useCallback(
-          (current) => write(isDefaultSelection(current, snapshot.defaults) ? [...current] : [...snapshot.defaults]),
-          [snapshot],
-        );
+        const onToggle = useCallback((_current, name) => {
+          if (FIXED_ENTRIES.includes(name)) return false;
+          return write(toggleName(getSnapshot().value.alwaysVisible, name));
+        }, []);
+        const onRestore = useCallback(() => {
+          const current = getSnapshot();
+          if (!current.metaAvailable || isDefaultSelection(current.value.alwaysVisible, current.defaults)) return false;
+          return write([...current.defaults]);
+        }, []);
 
         const onFeature = useCallback((key, enabled) => {
-          if (!['initialToolsEnabled', 'alwaysAllowPresetTools', 'requireTrustedEpoch', 'requireTrustedEpochForSubagents'].includes(key) || typeof enabled !== 'boolean') return false;
+          if (!BOOLEAN_SETTINGS.includes(key) || typeof enabled !== 'boolean') return false;
           return write(enabled, key);
         }, []);
-        return h(SettingsPanel, { t, snapshot, error, notice, onToggle, onRestore, onFeature });
+        const onSetting = useCallback((key, value) => {
+          if (!validAdvancedSetting(key, value, getSnapshot().meta.constraints)) {
+            setNotice(null);
+            setError(t('invalidValue'));
+            return false;
+          }
+          return write(value, key);
+        }, []);
+        return h(SettingsPanel, { t, snapshot, error, notice, busy, onToggle, onRestore, onFeature, onSetting });
       };
     }
 
@@ -362,7 +484,7 @@ window.__ModuleLoader__.load({
 
     // 供 vm 内测试取用（不参与渲染）：纯逻辑 + 接缝 + 装配点。
     exports.__test = {
-      buildRows, filterRows, toggleName, isDefaultSelection, featureChoices, saveSetting,
+      buildRows, filterRows, toggleName, isDefaultSelection, featureChoices, saveSetting, validAdvancedSetting,
       ownView, alwaysVisibleNode, readMeta, createTabRoot, createSnapshotSource, SettingsPanel,
       FIXED_ENTRIES, NS, PLUGIN_TAB_ID, SLOT,
     };

@@ -6,11 +6,11 @@
 //   * native-only：mode 非 native 直接拒绝组合（INCOMPATIBLE_PRESENTATION）。
 //   * 披露集合 = 三入口 ∪ 可信 framework 保留项 ∪ 常驻工具 ∪ 本会话**有效** selected
 //     ∪ 披露缓存（frozen）。
-//   * **顺序固化**：本轮组装里已披露的工具保持宿主给出的相对次序，随后**纯追加**
-//     披露缓存里尚未出现的项。加载下一个工具不会移动任何既有项；缓存里那份 wire
-//     逐字覆盖宿主本轮的同名 schema（宿主换版不得让模型上下文里的定义静默变形）。
-//   * 对**返回值**做校验：不得有重复名，不得有宿主注册表里不存在的幽灵工具
-//     （说明有别的 listener 在我们之后又注入了全量 schema）→ INCOMPATIBLE_COMPOSITION。
+//   * **顺序固化**：实际出站 header 的首见顺序优先；未披露基线和新 selection
+//     纯追加。常驻 wire 由 journal 的观测缓存冻结，按需 wire 由 engine 的 frozen 冻结。
+//     观测缓存从不授予资格，冷恢复只读取 own 当前周期，成功压缩才释放缓存。
+//   * incoming 不得有重复名；新披露基线须能从宿主注册表解析。
+//     已冻结的工具可继续披露旧 wire，即使当前撤权/移除；宿主执行权限独立判断。
 //   * 调试/预览式 assemble 不算曝光：advertised 只由 canonical request/header 建立。
 //
 // **未发送刷新**（宿主自动压缩边界）：
@@ -91,54 +91,43 @@ export function createProjection(deps) {
    */
   function project(runtime, scope, incoming) {
     // 常驻基线：三入口 + 可信 framework 保留项 + 常驻工具。
-    // **不**把 selected 并进基线 —— 加载工具必须由下面的「已加载段」按首次披露
-    // 次序追加，否则会被宿主的字典序重新排序。
+    // **不**把 selected 并进基线 —— 它们的执行/冻结判据独立于常驻名单；
+    // 未披露项按选中次序追加，不能使用宿主的字典序。
     const allowed = new Set(ENTRY_TOOL_NAMES);
     for (const name of frameworkRetained) allowed.add(name);
     for (const name of runtime.alwaysNameSet ?? []) allowed.add(name);
 
     const byName = indexIncoming(incoming);
 
-    // 常驻基线段保持宿主给出的相对次序（原语义），但**不参与**加载工具的排序。
-    /** @type {any[]} */
+    // header 只提供首见字节与顺序，绝不是名单/选择的授权来源。
+    // 常驻与按需项共享顺序队列，避免迟到的常驻项插到已加载项前面破坏前缀。
+    const observed = runtime.journal?.disclosedWire?.() ?? [];
+    const observedByName = new Map(observed.map((wire) => [wire.name, wire]));
+    const engineState = runtime.engine.getState(runtime.scope);
+    const ready = runtime.compositionBypass === null && !runtime.restoring && engineState.mode === 'ready';
+    const frozen = ready ? runtime.engine.getFrozenWire(runtime.scope) : [];
+    const frozenByName = new Map(frozen.map((f) => [f.name, f]));
+    const selected = ready ? Array.from(engineState.selected.values()).sort((a, b) => a.seq - b.seq) : [];
+    const disclosedNames = new Set([...allowed, ...frozenByName.keys(), ...selected.map((s) => s.name)]);
+    const queue = [
+      ...observed.map((wire) => wire.name).filter((name) => disclosedNames.has(name)),
+      ...incoming.map((tool) => tool?.name).filter((name) => allowed.has(name)),
+      ...frozen.map((f) => f.name),
+      ...selected.map((s) => s.name),
+    ];
     const kept = [];
     const seen = new Set();
-    for (const tool of incoming) {
-      if (!allowed.has(tool?.name)) continue;
-      if (seen.has(tool.name)) {
-        throw new DomainError('INCOMPATIBLE_COMPOSITION', `duplicate disclosed tool "${tool.name}"`);
-      }
-      seen.add(tool.name);
-      if (ctx.tools.get(tool.name, scope) === undefined) {
-        throw new DomainError('INCOMPATIBLE_COMPOSITION', `disclosed tool "${tool.name}" is not resolvable in the host registry`);
-      }
-      kept.push(tool);
-    }
-
-    // 已加载段 = 披露缓存（首次披露次序）+ 尚未披露的 selected（选中次序）。
-    // 顺序**只**由首次披露次序决定，绝不由宿主字典序决定：先载 z 再载 a 必须得到
-    // [..., z, a]。宿主本轮没提供的（如已被撤权）按冻结 wire 继续披露。
-    //
-    // fail closed / 恢复中一律不披露任何已加载项：引擎在这两种状态下**按设计保留**
-    // selected 与 frozen 作为保守残留，它们不授予执行权（evaluateCall 先判 mode），
-    // 但绝不能继续进入出站投影 —— 否则 fail closed 只停在执行面，隐藏工具的完整
-    // schema 仍会随下一轮出站泄露（SEQ6 冻结断言）。
-    const engineState = runtime.engine.getState(runtime.scope);
-    if (runtime.compositionBypass === null && !runtime.restoring && engineState.mode === 'ready') {
-      const frozen = runtime.engine.getFrozenWire(runtime.scope);
-      const frozenByName = new Map(frozen.map((f) => [f.name, f]));
-      const queue = frozen.map((f) => f.name);
-      const selected = engineState.selected;
-      for (const record of Array.from(selected.values()).sort((a, b) => a.seq - b.seq)) {
-        if (!frozenByName.has(record.name)) queue.push(record.name);
-      }
-      for (const name of queue) {
-        if (seen.has(name)) continue;
-        seen.add(name);
-        const record = frozenByName.get(name);
-        const host = byName.get(name);
-        if (host !== undefined) kept.push(record === undefined ? host : { ...host, ...record.wire });
-        else if (record !== undefined) kept.push({ ...record.wire });
+    for (const name of queue) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      const host = byName.get(name);
+      const saved = allowed.has(name) ? observedByName.get(name) : frozenByName.get(name)?.wire;
+      if (saved !== undefined) kept.push(JSON.parse(JSON.stringify(saved)));
+      else if (host !== undefined) {
+        if (allowed.has(name) && ctx.tools.get(name, scope) === undefined) {
+          throw new DomainError('INCOMPATIBLE_COMPOSITION', `disclosed tool "${name}" is not resolvable in the host registry`);
+        }
+        kept.push(host);
       }
     }
 

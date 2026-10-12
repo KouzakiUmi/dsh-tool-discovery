@@ -22,6 +22,23 @@ Nothing in this file is a product-acceptance statement. For the authoritative pe
 what is verified, what is unverified, and what this version refuses to support — see
 [`plugin/docs/05-current-status.md`](plugin/docs/05-current-status.md).
 
+## [Unreleased]
+
+- Freeze initial/baseline tool wire and its first-disclosed order within an epoch, including own-only
+  cold recovery. Header observations supply bytes only, never tool selection or authorization; successful
+  compaction releases the snapshot. Later baseline additions append after already-disclosed tools.
+- Respect the epoch snapshot of `initialToolsEnabled` in core-tool self-admission. Disabling manual
+  injection no longer lets a guessed core name silently re-enable it; ordinary `tool_load` remains available.
+- Forward `pendingLoad` to the execution-state reducer so an in-flight load is reported as
+  `TOOL_NOT_ADVERTISED`, not incorrectly as never loaded.
+- Complete the settings tab: expose idempotent-load and exact-list switches, language selection,
+  validated JSON budget/category editors, and read-only framework retention. Show actual defaults when
+  the manual list is omitted; block writes during loading, read-only state or an in-flight save.
+  Restore-default is unavailable without schema metadata and skips unchanged writes.
+- Add real-host regression gates and expand the real React/DOM probe; its persistence channel is a
+  controlled fixture, not the active user's configuration. These changes are uninstalled and unreleased;
+  independent security-boundary approval remains a separate gate.
+
 ## [0.3.0] — 2026-10-10 — DSH STORE contract and `0.2.1-alpha.2` installability
 
 Source version **`0.3.0`**. The three discovery entries, the frozen protocol, and the tool-card surface

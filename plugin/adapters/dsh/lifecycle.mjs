@@ -65,9 +65,14 @@ export function createLifecycle(deps) {
     return value === true;
   }
 
+  function currentInitialToolsEnabled() {
+    const raw = typeof deps.getInitialToolsEnabled === 'function'
+      ? deps.getInitialToolsEnabled() : config.initialToolsEnabled;
+    return (typeof raw?.get === 'function' ? raw.get() : raw) !== false;
+  }
+
   function currentAlwaysNames(agentScope) {
-    const enabled = typeof config.initialToolsEnabled?.get === 'function'
-      ? config.initialToolsEnabled.get() : config.initialToolsEnabled;
+    const enabled = currentInitialToolsEnabled();
     const configured = typeof deps.getAlwaysVisible === 'function'
       ? resolveAlwaysVisible([...deps.getAlwaysVisible()])
       : enabled === false ? [] : resolveAlwaysVisible(config.alwaysVisible);
@@ -196,6 +201,7 @@ export function createLifecycle(deps) {
    */
   function onEpochBoundary(runtime, info) {
     const names = currentAlwaysNames(runtime.agentScope);
+    runtime.initialToolsEnabled = currentInitialToolsEnabled();
     const trigger = info.userInitiated ? 'manual' : 'auto';
     if (!runtime.requireTrustedEpoch) {
       runtime.ledger.setIdentity(info.identity);
@@ -366,6 +372,8 @@ export function createLifecycle(deps) {
       journal,
       ledger,
       requireTrustedEpoch: strictEpoch,
+      // 周期快照：volatile 开关不能在周期中途改变 guard 自证行为。
+      initialToolsEnabled: currentInitialToolsEnabled(),
       restoring: true,
       compositionBypass: null,
       // 可信基线落定前**没有**任何常驻名单：0 request 就是靠这个空集兑现的。
