@@ -15,7 +15,7 @@
 //   * 仅 requireTrustedEpoch=true 时，名单落盘才算授权（trusted-epoch.mjs）：此前是 pending，
 //     pending 与 blocked 都**不发请求**。缺记录的老会话明确报错并等本次 live 的
 //     真实用户 `/compact` 迁移，绝不从出站 header 反推授权。
-import { createDiscoveryEngine, CORE_TOOL_NAMES } from '../../domain/index.mjs';
+import { createDiscoveryEngine, CORE_TOOL_NAMES, DomainError } from '../../domain/index.mjs';
 import { createJournal, normalizeInheritedBoundary } from './journal.mjs';
 import { resolveAlwaysVisible } from './config.mjs';
 import { requiresTrustedEpoch } from './epoch-policy.mjs';
@@ -42,6 +42,33 @@ export function createLifecycle(deps) {
   const sessions = new Map();
   /** sessionId → runtime 建立前的事件缓冲 */
   const buffers = new Map();
+  // 只取消本次插件 activation 的等待，不改宿主/用户 signal，也不影响重挂载的新 lifecycle。
+  const activation = new AbortController();
+
+  function assertActive() {
+    if (activation.signal.aborted) throw activation.signal.reason;
+  }
+
+  async function waitForActive(pending) {
+    let onAbort;
+    try {
+      const value = await Promise.race([
+        pending,
+        new Promise((_resolve, reject) => {
+          if (activation.signal.aborted) { reject(activation.signal.reason); return; }
+          onAbort = () => reject(activation.signal.reason);
+          activation.signal.addEventListener('abort', onAbort, { once: true });
+        }),
+      ]);
+      assertActive();
+      return value;
+    } catch (error) {
+      assertActive();
+      throw error;
+    } finally {
+      if (onAbort !== undefined) activation.signal.removeEventListener('abort', onAbort);
+    }
+  }
 
   /**
    * 此刻配置的常驻名单。只在**建立 runtime** 或**成功压缩重开周期**时读它；
@@ -136,6 +163,7 @@ export function createLifecycle(deps) {
    * 之前还是之后，压缩都发生在这棵 waterfall 子树里，屏障一定跑在它之后。
    */
   async function awaitEpochRecord(sessionId, signal) {
+    assertActive();
     const runtime = sessions.get(sessionId);
     if (runtime === undefined) return { state: 'trusted' };
     if (!runtime.requireTrustedEpoch) {
@@ -163,8 +191,10 @@ export function createLifecycle(deps) {
       const baseline = runtime.baselinePromise;
       if (baseline !== undefined && baseline !== null && runtime.ledger.state === BASELINE_STATE.PENDING) {
         await baseline.catch(() => {});
+        assertActive();
       }
       await runtime.ledger.whenSettled();
+      assertActive();
       // 读**当下**的状态，不复用任何先前捕获的快照。
       const state = runtime.ledger.state;
       if (state === BASELINE_STATE.BLOCKED) throw trustedEpochBlockedError(runtime.ledger.reason);
@@ -181,18 +211,18 @@ export function createLifecycle(deps) {
       return { state, reason: runtime.ledger.reason };
     };
     if (signal === undefined || signal === null || typeof signal.addEventListener !== 'function') {
-      return work();
+      return waitForActive(work());
     }
     if (signal.aborted === true) throw signal.reason ?? new Error(`pre-step aborted before the epoch record of "${sessionId}" settled`);
     let onAbort;
     try {
-      return await Promise.race([
+      return await waitForActive(Promise.race([
         work(),
         new Promise((_resolve, reject) => {
           onAbort = () => reject(signal.reason ?? new Error(`pre-step aborted while the epoch record of "${sessionId}" is still pending`));
           signal.addEventListener('abort', onAbort, { once: true });
         }),
-      ]);
+      ]));
     } finally {
       if (onAbort !== undefined) signal.removeEventListener('abort', onAbort);
     }
@@ -327,6 +357,7 @@ export function createLifecycle(deps) {
    * @param {any} scope 该会话的活动 agent scope
    */
   function ensureRuntime(session, scope) {
+    assertActive();
     const sessionId = session.id;
     let runtime = sessions.get(sessionId);
     if (runtime !== undefined) return runtime;
@@ -707,6 +738,7 @@ export function createLifecycle(deps) {
   function disposeSession(sessionId) {
     const runtime = sessions.get(sessionId);
     if (runtime !== undefined) {
+      runtime.refreshPendingProjection = null;
       runtime.engine.dispose();
       runtime.journal.dispose();
       // ledger 也要 dispose：pending 的写在落定后**不得**再复活授权。
@@ -718,6 +750,8 @@ export function createLifecycle(deps) {
 
   return {
     sessions,
+    assertActive,
+    waitForActive,
     ensureRuntime,
     onSessionEvent,
     onRegistryChange,
@@ -745,6 +779,7 @@ export function createLifecycle(deps) {
     },
     /** 取 runtime；不存在时用当前 agent scope 建立一个（投影/guard 首次触达时）。 */
     runtimeFor(session, scope) {
+      assertActive();
       return sessions.get(session.id) ?? ensureRuntime(session, scope);
     },
     /**
@@ -795,6 +830,11 @@ export function createLifecycle(deps) {
       );
     },
     dispose() {
+      if (!activation.signal.aborted) {
+        activation.abort(new DomainError('STATE_NOT_READY', config.locale === 'zh'
+          ? '工具发现插件已卸载；本次在途请求已停止，请重新发起请求。'
+          : 'Tool discovery activation was disposed; this in-flight request was stopped. Retry the request.'));
+      }
       for (const sessionId of [...sessions.keys()]) disposeSession(sessionId);
       buffers.clear();
     },
