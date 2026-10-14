@@ -24,6 +24,8 @@ what is verified, what is unverified, and what this version refuses to support â
 
 ## [Unreleased]
 
+- PTC advertisement replay also covers SDK selections. A tool removed and loaded again with an unchanged
+  `run_code` header is no longer stuck at `TOOL_NOT_ADVERTISED`.
 - PTC SDK disclosure drops a loaded name whose catalog revision no longer matches, and a live runtime
   uses the adopted baseline rather than the current configuration. Unload lifts every installed
   `run_code` restriction.

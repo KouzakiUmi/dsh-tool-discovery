@@ -447,6 +447,9 @@ export function createJournal(deps) {
   function replayAdvertisements() {
     if (latestHeaderTools === null) return;
     applyAdvertisementPass(new Map(latestHeaderTools.map((tool) => [tool.name, tool])), latestHeaderSeq);
+    // PTC 的 header 只有 run_code，上面那次对账补不回 SDK 里的已加载项。
+    // 工具被移除再重加、wire 不变时宿主不会再发 request/header，必须在这里重放。
+    if (deps.collapsedPresentation?.() === true) advertiseSdkSelections(latestHeaderSeq);
   }
 
   function requestIdFor(seq) {
@@ -670,6 +673,7 @@ export function createJournal(deps) {
         log('journal:applied', { sessionId, seq: callSeq, operationId: pair.call.operationId });
         // reducePair 会清掉这些项的 advertised（换版本）。若出站 wire 没变，宿主就**不会**
         // 再发一次 request/header —— 不补这一下，工具会永久停在 TOOL_NOT_ADVERTISED。
+        // PTC 同样如此：header 始终只有 run_code，重放必须补 SDK 选择，不能只对账 header。
         replayAdvertisements();
       }
     }
