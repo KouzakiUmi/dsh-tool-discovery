@@ -75,10 +75,11 @@ npm 包、标签钉住、CLI 与 Core 版本的区别）见[安装与更新](#�
 
 ## 环境要求
 
-- DSH Core **`0.2.1-alpha.1` 或 `0.2.1-alpha.2`**——声明的 peer 范围正是这两个发行版，且都声明为
-  `compatible`：`0.2.1-alpha.1` 是发布基线；`0.2.1-alpha.2` 在当前宿主上通过全套测试，
-  门禁已计入该版本的子代理常驻语义变化。逐版本矩阵、证据与一次性 Profile 记录见
-  [上架与兼容声明](plugin/docs/10-store-compatibility.md)。其它版本未测试。
+- DSH Core **`>=0.2.1-alpha.1`**——这是所有 `@deepseek-ai/dsh` 与 `@deepseek-ai/dsh-*` peer 的
+  安装准入范围。宿主升到更新的发行版时仍允许安装，不会因版本钉死而被直接拒绝。这不是兼容声明：
+  `dshReleases` 仍只把 `0.2.1-alpha.1` 与 `0.2.1-alpha.2` 标为 `compatible`，其它版本仍未测试，
+  契约变化时仍可能在运行时失败。逐版本矩阵与一次性 Profile 记录见
+  [上架与兼容声明](plugin/docs/10-store-compatibility.md)。
 - 原生 **`@deepseek-ai/schemastery`** peer 是配置面与设置页的前提。缺少它时发现内核仍正常运行，
   但没有 Config，插件会记录 `ConfigUnavailable`，而不是假装存在一个设置页。
 - **native** 工具展示模式。其它展示模式在激活期即被拒绝，不会静默降级。

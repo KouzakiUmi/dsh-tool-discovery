@@ -53,12 +53,12 @@
     "zod": "^4.4.3"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh": "0.2.1-alpha.1 || 0.2.1-alpha.2",
-    "@deepseek-ai/dsh-tools": "0.2.1-alpha.1 || 0.2.1-alpha.2",
-    "@deepseek-ai/dsh-llm": "0.2.1-alpha.1 || 0.2.1-alpha.2",
+    "@deepseek-ai/dsh": ">=0.2.1-alpha.1",
+    "@deepseek-ai/dsh-tools": ">=0.2.1-alpha.1",
+    "@deepseek-ai/dsh-llm": ">=0.2.1-alpha.1",
     "@deepseek-ai/schemastery": "3.18.5-alpha.1",
-    "@deepseek-ai/dsh-storage-domain": "0.2.1-alpha.1 || 0.2.1-alpha.2",
-    "@deepseek-ai/dsh-home-paths": "0.2.1-alpha.1 || 0.2.1-alpha.2"
+    "@deepseek-ai/dsh-storage-domain": ">=0.2.1-alpha.1",
+    "@deepseek-ai/dsh-home-paths": ">=0.2.1-alpha.1"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh": {

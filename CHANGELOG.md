@@ -25,6 +25,11 @@ what is verified, what is unverified, and what this version refuses to support �
 
 ## [Unreleased]
 
+- Open the DSH Core install constraint from the two tested alpha releases to `>=0.2.1-alpha.1` on
+  every `@deepseek-ai/dsh` and `@deepseek-ai/dsh-*` peer, so a newer host release is not refused
+  at installation. This changes admission only. `dshReleases` still records compatibility evidence
+  solely for `0.2.1-alpha.1` and `0.2.1-alpha.2`.
+
 ## [0.4.1] — 2026-10-14 — load lifecycle and PTC disclosure hardening
 
 - Re-read selection state inside the load queue and reject queued work after disposal, session destruction,
