@@ -24,6 +24,10 @@ what is verified, what is unverified, and what this version refuses to support â
 
 ## [Unreleased]
 
+- PTC compatibility is off by default. Off: a PTC session bypasses this plugin and keeps the host
+  SDK. On: discovery runs inside `run_code`; the three entries and the current preset's initial
+  tools are injected into the next `run_code` SDK instead of the model tool list. `run_code` in
+  the outbound header is not treated as a composition leak.
 - Presentation is per scope. A non-native preset no longer aborts the turn: the host's collapsed
   wire is left intact, and the initial allowlist is the configured list plus tools registered by
   the bound preset. Activation no longer refuses the composition because the deployment default is

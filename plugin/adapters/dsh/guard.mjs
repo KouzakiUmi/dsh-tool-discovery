@@ -24,6 +24,8 @@ export function createGuard(deps) {
   // 严格模式的常驻工具只由 storageDomain 记录背书；默认模式使用配置快照，
   // 所以基线判据必须排在 alwaysNameSet 早退**之前**（见下）。
   const entryNames = new Set(ENTRY_TOOL_NAMES);
+  const ptcEnabled = typeof deps.ptcEnabled === 'function' ? deps.ptcEnabled : () => false;
+  const sdkNames = typeof deps.sdkNames === 'function' ? deps.sdkNames : () => [];
   const log = deps.log ?? (() => {});
 
   return ctx.tools.guard((exec) => {
@@ -34,17 +36,25 @@ export function createGuard(deps) {
     if (agent === undefined || agent.session === undefined) {
       return `tool "${exec.name}" is not admitted by this composition: no agent scope (STATE_NOT_READY)`;
     }
+    let mode = 'native';
+    try { mode = ctx.tools.modeFor(agent); } catch { mode = 'native'; }
+    if (mode !== 'native') {
+      if (ptcEnabled() !== true) return undefined;
+      if (exec.name === 'run_code' || entryNames.has(exec.name)) return undefined;
+      const runtime = lifecycle.runtimeFor(agent.session, agent);
+      const baseline = runtime.ledger?.state;
+      if (runtime.requireTrustedEpoch !== false && baseline !== undefined && baseline !== BASELINE_STATE.TRUSTED) {
+        const reason = runtime.ledger?.reason ?? 'TRUSTED_EPOCH_PENDING';
+        return `tool "${exec.name}" is not admitted: STATE_NOT_READY (${reason})`;
+      }
+      const allowed = new Set(sdkNames(agent));
+      if (allowed.has(exec.name)) return undefined;
+      return `${exec.name}: not disclosed in the run_code SDK (TOOL_NOT_LOADED)`;
+    }
     const runtime = lifecycle.runtimeFor(agent.session, agent);
     // 三入口由协议保证；frameworkRetained 是**部署配置即授权**，且它排在上面的基线门禁
     // 之前（pending/blocked 时也照放），所以这条放行必须可审计。
     if (entryNames.has(exec.name)) return undefined;
-    // 非 native 的模型只能直接调用宿主的展示传输（ptc 的 run_code）。它不是披露对象，
-    // 也不能因展示模式被拒，否则该 preset 的回合仍然发不出去。嵌套调用继续走下面的
-    // 常驻/已加载判据，初始放行仍是当前 preset 的名单。
-    if (exec.name === 'run_code' && ctx.tools.modeFor(agent) !== 'native') {
-      log('guard:presentation-transport', { sessionId: agent.session.id, name: exec.name });
-      return undefined;
-    }
     if (frameworkRetained.has(exec.name)) {
       log('guard:framework-admitted', { sessionId: agent.session.id, name: exec.name });
       return undefined;

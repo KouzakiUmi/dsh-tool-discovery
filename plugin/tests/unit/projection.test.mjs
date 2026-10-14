@@ -130,7 +130,7 @@ test('PR5: incoming 只有一份重复候选时正常通过（查重不引入额
   assert.deepEqual(transformed.tools.map((tool) => tool.name), [...ENTRY, 'dup']);
 });
 
-test('PR6: 非 native 不终止本轮，且不改写宿主已折叠的 wire', async () => {
+test('PR6: PTC 兼容关闭时 bypass，不建 runtime，也不改写出站 wire', async () => {
   const runtime = restoringRuntime({ restoring: false });
   let created = 0;
   const ctx = fakeCtx();
@@ -139,12 +139,29 @@ test('PR6: 非 native 不终止本轮，且不改写宿主已折叠的 wire', as
     runtimeFor: () => { created += 1; return runtime; },
     whenReady: () => Promise.resolve({ mode: 'ready' }),
   };
-  createProjection({ ctx, lifecycle, log: () => {} });
+  createProjection({ ctx, lifecycle, log: () => {}, ptcEnabled: () => false });
   const listener = ctx.listeners.find(([name]) => name === 'system-prompt/assemble')[1];
   const agent = { id: 'a1', session: { id: 'u1' } };
   const incoming = { sections: [], contexts: [], tools: [{ name: 'run_code' }, { name: 'read' }] };
   const transformed = await listener(incoming, { agent, scope: agent }, async () => incoming);
-  assert.equal(created, 1, '仍要建立 runtime，初始名单才能按当前 preset 合并');
-  assert.deepEqual(transformed.tools.map((tool) => tool.name), ['run_code', 'read'],
-    '不得把 native 投影盖掉宿主的折叠 wire，也不得抛错');
+  assert.equal(created, 0, '关闭兼容时不得建立 runtime，否则 journal 会把 run_code 当成泄漏');
+  assert.deepEqual(transformed.tools.map((tool) => tool.name), ['run_code', 'read']);
+});
+
+test('PR7: PTC 兼容开启时仍不改写出站 wire，但会建立 runtime', async () => {
+  const runtime = restoringRuntime({ restoring: false });
+  let created = 0;
+  const ctx = fakeCtx();
+  ctx.tools.modeFor = () => 'ptc';
+  const lifecycle = {
+    runtimeFor: () => { created += 1; return runtime; },
+    whenReady: () => Promise.resolve({ mode: 'ready' }),
+  };
+  createProjection({ ctx, lifecycle, log: () => {}, ptcEnabled: () => true });
+  const listener = ctx.listeners.find(([name]) => name === 'system-prompt/assemble')[1];
+  const agent = { id: 'a1', session: { id: 'u1' } };
+  const incoming = { tools: [{ name: 'run_code' }] };
+  const transformed = await listener(incoming, { agent, scope: agent }, async () => incoming);
+  assert.equal(created, 1);
+  assert.deepEqual(transformed.tools.map((tool) => tool.name), ['run_code']);
 });

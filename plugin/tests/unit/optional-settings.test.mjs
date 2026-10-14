@@ -8,6 +8,7 @@ test('optional defaults: strict epoch off, initial tools on', () => {
   assert.equal(raw.requireTrustedEpochForSubagents, false);
   assert.equal(raw.initialToolsEnabled, true);
   assert.equal(raw.alwaysAllowPresetTools, true);
+  assert.equal(raw.ptcCompatibility, false);
 });
 
 test('optional values: explicit false/true and volatile references are preserved', () => {
@@ -16,10 +17,12 @@ test('optional values: explicit false/true and volatile references are preserved
   assert.equal(validateConfig({ initialToolsEnabled: { get: () => false } }).initialToolsEnabled, false);
   assert.equal(validateConfig({ alwaysAllowPresetTools: false }).alwaysAllowPresetTools, false);
   assert.equal(validateConfig({ alwaysAllowPresetTools: { get: () => false } }).alwaysAllowPresetTools, false);
+  assert.equal(validateConfig({ ptcCompatibility: true }).ptcCompatibility, true);
+  assert.equal(validateConfig({ ptcCompatibility: { get: () => true } }).ptcCompatibility, true);
 });
 
 test('optional values: invalid types do not silently enable or disable checks', () => {
-  for (const key of ['requireTrustedEpoch', 'requireTrustedEpochForSubagents', 'initialToolsEnabled', 'alwaysAllowPresetTools']) {
+  for (const key of ['requireTrustedEpoch', 'requireTrustedEpochForSubagents', 'initialToolsEnabled', 'alwaysAllowPresetTools', 'ptcCompatibility']) {
     for (const value of [null, 'false', 0, [], {}]) {
       assert.throws(() => validateConfig({ [key]: value }), /must be a boolean/);
     }

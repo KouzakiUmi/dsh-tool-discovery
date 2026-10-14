@@ -23,6 +23,7 @@ import { createEntryDefinitions } from './entries.mjs';
 import { createGuard } from './guard.mjs';
 import { createLifecycle } from './lifecycle.mjs';
 import { createProjection } from './projection.mjs';
+import { createPtcDisclosure } from './ptc-sdk.mjs';
 import { createRegistryAdapter } from './registry.mjs';
 import { buildConfig, publishToolChoices, resolveAlwaysVisible } from './config.mjs';
 import { globalToolInventory, presetToolNamesOf } from './tool-inventory.mjs';
@@ -251,7 +252,9 @@ export function validateConfig(raw) {
     ? config.initialToolsEnabled.get() : config.initialToolsEnabled;
   const alwaysAllowPresetTools = typeof config.alwaysAllowPresetTools?.get === 'function'
     ? config.alwaysAllowPresetTools.get() : config.alwaysAllowPresetTools;
-  for (const [key, value] of Object.entries({ initialToolsEnabled, alwaysAllowPresetTools, requireTrustedEpoch: config.requireTrustedEpoch,
+  const ptcCompatibility = typeof config.ptcCompatibility?.get === 'function'
+    ? config.ptcCompatibility.get() : config.ptcCompatibility;
+  for (const [key, value] of Object.entries({ initialToolsEnabled, alwaysAllowPresetTools, ptcCompatibility, requireTrustedEpoch: config.requireTrustedEpoch,
     requireTrustedEpochForSubagents: config.requireTrustedEpochForSubagents })) {
     if (value !== undefined && typeof value !== 'boolean') {
       throw new DomainError('INCOMPATIBLE_COMPOSITION', `${key} must be a boolean.`);
@@ -260,6 +263,7 @@ export function validateConfig(raw) {
   return {
     initialToolsEnabled: initialToolsEnabled !== false,
     alwaysAllowPresetTools: alwaysAllowPresetTools !== false,
+    ptcCompatibility: ptcCompatibility === true,
     requireTrustedEpoch: config.requireTrustedEpoch === true,
     requireTrustedEpochForSubagents: config.requireTrustedEpochForSubagents === true,
     categoryConfig,
@@ -485,6 +489,12 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
     ctx.effect(() => rollback, 'progressive discovery lifecycle');
 
     try {
+      const ptcEnabled = () => {
+        const live = ctx.fiber?.config?.ptcCompatibility;
+        const raw = live !== undefined ? live : config.ptcCompatibility;
+        const value = raw !== null && typeof raw === 'object' && typeof raw.get === 'function' ? raw.get() : raw;
+        return value === true;
+      };
       const lifecycle = createLifecycle({
         ctx,
         registry,
@@ -498,7 +508,12 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
         getPresetTools,
         onRuntimeCreated,
         trustedEpoch: trustedEpoch,
+        collapsedPresentation: (agent) => {
+          try { return ctx.tools.modeFor(agent) !== 'native'; }
+          catch { return false; }
+        },
       });
+      const ptc = createPtcDisclosure({ ctx, lifecycle, log, enabled: ptcEnabled });
       own(() => lifecycle.dispose());
 
       // ---- 8.5 可信周期存储：动态子 fiber，作用域内 open/close ----
@@ -556,7 +571,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       }
 
       // ---- 5. 投影 ----
-      own(createProjection({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, log }));
+      own(createProjection({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, log, ptcEnabled }));
 
       // ---- 6. guard（只增拒绝） ----
       own(createGuard({
@@ -566,11 +581,40 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
         respectAlwaysVisible: respectAlwaysVisibleReader(config),
         locale,
         log,
+        ptcEnabled,
+        sdkNames: (agent) => ptc.allowNames(agent),
       }));
 
       // ---- 7. session 与 registry 事件 ----
-      own(ctx.on('session/event', (session, event) => lifecycle.onSessionEvent(session, event)));
-      own(ctx.on('session/disposed', (session) => lifecycle.disposeSession(session.id)));
+      own(ctx.on('session/event', (session, event) => {
+        lifecycle.onSessionEvent(session, event);
+        const agent = lifecycle.sessions.get(session.id)?.agentScope;
+        if (agent !== undefined) ptc.sync(agent);
+      }));
+      own(ctx.on('session/disposed', (session) => {
+        const agent = lifecycle.sessions.get(session.id)?.agentScope;
+        lifecycle.disposeSession(session.id);
+        if (agent !== undefined) ptc.lift(agent);
+      }));
+      // SDK 在 assemble 瀑布之前生成。agent/created 赶在首轮之前；inbox 插入赶在
+      // 下一条用户消息的 assemble 之前。load 落定则由上面的 session/event 刷新。
+      own(ctx.on('agent/created', async ({ agent }) => {
+        try {
+          if (agent?.session === undefined) return;
+          if (ptcEnabled() !== true || ctx.tools.modeFor(agent) === 'native') {
+            ptc.lift(agent);
+            return;
+          }
+          const runtime = lifecycle.ensureRuntime(agent.session, agent);
+          if (runtime.restoring) await lifecycle.whenReady(agent.session.id);
+          ptc.sync(agent);
+        } catch (error) {
+          log('ptc:prepare-failed', { error: String(error) });
+        }
+      }));
+      own(ctx.on('agent/inbox/inserted', ({ agent }) => {
+        if (agent !== undefined) ptc.sync(agent);
+      }));
 
       // ---- 7.5 post-next 的 agent/pre-step 屏障 ----
       //

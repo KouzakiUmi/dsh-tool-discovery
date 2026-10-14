@@ -576,3 +576,7 @@ token、字符与字节是不同单位；没有 tokenizer 时一律走估算并�
 wire（ptc 只留 `run_code`），不把 native schema 投影回去，也不终止本轮。初始放行是配置的 `alwaysVisible`
 与当前绑定 preset 自有登记且可见的工具之并（`alwaysAllowPresetTools`）。`INCOMPATIBLE_PRESENTATION` 仍只用于
 引擎配置的 `capabilityKind` 不是 `native`。
+
+`ptcCompatibility`（默认关闭，volatile）决定 PTC 会话是否走上面的适配。关闭时 PTC 会话 bypass：
+不建 runtime、不投影、不拒绝执行，宿主 SDK 保持全量。开启时三个入口与当前 preset 初始工具在
+assemble 之前写入下一轮 `run_code` SDK；出站 tools 仍只有 `run_code`。同一段程序的绑定不会中途增加。

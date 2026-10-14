@@ -391,6 +391,7 @@ export function createLifecycle(deps) {
       // provider 而非静态数组：成功压缩时 lifecycle 会就地换掉 runtime 上的名单，
       // journal 无需重建也无需知道配置从哪来。
       alwaysVisibleProvider: () => runtime.alwaysNameSet,
+      collapsedPresentation: () => deps.collapsedPresentation?.(scope) === true,
       onEpochReset: (info) => onEpochBoundary(runtime, info),
       onUserCompactionComplete: (info) => onUserCompactionComplete(runtime, info),
       onRequestHeader: () => { runtime.refreshPendingProjection = null; },

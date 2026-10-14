@@ -227,6 +227,11 @@ export function createProjection(deps) {
 
     const scope = agent;
     const mode = ctx.tools.modeFor(context.scope ?? scope);
+    const ptcEnabled = typeof deps.ptcEnabled === 'function' && deps.ptcEnabled() === true;
+    if (mode !== 'native' && !ptcEnabled) {
+      // 开关关闭：PTC 会话不建 runtime、不投影、不终止本轮。宿主 SDK 保持原样。
+      return transformed;
+    }
 
     // 首次触达即建立本会话 runtime（可能仍处于 restoring）。各 preset 都走这里：
     // 常驻名单在建立时按当前绑定 preset 合并（lifecycle ← getPresetTools）。
@@ -247,8 +252,8 @@ export function createProjection(deps) {
       throw error;
     }
     if (mode !== 'native') {
-      // 宿主已按 scope 折叠出站 wire（ptc 只留 run_code）。不把 native schema
-      // 投影回去，也不因展示模式终止本轮。初始放行由上面的 preset 基线与 guard 承担。
+      // 兼容开启：出站 wire 仍只留宿主的 run_code。披露在 assemble 之前写入
+      // run_code SDK（ptc-sdk.mjs），不把 native schema 投影回来。
       return transformed;
     }
     const incoming = Array.isArray(transformed?.tools) ? transformed.tools : [];

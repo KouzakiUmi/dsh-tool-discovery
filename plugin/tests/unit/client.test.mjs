@@ -202,7 +202,8 @@ test('C-U11: 可选功能默认值与 Config 一致，保存只修改指定字�
   assert.equal(config.dict.requireTrustedEpochForSubagents.meta.default, false)
   assert.notEqual(config.dict.requireTrustedEpochForSubagents.meta.volatile, true)
   const states = Object.fromEntries(t.featureChoices({}).map(([key, _label, _help, checked]) => [key, checked]))
-  assert.deepEqual(states, { initialToolsEnabled: true, alwaysAllowPresetTools: true, requireTrustedEpoch: false, requireTrustedEpochForSubagents: false, tolerantLoadProtected: true, respectAlwaysVisible: false })
+  assert.equal(config.dict.ptcCompatibility.meta.default, false)
+  assert.deepEqual(states, { initialToolsEnabled: true, alwaysAllowPresetTools: true, ptcCompatibility: false, requireTrustedEpoch: false, requireTrustedEpochForSubagents: false, tolerantLoadProtected: true, respectAlwaysVisible: false })
   const enabled = t.featureChoices({ requireTrustedEpoch: true, initialToolsEnabled: false })
   assert.equal(enabled.find(row => row[0] === 'requireTrustedEpoch')[3], true)
   assert.equal(enabled.find(row => row[0] === 'initialToolsEnabled')[3], false)
@@ -305,7 +306,7 @@ test('C-U13: all editable Config fields have a save path; trusted framework stay
   const t = mod.__test
   const calls = []
   const form = { mutate: async ops => { calls.push(ops); return true } }
-  const values = { alwaysVisible: [], initialToolsEnabled: false, alwaysAllowPresetTools: false,
+  const values = { alwaysVisible: [], initialToolsEnabled: false, alwaysAllowPresetTools: false, ptcCompatibility: true,
     requireTrustedEpoch: false, requireTrustedEpochForSubagents: false, tolerantLoadProtected: false,
     respectAlwaysVisible: true, locale: 'zh', budgets: { maxActiveTools: 3 }, categoryConfig: {} }
   const schema = buildConfig(Schema)
