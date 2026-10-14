@@ -4,7 +4,8 @@
 import { dshModule } from '../../contracts/install-resolver.mjs'
 import { createProgressiveDiscoveryAdapter } from '../../adapters/dsh/index.mjs'
 
-const { defineTool } = await import(dshModule('@deepseek-ai/dsh-tools'))
+const { defineTool, renderToolsSdk, renderToolsSdkPy } = await import(dshModule('@deepseek-ai/dsh-tools'))
+const { isAgentLoopRequest } = await import(dshModule('@deepseek-ai/dsh-llm'))
 // 可信周期记录的声明式依赖：defineDomain / domainTable 取自安装内
 // @deepseek-ai/dsh-storage-domain（0.2.1-alpha.1），z 取安装内 zod。
 // 产品作者若把两者写成裸包名 import，这两个键会被忽略——注入无害。
@@ -12,7 +13,7 @@ const storageDomainApi = await import(dshModule('@deepseek-ai/dsh-storage-domain
 const zModule = await import(dshModule('zod'))
 
 export default createProgressiveDiscoveryAdapter({
-  defineTool,
+  defineTool, renderToolsSdk, renderToolsSdkPy, isAgentLoopRequest,
   storageDomainApi: { defineDomain: storageDomainApi.defineDomain, domainTable: storageDomainApi.domainTable },
   z: zModule.default ?? zModule
 })

@@ -14,7 +14,7 @@
 //   5. fork own-only：只折叠本会话拥有的 canonical 对（seq >= inheritedEventCount，
 //      事实取公开 query.readSession 与 live Session 的 inheritedEventCount 交叉核验）；
 //      继承前缀不折叠、不观测、不进缓冲；边界缺失/畸形/冲突或 seq 流断口一律 fail closed。
-import { digestOf } from '../../domain/index.mjs';
+import { digestOf, deepEqualCanonical } from '../../domain/index.mjs';
 import { compactedEpochIdentity, initialEpochIdentity } from './trusted-epoch.mjs';
 import { wireOfSchema } from './registry.mjs';
 
@@ -48,6 +48,43 @@ function parseArguments(raw) {
   }
 }
 
+// PTC 的公开日志不使用 sourceEventSeqs；必须先验证 own run_code 父调用、子 ID 与参数，
+// 再映射为内核可消费的 call/result 对。未知父调用、孤立结算均不授信。
+function normalizePtcEvent(event, parents, calls) {
+  if (event.type === 'tool/call' && event.data?.name === 'run_code'
+    && typeof event.data.callId === 'string' && event.data.callId.length > 0) {
+    parents.set(event.data.callId, event.seq);
+  }
+  if (event.type === 'tool/result') {
+    const sources = Array.isArray(event.sourceEventSeqs) ? event.sourceEventSeqs : [];
+    for (const [id, seq] of parents) if (sources.includes(seq)) parents.delete(id);
+  }
+  if (event.type === 'tool/ptc-dispatch-start') {
+    const data = event.data;
+    const parentSeq = parents.get(data?.parentCallId);
+    if (data?.name !== 'tool_load' || typeof data.subCallId !== 'string' || data.subCallId.length === 0
+      || typeof data.parentCallId !== 'string' || data.parentCallId.length === 0
+      || parentSeq === undefined || parentSeq >= event.seq) return null;
+    return { ...event, type: 'tool/call', ptcNormalized: true, data: { name: data.name, callId: data.subCallId,
+      arguments: data.arguments, ptcParentCallId: data.parentCallId } };
+  }
+  if (event.type === 'tool/ptc-dispatch') {
+    const data = event.data;
+    const matched = [...calls].find(([seq, call]) => seq < event.seq && call.callId === data?.subCallId
+      && call.ptcParentCallId !== undefined && call.ptcParentCallId === data.parentCallId
+      && parents.has(data.parentCallId) && data.name === 'tool_load');
+    if (matched === undefined) return null;
+    const [seq, call] = matched;
+    let sameInput = false;
+    try { sameInput = deepEqualCanonical(call.input, parseArguments(data.arguments)); }
+    catch { sameInput = false; }
+    return { ...event, type: 'tool/result', ptcNormalized: true, sourceEventSeqs: [seq], data: { message: {
+      isError: data.isError !== false || !sameInput, content: data.content,
+    } } };
+  }
+  return event;
+}
+
 /**
  * 从一组已按 seq 排序的事件里构造 canonical pair（只认 tool_load）。
  * @param {ReadonlyArray<any>} events
@@ -57,19 +94,22 @@ export function foldPairs(events) {
   const calls = new Map();
   /** @type {any[]} */
   const pairs = [];
-  for (const event of events) {
+  const parents = new Map();
+  for (const rawEvent of events) {
+    const event = normalizePtcEvent(rawEvent, parents, calls);
+    if (event === null) continue;
     if (event.type === 'tool/call') {
       if (event.data?.name !== 'tool_load') continue;
       const input = parseArguments(event.data?.arguments);
       if (input === null || typeof input !== 'object') continue;
-      calls.set(event.seq, { callId: String(event.data.callId), input });
+      calls.set(event.seq, { callId: String(event.data.callId), input, ptcParentCallId: event.ptcNormalized === true ? event.data.ptcParentCallId : undefined });
       continue;
     }
     if (event.type !== 'tool/result') continue;
     const sources = Array.isArray(event.sourceEventSeqs) ? event.sourceEventSeqs : [];
     for (const callSeq of sources) {
       const call = calls.get(callSeq);
-      if (call === undefined) continue;
+      if (call === undefined || (call.ptcParentCallId !== undefined) !== (event.ptcNormalized === true)) continue;
       const shell = parseResultEnvelope(resultText(event));
       if (shell === null) continue;
       pairs.push({
@@ -141,7 +181,8 @@ function isValidSeq(value) {
  */
 function isStateAffecting(event, liveCalls) {
   if (event?.type === 'request/header') return true;
-  if (event?.type === 'tool/call') return event.data?.name === 'tool_load';
+  if (event?.type === 'tool/call' || event?.type === 'tool/ptc-dispatch-start') return event.data?.name === 'tool_load';
+  if (event?.type === 'tool/ptc-dispatch') return event.data?.name === 'tool_load';
   if (event?.type !== 'tool/result') return false;
   if (liveCalls !== undefined && liveCalls.size > 0) return true;   // 类别 1（归属命中）+ 类别 3
   return parseResultEnvelope(resultText(event)) !== null;            // 类别 1（外壳自报）
@@ -196,6 +237,8 @@ export function createJournal(deps) {
 
   /** live 路径的 canonical call 缓存：callSeq → {callId, input}（只存 tool_load）。 */
   const liveCalls = new Map();
+  /** own run_code callId → canonical seq，用于关联 PTC 子调用。 */
+  const ptcParents = new Map();
   /**
    * 恢复窗口内的新事件缓冲（读快照期间到达的事件不能丢）。
    *
@@ -325,6 +368,7 @@ export function createJournal(deps) {
   function abandonLiveCalls() {
     for (const { callId } of liveCalls.values()) engine.cancelOperation(`op_${callId}`);
     liveCalls.clear();
+    ptcParents.clear();
   }
 
   function failClosedUncertain(reason) {
@@ -371,6 +415,35 @@ export function createJournal(deps) {
     rememberDisclosedWire(headerTools);
     const byName = new Map(headerTools.map((tool) => [tool.name, tool]));
     applyAdvertisementPass(byName, event.seq);
+    // run_code header 不携带 SDK 内容，不能从 selected 反推这一请求的曝光。
+  }
+
+  /**
+   * PTC 的出站表只有 run_code，已加载工具的曝光在 SDK 而不是 header。
+   * 只消费 ptc-sdk 在真实出站请求中核验过的 schema 快照；旧 header/回执不授信。
+   */
+  function recordSdkAdvertisements(records) {
+    const state = engine.getState(scope);
+    if (state?.mode !== 'ready' || typeof state.selected?.entries !== 'function') return;
+    const catalog = engine.getCatalog?.();
+    for (const record of records) {
+      const toolId = record.toolId;
+      const selection = state.selected.get(toolId);
+      if (selection === undefined || state.invalidated?.has?.(toolId) === true) continue;
+      if (record.name !== selection.name || record.revision !== selection.revision
+        || record.schemaDigest !== selection.schemaDigest || digestOf(record.wire) !== selection.schemaDigest) continue;
+      const entry = catalog?.entries?.get?.(toolId);
+      if (entry === undefined || entry.revision !== selection.revision || entry.name !== selection.name) continue;
+      if (entry.schemaDigest !== selection.schemaDigest || entry.wire === undefined) continue;
+      engine.recordAdvertisement(scope, {
+        requestId: currentRequestId(),
+        toolId,
+        name: selection.name,
+        revision: selection.revision,
+        schemaDigest: selection.schemaDigest,
+        wire: record.wire,
+      });
+    }
   }
 
   /**
@@ -422,6 +495,7 @@ export function createJournal(deps) {
   function replayAdvertisements() {
     if (latestHeaderTools === null) return;
     applyAdvertisementPass(new Map(latestHeaderTools.map((tool) => [tool.name, tool])), latestHeaderSeq);
+    // PTC 由实际 llm/stream 请求里的 SDK 重新确认曝光；canonical load 不追认旧请求。
   }
 
   function requestIdFor(seq) {
@@ -459,6 +533,7 @@ export function createJournal(deps) {
     // **下一行** resetCacheEpoch 一并清掉（它清本会话全部 pending），故这里不必
     // 再逐条 cancelOperation —— 两处都做会让"谁收口"变得不可读。
     liveCalls.clear();
+    ptcParents.clear();
     engine.resetCacheEpoch(scope, 'compaction-end');
     disclosedWire.clear();
     // 周期重开：此刻（且仅此刻）取此刻的配置、换上新的常驻名单，并刷新那份**尚未发送**
@@ -550,6 +625,17 @@ export function createJournal(deps) {
     // （call/result 跨界不成对：继承 call 在此被滤掉，其 result 无法配对）
     if (seq < ownSeqStart) return;
     if (buffering) buffer.push(event);
+    if (event.type === 'tool/ptc-dispatch-start' || event.type === 'tool/ptc-dispatch') ownOutboundSeen = true;
+    event = normalizePtcEvent(event, ptcParents, liveCalls);
+    if (event === null) return;
+    // 外层程序已结算却未见可验证子结果：不能留下永久预算预留。
+    if (event.type === 'tool/result') {
+      for (const [callSeq, call] of liveCalls) {
+        if (call.ptcParentCallId === undefined || ptcParents.has(call.ptcParentCallId)) continue;
+        liveCalls.delete(callSeq);
+        engine.cancelOperation(`op_${call.callId}`);
+      }
+    }
     if (event.type === 'request/header') {
       ownOutboundSeen = true;
       recordAdvertisements(event);
@@ -610,7 +696,7 @@ export function createJournal(deps) {
       if (event.data?.name !== 'tool_load') return;
       const input = parseArguments(event.data?.arguments);
       if (input === null || typeof input !== 'object') return;
-      liveCalls.set(event.seq, { callId: String(event.data.callId), input });
+      liveCalls.set(event.seq, { callId: String(event.data.callId), input, ptcParentCallId: event.ptcNormalized === true ? event.data.ptcParentCallId : undefined });
       return;
     }
     if (event.type !== 'tool/result') return;
@@ -618,7 +704,7 @@ export function createJournal(deps) {
     const sources = Array.isArray(event.sourceEventSeqs) ? event.sourceEventSeqs : [];
     for (const callSeq of sources) {
       const call = liveCalls.get(callSeq);
-      if (call === undefined) continue;
+      if (call === undefined || (call.ptcParentCallId !== undefined) !== (event.ptcNormalized === true)) continue;
       liveCalls.delete(callSeq);
       const shell = parseResultEnvelope(resultText(event));
       if (shell === null) {
@@ -645,6 +731,7 @@ export function createJournal(deps) {
         log('journal:applied', { sessionId, seq: callSeq, operationId: pair.call.operationId });
         // reducePair 会清掉这些项的 advertised（换版本）。若出站 wire 没变，宿主就**不会**
         // 再发一次 request/header —— 不补这一下，工具会永久停在 TOOL_NOT_ADVERTISED。
+        // 此处只重放 native wire；PTC 必须等下一次实际 SDK 出站。
         replayAdvertisements();
       }
     }
@@ -724,8 +811,14 @@ export function createJournal(deps) {
       //
       // **这里绝不触发迁移**：历史扫描出来的 command 链不是"本次 live 的用户迁移授权"，
       // 迁移只认 settleUserCompaction 在 live 路径上凑齐的那五条事件。
+      // merged 已按 seq 去重；不能在 live 已部分折叠的压缩状态上再次累计摘要。
+      // 重建压缩观测状态，但保留 live 用户命令链，quiet 路径绝不重新授予迁移资格。
+      openCompactions.clear();
+      lastSuccessCompactionEndSeq = -1;
+      currentEpoch = initialEpochIdentity();
       for (const event of ownEvents) {
-        if (event.type === 'request/header' || event.type === 'tool/call' || event.type === 'tool/result') {
+        if (event.type === 'request/header' || event.type === 'tool/call' || event.type === 'tool/result'
+          || event.type === 'tool/ptc-dispatch-start' || event.type === 'tool/ptc-dispatch') {
           ownOutboundSeen = true;
         }
         if (event.type === 'compaction/start') {
@@ -874,6 +967,7 @@ export function createJournal(deps) {
     currentRequestId,
     activeSelectedNames,
     pendingLoadNames,
+    recordSdkAdvertisements,
     disclosedWire: () => [...disclosedWire.values()],
     /**
      * 本会话**当前**缓存周期身份。只来自本会话自己的成功 canonical 压缩边界

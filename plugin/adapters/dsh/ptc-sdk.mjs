@@ -1,73 +1,76 @@
-// PTC 兼容开启时，披露目标是下一轮 run_code SDK，不是模型可直接调用的 tools。
-// SDK 在 system-prompt/assemble 瀑布之前生成，所以 restriction 必须提前装上。
-// 开关关闭时不安装 restriction，调用方对 PTC 会话直接 bypass。
-import { ENTRY_TOOL_NAMES } from '../../domain/constants.mjs';
+// PTC 只裁剪公开 tools:sdk 文本，不通过 tools.restrict 改变宿主资格目录。
+// 曝光只在已品牌化的真实 agent-loop llm/stream 请求中确认，assemble/旧 header 不授信。
+import { ENTRY_TOOL_NAMES, DomainError, digestOf } from '../../domain/index.mjs';
+import { wireOfSchema } from './registry.mjs';
 
 const RUN_CODE = 'run_code';
 
-/**
- * @param {{ctx:any, lifecycle:any, enabled:() => boolean, log?:Function}} deps
- */
 export function createPtcDisclosure(deps) {
-  const { ctx, lifecycle, enabled } = deps;
+  const { ctx, lifecycle, enabled, renderToolsSdk, renderToolsSdkPy, isAgentLoopRequest } = deps;
   const log = deps.log ?? (() => {});
-  /** @type {WeakMap<object, Function>} */
-  const installed = new WeakMap();
+  // assembly 与其实际 SDK 快照一一对应；预览不会自己生成 advertised。
+  const pending = new WeakMap();
 
-  function lift(agent) {
-    const dispose = installed.get(agent);
-    if (typeof dispose !== 'function') return;
-    installed.delete(agent);
-    try { dispose(); }
-    catch (error) { log('ptc:restriction-lift-failed', { error: String(error) }); }
-  }
-
-  /** 下一轮 SDK 应出现的名字。不含 run_code。 */
-  function allowNames(agent) {
-    const names = new Set(ENTRY_TOOL_NAMES);
-    for (const name of lifecycle.currentAlwaysNames?.(agent) ?? []) {
-      if (typeof name === 'string' && name.length > 0 && name !== RUN_CODE) names.add(name);
-    }
-    const runtime = lifecycle.sessions?.get(agent?.session?.id);
-    const selected = runtime?.engine?.getState?.(runtime.scope)?.selected;
-    if (selected !== undefined && typeof selected.values === 'function') {
-      for (const item of selected.values()) {
-        if (typeof item?.name === 'string' && item.name !== RUN_CODE) names.add(item.name);
-      }
+  function allowNames(runtime) {
+    const names = new Set([...ENTRY_TOOL_NAMES, ...(deps.frameworkRetained ?? []), ...(runtime.alwaysNameSet ?? [])]);
+    names.delete(RUN_CODE);
+    const state = runtime.engine.getState(runtime.scope);
+    if (state.mode !== 'ready' || runtime.compositionBypass !== null) return names;
+    const catalog = runtime.engine.getCatalog();
+    for (const item of state.selected.values()) {
+      const entry = catalog.entries.get(item.toolId);
+      if (state.invalidated.has(item.toolId) || entry === undefined
+        || entry.revision !== item.revision || entry.name !== item.name) continue;
+      names.add(item.name);
     }
     return names;
   }
 
-  /**
-   * 按当前开关和展示模式安装或撤下 restriction。
-   * 失败只记日志：agent/created 抛错会拒绝整个 agent 发布。
-   */
-  function sync(agent) {
-    if (agent?.ctx?.tools?.restrict === undefined) return false;
-    let mode = 'native';
-    try { mode = ctx.tools.modeFor(agent); }
-    catch { return false; }
-    if (mode === 'native' || enabled() !== true) {
-      lift(agent);
-      return false;
+  function project(agent, assembly, runtime) {
+    const language = ctx.get('ptcRuntime')?.language;
+    const render = language === 'typescript' ? renderToolsSdk : language === 'python' ? renderToolsSdkPy : undefined;
+    if (typeof render !== 'function' || typeof isAgentLoopRequest !== 'function') {
+      throw new DomainError('INCOMPATIBLE_COMPOSITION', 'PTC discovery requires the host SDK renderer and agent-loop request observer.');
     }
-    let known;
-    try { known = ctx.tools.view(agent)?.restrictableNames; }
-    catch (error) {
-      log('ptc:restriction-view-failed', { error: String(error) });
-      return false;
+    const sections = assembly.sections ?? [];
+    if (sections.filter((section) => section.name === 'tools:sdk').length !== 1) {
+      throw new DomainError('INCOMPATIBLE_COMPOSITION', 'PTC discovery requires exactly one tools:sdk section.');
     }
-    const allow = [...allowNames(agent)].filter((name) => known?.has?.(name) === true);
-    lift(agent);
-    try {
-      installed.set(agent, agent.ctx.tools.restrict({ allow }));
-      log('ptc:sdk-restricted', { sessionId: agent.session?.id, allow });
-      return true;
-    } catch (error) {
-      log('ptc:restriction-failed', { sessionId: agent.session?.id, error: String(error) });
-      return false;
+    const allowed = allowNames(runtime);
+    const schemas = ctx.tools.sdkSchemas(agent).filter((schema) => allowed.has(schema.name));
+    const text = render(schemas);
+    const byName = new Map(schemas.map((schema) => [schema.name, wireOfSchema(schema)]));
+    const state = runtime.engine.getState(runtime.scope);
+    const records = [];
+    if (state.mode === 'ready' && runtime.compositionBypass === null) {
+      for (const selection of state.selected.values()) {
+        const wire = byName.get(selection.name);
+        if (wire === undefined || digestOf(wire) !== selection.schemaDigest || state.invalidated.has(selection.toolId)) continue;
+        records.push({ toolId: selection.toolId, name: selection.name, revision: selection.revision,
+          schemaDigest: selection.schemaDigest, wire });
+      }
     }
+    pending.set(runtime, { text, records, epoch: state.epoch });
+    return { ...assembly, sections: sections.map((section) => section.name === 'tools:sdk'
+      ? { ...section, text, interpolate: false } : section) };
   }
 
-  return { sync, lift, allowNames };
+  function observeRequest(options) {
+    if (enabled() !== true || typeof isAgentLoopRequest !== 'function' || !isAgentLoopRequest(options)) return;
+    const runtime = lifecycle.sessions.get(options.sessionId);
+    if (runtime === undefined || ctx.tools.modeFor(runtime.agentScope) === 'native') return;
+    const snapshot = pending.get(runtime);
+    // in-history 路由可能保留多个 system 节点，只认最后一个非空 system 消息。
+    const latest = options.messages?.filter((message) => message.role === 'system')
+      .map((message) => (message.content ?? []).map((block) => block.type === 'text' ? block.text : '').join(''))
+      .filter((text) => text.length > 0).at(-1);
+    if (snapshot === undefined || snapshot.epoch !== runtime.engine.getState(runtime.scope).epoch
+      || typeof latest !== 'string' || !latest.includes(snapshot.text)) {
+      throw new DomainError('INCOMPATIBLE_COMPOSITION', 'The outgoing PTC SDK does not match the discovery projection.');
+    }
+    runtime.journal.recordSdkAdvertisements(snapshot.records);
+    log('ptc:sdk-advertised', { sessionId: options.sessionId, names: snapshot.records.map((record) => record.name) });
+  }
+
+  return { project, observeRequest, allowNames };
 }

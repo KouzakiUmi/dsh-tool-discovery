@@ -157,11 +157,16 @@ test('PR7: PTC 兼容开启时仍不改写出站 wire，但会建立 runtime', a
     runtimeFor: () => { created += 1; return runtime; },
     whenReady: () => Promise.resolve({ mode: 'ready' }),
   };
-  createProjection({ ctx, lifecycle, log: () => {}, ptcEnabled: () => true });
+  let projections = 0;
+  createProjection({ ctx, lifecycle, log: () => {}, ptcEnabled: () => true,
+    projectPtc: (_agent, assembly) => ({ ...assembly, sections: [{ name: 'tools:sdk', text: `SDK ${++projections}` }] }) });
   const listener = ctx.listeners.find(([name]) => name === 'system-prompt/assemble')[1];
   const agent = { id: 'a1', session: { id: 'u1' } };
   const incoming = { tools: [{ name: 'run_code' }] };
   const transformed = await listener(incoming, { agent, scope: agent }, async () => incoming);
   assert.equal(created, 1);
   assert.deepEqual(transformed.tools.map((tool) => tool.name), ['run_code']);
+  assert.equal(transformed.sections[0].text, 'SDK 1');
+  assert.equal(runtime.refreshPendingProjection(), true);
+  assert.equal(transformed.sections[0].text, 'SDK 2', '自动压缩可原地刷新尚未发送的 SDK');
 });

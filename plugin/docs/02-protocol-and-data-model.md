@@ -578,5 +578,20 @@ wire（ptc 只留 `run_code`），不把 native schema 投影回去，也不终�
 引擎配置的 `capabilityKind` 不是 `native`。
 
 `ptcCompatibility`（默认关闭，volatile）决定 PTC 会话是否走上面的适配。关闭时 PTC 会话 bypass：
-不建 runtime、不投影、不拒绝执行，宿主 SDK 保持全量。开启时三个入口与当前 preset 初始工具在
-assemble 之前写入下一轮 `run_code` SDK；出站 tools 仍只有 `run_code`。同一段程序的绑定不会中途增加。
+不建 runtime、不投影、不拒绝执行，宿主 SDK 保持全量。开启时在 assemble 瀑布中使用宿主公开
+SDK 渲染器投影 `tools:sdk`，只包含三个入口、已采纳的基线/框架保留项与有效 selected；
+不调用 `tools.restrict`，不改宿主真实权限或资格目录。出站 tools 仍只有 `run_code`。
+曝光只由品牌化 agent-loop 的实际 `llm/stream` 请求建立：最近的非空 system 消息必须包含
+该周期已投影的 SDK 文本，记录的 wire 与当前 selected 身份也必须相符。调试 assemble、
+旧 header、canonical load 或冷恢复本身均不授予曝光。重加载/冷恢复等待下一次真实 SDK 出站即可重新曝光，
+不依赖 header 是否变化；同一程序内首次 load 后猜名调用仍被拒绝。
+
+PTC 加载回执使用宿主公开 `tool/ptc-dispatch-start` → `tool/ptc-dispatch` 链，关联 own
+`run_code` 父调用、subCallId、工具名与原始参数，再交给内核的回执/身份/最终错误态判据。
+原生 call/result 与 PTC 提交面不得混用。缺失父调用、参数改写、孤立/迟到结果不激活工具，
+外层程序结算后释放未完成加载的预算预留。
+
+开启该兼容功能需要宿主公开的 SDK 渲染器、请求品牌检查和上述 PTC dispatch 日志契约；
+缺失契约或实际出站 SDK 不符时明确拒绝，不退回全量 SDK。隔离组合门禁核验了本机安装内
+`dsh-tools` / `dsh-agent-loop` `0.2.1-alpha.2` 的实际 SDK、transport、日志和出站请求；
+模型与程序 backend 是声明式 fixture，未据此声明真实 Node/Python worker 或其它 Core 版本已验收。
