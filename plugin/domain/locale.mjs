@@ -22,10 +22,12 @@ export const DEFAULT_LOCALE = 'en';
 
 const MESSAGES = Object.freeze({
   // ---- 三个入口的 description 与参数说明 ----
+  // 入口的 description 由 adapters/dsh/entries.mjs 从本表读取，**不在那边硬编码**；
+  // 改动入口的行为边界（分页、候选集、批量、无卸载、下一轮生效）时，这里就是唯一同步点。
   entry: {
     tool_list: {
       description:
-        'List discoverable tools by category. Returns names only — no schema, no descriptions. Use it to browse before deciding what to load.',
+        'Browse discoverable tool names by category in bounded pages. Returns complete native names only — no descriptions, no schemas, no parameters. Never loads anything.',
       category: 'Capability category to browse. Use "all" for every category.',
       cursor: 'Opaque cursor from a previous list call. Omit to start from the first page.',
       view: 'Which bounded view to read: "available" (browsable), "loaded" (currently active), "categories" (capability summaries), or "state" (session selection state). When omitted: "categories" without category, otherwise "available".',
@@ -43,7 +45,7 @@ const MESSAGES = Object.freeze({
     },
     tool_search: {
       description:
-        'Find tools that suit a task without loading them. Returns a small candidate set with brief purposes and version-bound refs. Ranking is lexical; it does not call any model.',
+        'Find a few candidate tools for a task described in natural language, within one controlled category. Returns candidate cards and short-lived refs only; loading happens later via tool_load.',
       category: 'Restrict candidates to one capability category, or "all" for every category.',
       query: 'Natural-language description of the task (not a tool name).',
       limit: 'Max candidates. Default 5.',
@@ -52,7 +54,7 @@ const MESSAGES = Object.freeze({
     },
     tool_load: {
       description:
-        'Activate tools for this session. Prefer loading all tools needed for the task in a single batch to maximize cache reuse. Loads take effect on the NEXT request — it never executes a target tool. Loading is an explicit model choice, not a user approval.',
+        'Explicitly select tools by exact native name, or by candidate ref from tool_search — the candidate revision is optional and inferred from the version that ref is bound to. Prefer loading all tools needed for the task in a single batch to maximize cache reuse. Disclosed tools accumulate and stay available until the context is compacted — there is no unload. Takes effect on the NEXT request — it never executes a target tool.',
       names: 'Exact native tool names to load.',
       candidates: 'Candidates chosen by ref, as returned by tool_search. revision is optional; it defaults to the version bound to the ref. Mutually exclusive with names.',
       action: '"load" to activate tools (the only supported action).',
@@ -213,7 +215,7 @@ const MESSAGES = Object.freeze({
 const MESSAGES_ZH = Object.freeze({
   entry: {
     tool_list: {
-      description: '按类别列出可发现的工具。只返回名称——不含 schema 与描述。用于在决定加载什么之前先浏览。',
+      description: '按类别分页浏览可发现的工具名。只返回完整原生名称——不含描述、schema 与参数。从不加载任何工具。',
       category: '要浏览的能力类别。用 "all" 表示全部类别。',
       cursor: '上一次 list 调用返回的不透明游标。省略则从首页开始。',
       view: '要读取哪种有界视图："available"（可发现）、"loaded"（当前已激活）、"categories"（能力摘要）或 "state"（会话选择状态）。省略时：未给 category 则为 "categories"，给了 category 则为 "available"。',
@@ -230,7 +232,7 @@ const MESSAGES_ZH = Object.freeze({
       nextAction_paging: '还有更多名称，传入 nextCursor 继续。',
     },
     tool_search: {
-      description: '在不加载的前提下找到适合当前任务的工具。返回少量候选，附简短用途与带版本的 ref。排序是词法的，不调用任何模型。',
+      description: '在单一受控类别内，按自然语言描述的任务找出少量候选工具。只返回候选卡片与短时效 ref；加载稍后由 tool_load 完成。',
       query: '用自然语言描述任务（不是工具名）。',
       category: '把候选限定在某个能力类别，或用 "all" 表示全部。',
       limit: '候选上限。缺省 5。',
@@ -238,7 +240,7 @@ const MESSAGES_ZH = Object.freeze({
       nextAction_empty: '改写 query，或用 tool_list 浏览名称。',
     },
     tool_load: {
-      description: '为本会话激活工具。建议一次性批量加载当前任务所需的全部工具以最大化复用提示词缓存。加载在**下一次请求**生效——它从不执行目标工具。加载是模型的显式选择，不是用户批准。',
+      description: '按精确原生名称、或用 tool_search 给出的候选 ref 显式选择工具——候选 revision 可选，缺省由该 ref 绑定的版本推导。建议一次性批量加载当前任务所需的全部工具以最大化复用提示词缓存。已披露的工具会累积并保持可用，直到上下文被压缩——没有卸载。在**下一次请求**生效——它从不执行目标工具。',
       names: '要加载的精确原生工具名称。',
       candidates: '由 tool_search 返回的 ref 选出的候选；revision 可选，缺省取 ref 绑定的版本。与 names 互斥。',
       action: '"load" 激活工具（唯一支持的动作）。',

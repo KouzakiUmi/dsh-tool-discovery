@@ -42,8 +42,9 @@ function restoringRuntime (overrides = {}) {
   };
 }
 
-function harness ({ runtime, whenReady }) {
+function harness ({ runtime, whenReady, mode = 'native' }) {
   const ctx = fakeCtx();
+  ctx.tools.modeFor = () => mode;
   const lifecycle = { runtimeFor: () => runtime, whenReady };
   createProjection({ ctx, lifecycle, log: () => {} });
   const listener = ctx.listeners.find(([name]) => name === 'system-prompt/assemble')[1];
@@ -127,4 +128,40 @@ test('PR5: incoming 只有一份重复候选时正常通过（查重不引入额
   const incoming = { sections: [], contexts: [], tools: [...ENTRY.map((name) => ({ name })), { name: 'dup' }] };
   const transformed = await listener(incoming, { agent, scope: agent }, async () => incoming);
   assert.deepEqual(transformed.tools.map((tool) => tool.name), [...ENTRY, 'dup']);
+});
+
+test('PR6: PTC 兼容关闭时 bypass，不建 runtime，也不改写出站 wire', async () => {
+  const runtime = restoringRuntime({ restoring: false });
+  let created = 0;
+  const ctx = fakeCtx();
+  ctx.tools.modeFor = () => 'ptc';
+  const lifecycle = {
+    runtimeFor: () => { created += 1; return runtime; },
+    whenReady: () => Promise.resolve({ mode: 'ready' }),
+  };
+  createProjection({ ctx, lifecycle, log: () => {}, ptcEnabled: () => false });
+  const listener = ctx.listeners.find(([name]) => name === 'system-prompt/assemble')[1];
+  const agent = { id: 'a1', session: { id: 'u1' } };
+  const incoming = { sections: [], contexts: [], tools: [{ name: 'run_code' }, { name: 'read' }] };
+  const transformed = await listener(incoming, { agent, scope: agent }, async () => incoming);
+  assert.equal(created, 0, '关闭兼容时不得建立 runtime，否则 journal 会把 run_code 当成泄漏');
+  assert.deepEqual(transformed.tools.map((tool) => tool.name), ['run_code', 'read']);
+});
+
+test('PR7: PTC 兼容开启时仍不改写出站 wire，但会建立 runtime', async () => {
+  const runtime = restoringRuntime({ restoring: false });
+  let created = 0;
+  const ctx = fakeCtx();
+  ctx.tools.modeFor = () => 'ptc';
+  const lifecycle = {
+    runtimeFor: () => { created += 1; return runtime; },
+    whenReady: () => Promise.resolve({ mode: 'ready' }),
+  };
+  createProjection({ ctx, lifecycle, log: () => {}, ptcEnabled: () => true });
+  const listener = ctx.listeners.find(([name]) => name === 'system-prompt/assemble')[1];
+  const agent = { id: 'a1', session: { id: 'u1' } };
+  const incoming = { tools: [{ name: 'run_code' }] };
+  const transformed = await listener(incoming, { agent, scope: agent }, async () => incoming);
+  assert.equal(created, 1);
+  assert.deepEqual(transformed.tools.map((tool) => tool.name), ['run_code']);
 });

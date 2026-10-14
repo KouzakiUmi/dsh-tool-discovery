@@ -359,7 +359,9 @@ export function createJournal(deps) {
       ...activeSelectedNames(),
       ...frozenNames(),
     ]);
-    const leaked = headerTools.map((tool) => tool?.name).filter((name) => !allowed.has(name));
+    // PTC 的合法出站表只有 run_code。它不是披露泄漏；当成泄漏会把整会话 fail closed。
+    const transport = deps.collapsedPresentation?.() === true ? new Set(['run_code']) : new Set();
+    const leaked = headerTools.map((tool) => tool?.name).filter((name) => !allowed.has(name) && !transport.has(name));
     if (leaked.length > 0) {
       reportBypass({ sessionId, names: [...new Set(leaked)] });
       log('composition:bypass', { sessionId, leaked });

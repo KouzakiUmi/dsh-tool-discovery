@@ -3,7 +3,8 @@
 //
 // 规则（03 §3.2 / adapter-plan §4）：
 //   * 在 `await next()` **之后**做最终本插件投影 —— 不假设自己是 waterfall 最后一层。
-//   * native-only：mode 非 native 直接拒绝组合（INCOMPATIBLE_PRESENTATION）。
+//   * 展示模式按 scope：native 做披露投影；非 native 保留宿主已折叠的 wire
+//     （ptc 只留 run_code），不终止本轮。初始放行按当前绑定 preset 的登记工具。
 //   * 披露集合 = 三入口 ∪ 可信 framework 保留项 ∪ 常驻工具 ∪ 本会话**有效** selected
 //     ∪ 披露缓存（frozen）。
 //   * **顺序固化**：实际出站 header 的首见顺序优先；未披露基线和新 selection
@@ -226,11 +227,14 @@ export function createProjection(deps) {
 
     const scope = agent;
     const mode = ctx.tools.modeFor(context.scope ?? scope);
-    if (mode !== 'native') {
-      throw new DomainError('INCOMPATIBLE_PRESENTATION', `tools mode "${mode}" is not supported`);
+    const ptcEnabled = typeof deps.ptcEnabled === 'function' && deps.ptcEnabled() === true;
+    if (mode !== 'native' && !ptcEnabled) {
+      // 开关关闭：PTC 会话不建 runtime、不投影、不终止本轮。宿主 SDK 保持原样。
+      return transformed;
     }
 
-    // 首次触达即建立本会话 runtime（可能仍处于 restoring）
+    // 首次触达即建立本会话 runtime（可能仍处于 restoring）。各 preset 都走这里：
+    // 常驻名单在建立时按当前绑定 preset 合并（lifecycle ← getPresetTools）。
     const runtime = lifecycle.runtimeFor(agent.session, scope);
     // 冷恢复未落定就先等它落定：否则这一轮会把已披露工具整段丢掉（见文件头
     //「冷恢复窗口」）。仍在恢复 = 不发请求；已决失败 = 只留基线（fail closed）。
@@ -246,6 +250,11 @@ export function createProjection(deps) {
       const error = runtime.pendingProjectionError;
       runtime.pendingProjectionError = null;
       throw error;
+    }
+    if (mode !== 'native') {
+      // 兼容开启：出站 wire 仍只留宿主的 run_code。披露在 assemble 之前写入
+      // run_code SDK（ptc-sdk.mjs），不把 native schema 投影回来。
+      return transformed;
     }
     const incoming = Array.isArray(transformed?.tools) ? transformed.tools : [];
     const kept = project(runtime, scope, incoming);

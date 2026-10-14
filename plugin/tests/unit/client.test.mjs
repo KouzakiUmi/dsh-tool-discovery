@@ -88,6 +88,17 @@ test('C-U02: client.js 的纯逻辑与 model.mjs 行为一致（内联副本不�
   const meta = { choices: [{ name: 'read' }, { name: 'gone_tool' }], default: ['read'] }
   assert.deepEqual(names(t.buildRows(meta, ['read']).rows), names(model.buildRows(meta, ['read']).rows))
   assert.equal(t.buildRows(meta, ['read']).missingCount, model.buildRows(meta, ['read']).missingCount)
+  assert.deepEqual([...t.setMembership(['a'], ['b', 'c'], true)], [...model.setMembership(['a'], ['b', 'c'], true)])
+  assert.deepEqual([...t.setMembership(['a', 'b'], ['a'], false)], [...model.setMembership(['a', 'b'], ['a'], false)])
+  assert.deepEqual([...t.setMembership(['a', 'a', 'b'], ['a'], false)], ['b'], '清空必须删掉每一次出现，否则集合比较会跳过写入')
+  assert.deepEqual([...model.setMembership(['a', 'a', 'b'], ['a'], false)], ['b'])
+  assert.equal(model.isDefaultSelection(model.setMembership(['read', 'read'], ['read'], false), ['read', 'read']), false)
+  const groupInput = [{ name: 'read', selected: true }, { name: 'mcp__srv__do', selected: false }, { name: 'fixture_x', selected: false }]
+  const grouped = t.groupRows(groupInput, ['read'])
+  assert.deepEqual(JSON.parse(JSON.stringify(grouped)), JSON.parse(JSON.stringify(model.groupRows(groupInput, ['read']))))
+  assert.deepEqual([...grouped].map((g) => g.key), ['core', 'mcp', 'plugin'])
+  assert.equal(grouped[0].selectedCount, 1)
+  assert.deepEqual([...t.groupRows([], ['read'])], [], '空清单不产生任何分组')
 })
 
 test('C-U03: 活目录接缝 —— 未选中的第三方工具必须成行且可勾（端到端真实 metadata）', () => {
@@ -191,7 +202,8 @@ test('C-U11: 可选功能默认值与 Config 一致，保存只修改指定字�
   assert.equal(config.dict.requireTrustedEpochForSubagents.meta.default, false)
   assert.notEqual(config.dict.requireTrustedEpochForSubagents.meta.volatile, true)
   const states = Object.fromEntries(t.featureChoices({}).map(([key, _label, _help, checked]) => [key, checked]))
-  assert.deepEqual(states, { initialToolsEnabled: true, alwaysAllowPresetTools: true, requireTrustedEpoch: false, requireTrustedEpochForSubagents: false, tolerantLoadProtected: true, respectAlwaysVisible: false })
+  assert.equal(config.dict.ptcCompatibility.meta.default, false)
+  assert.deepEqual(states, { initialToolsEnabled: true, alwaysAllowPresetTools: true, ptcCompatibility: false, requireTrustedEpoch: false, requireTrustedEpochForSubagents: false, tolerantLoadProtected: true, respectAlwaysVisible: false })
   const enabled = t.featureChoices({ requireTrustedEpoch: true, initialToolsEnabled: false })
   assert.equal(enabled.find(row => row[0] === 'requireTrustedEpoch')[3], true)
   assert.equal(enabled.find(row => row[0] === 'initialToolsEnabled')[3], false)
@@ -294,7 +306,7 @@ test('C-U13: all editable Config fields have a save path; trusted framework stay
   const t = mod.__test
   const calls = []
   const form = { mutate: async ops => { calls.push(ops); return true } }
-  const values = { alwaysVisible: [], initialToolsEnabled: false, alwaysAllowPresetTools: false,
+  const values = { alwaysVisible: [], initialToolsEnabled: false, alwaysAllowPresetTools: false, ptcCompatibility: true,
     requireTrustedEpoch: false, requireTrustedEpochForSubagents: false, tolerantLoadProtected: false,
     respectAlwaysVisible: true, locale: 'zh', budgets: { maxActiveTools: 3 }, categoryConfig: {} }
   const schema = buildConfig(Schema)

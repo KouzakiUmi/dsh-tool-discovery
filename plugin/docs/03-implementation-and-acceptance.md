@@ -35,7 +35,7 @@ plugin/                  实现根目录（早期代号 progressive-v2/，见 re
     util.mjs         code point 截断、plain object 断言、稳定排序、会话互斥锁
     index.mjs        唯一公开出口
   adapters/dsh/      宿主接线层
-    index.mjs        装配面：Config 校验、入口名冲突检测、native-only、整组回滚
+    index.mjs        装配面：Config 校验、入口名冲突检测、整组回滚（展示模式按 scope，不在激活期拒绝）
     registry.mjs     资格事实唯一入口、绑定代次、变更 diff
     journal.mjs      canonical 对折叠、request/header 观测、公开 query 冷恢复
     projection.mjs   await next() 之后的最终投影与返回值校验
@@ -272,7 +272,7 @@ B 只作为实验对照，不是默认功能。
 - 功能、安全、生命周期矩阵无未解释失败。
 - 自然语言 held-out 检索达到门槛，或已获明确的范围调整。
 - 真实初始请求无全量工具泄露，token 减少达到目标。
-- 支持范围写明：核心版本、`native-only`、一会话一活动 agent、热更新窗口与框架例外。
+- 支持范围写明：核心版本、按 scope 的展示模式、一会话一活动 agent、热更新窗口与框架例外。
 - 独立审查完成；同源复核须注明同源误差。
 - 入口装配、exports、Config 与产物成套检查，交付代码与产物同步。
 - 文档、版本、测试命令与实测报告对应**实际产物**。

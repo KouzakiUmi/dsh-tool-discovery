@@ -4,7 +4,7 @@
 // 激活顺序（任一步失败 → 逆序回滚已创建项，不留孤儿 listener/guard，L09）：
 //   1. Config 形状校验
 //   2. 三个入口名冲突检测（global 或任一活动 scope 可见面已存在即拒绝，不覆盖）
-//   3. native-only 断言
+//   3. （展示模式不在激活期拒绝：按会话 scope 处理，见 projection / guard）
 //   4. 注册三个 typed definition
 //   5. 投影监听（system-prompt/assemble）
 //   6. 执行 guard（tools.guard）
@@ -23,6 +23,7 @@ import { createEntryDefinitions } from './entries.mjs';
 import { createGuard } from './guard.mjs';
 import { createLifecycle } from './lifecycle.mjs';
 import { createProjection } from './projection.mjs';
+import { createPtcDisclosure } from './ptc-sdk.mjs';
 import { createRegistryAdapter } from './registry.mjs';
 import { buildConfig, publishToolChoices, resolveAlwaysVisible } from './config.mjs';
 import { globalToolInventory, presetToolNamesOf } from './tool-inventory.mjs';
@@ -251,7 +252,9 @@ export function validateConfig(raw) {
     ? config.initialToolsEnabled.get() : config.initialToolsEnabled;
   const alwaysAllowPresetTools = typeof config.alwaysAllowPresetTools?.get === 'function'
     ? config.alwaysAllowPresetTools.get() : config.alwaysAllowPresetTools;
-  for (const [key, value] of Object.entries({ initialToolsEnabled, alwaysAllowPresetTools, requireTrustedEpoch: config.requireTrustedEpoch,
+  const ptcCompatibility = typeof config.ptcCompatibility?.get === 'function'
+    ? config.ptcCompatibility.get() : config.ptcCompatibility;
+  for (const [key, value] of Object.entries({ initialToolsEnabled, alwaysAllowPresetTools, ptcCompatibility, requireTrustedEpoch: config.requireTrustedEpoch,
     requireTrustedEpochForSubagents: config.requireTrustedEpochForSubagents })) {
     if (value !== undefined && typeof value !== 'boolean') {
       throw new DomainError('INCOMPATIBLE_COMPOSITION', `${key} must be a boolean.`);
@@ -260,6 +263,7 @@ export function validateConfig(raw) {
   return {
     initialToolsEnabled: initialToolsEnabled !== false,
     alwaysAllowPresetTools: alwaysAllowPresetTools !== false,
+    ptcCompatibility: ptcCompatibility === true,
     requireTrustedEpoch: config.requireTrustedEpoch === true,
     requireTrustedEpochForSubagents: config.requireTrustedEpochForSubagents === true,
     categoryConfig,
@@ -374,8 +378,9 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       throw new DomainError('INCOMPATIBLE_COMPOSITION', `控制入口名称冲突: ${conflicts.map((c) => `${c.name}@${c.where}`).join(', ')}`);
     }
 
-    // ---- 3. native-only ----
-    registry.assertNative(undefined);
+    // 展示模式不在这里拒绝。全局 mode 与 preset 的 presentAs() 可以不同；
+    // 激活期只看得到全局默认，按它拒绝会放过 preset、或反过来禁掉所有会话。
+    // 各 scope 的 wire 与初始放行由 projection / guard 按当前绑定 preset 处理。
 
     // sessionQuery 只用于**有历史**的会话做冷恢复（lifecycle: seq>0 才调
     // journal.restore()）。全新会话 seq===0 直接 ready，不读盘。
@@ -389,7 +394,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       sessions: ctx.get('sessions') !== undefined,
       sessionPersistence: ctx.get('sessionPersistence') !== undefined,
       agents: ctx.get('agents') !== undefined,
-      nativeOnly: true,
+      presentation: 'per-scope',
     });
     if (query === undefined) {
       log('degraded:no-session-query', {
@@ -484,6 +489,12 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
     ctx.effect(() => rollback, 'progressive discovery lifecycle');
 
     try {
+      const ptcEnabled = () => {
+        const live = ctx.fiber?.config?.ptcCompatibility;
+        const raw = live !== undefined ? live : config.ptcCompatibility;
+        const value = raw !== null && typeof raw === 'object' && typeof raw.get === 'function' ? raw.get() : raw;
+        return value === true;
+      };
       const lifecycle = createLifecycle({
         ctx,
         registry,
@@ -497,7 +508,12 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
         getPresetTools,
         onRuntimeCreated,
         trustedEpoch: trustedEpoch,
+        collapsedPresentation: (agent) => {
+          try { return ctx.tools.modeFor(agent) !== 'native'; }
+          catch { return false; }
+        },
       });
+      const ptc = createPtcDisclosure({ ctx, lifecycle, log, enabled: ptcEnabled });
       own(() => lifecycle.dispose());
 
       // ---- 8.5 可信周期存储：动态子 fiber，作用域内 open/close ----
@@ -555,7 +571,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       }
 
       // ---- 5. 投影 ----
-      own(createProjection({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, log }));
+      own(createProjection({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, log, ptcEnabled }));
 
       // ---- 6. guard（只增拒绝） ----
       own(createGuard({
@@ -565,11 +581,40 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
         respectAlwaysVisible: respectAlwaysVisibleReader(config),
         locale,
         log,
+        ptcEnabled,
+        sdkNames: (agent) => ptc.allowNames(agent),
       }));
 
       // ---- 7. session 与 registry 事件 ----
-      own(ctx.on('session/event', (session, event) => lifecycle.onSessionEvent(session, event)));
-      own(ctx.on('session/disposed', (session) => lifecycle.disposeSession(session.id)));
+      own(ctx.on('session/event', (session, event) => {
+        lifecycle.onSessionEvent(session, event);
+        const agent = lifecycle.sessions.get(session.id)?.agentScope;
+        if (agent !== undefined) ptc.sync(agent);
+      }));
+      own(ctx.on('session/disposed', (session) => {
+        const agent = lifecycle.sessions.get(session.id)?.agentScope;
+        lifecycle.disposeSession(session.id);
+        if (agent !== undefined) ptc.lift(agent);
+      }));
+      // SDK 在 assemble 瀑布之前生成。agent/created 赶在首轮之前；inbox 插入赶在
+      // 下一条用户消息的 assemble 之前。load 落定则由上面的 session/event 刷新。
+      own(ctx.on('agent/created', async ({ agent }) => {
+        try {
+          if (agent?.session === undefined) return;
+          if (ptcEnabled() !== true || ctx.tools.modeFor(agent) === 'native') {
+            ptc.lift(agent);
+            return;
+          }
+          const runtime = lifecycle.ensureRuntime(agent.session, agent);
+          if (runtime.restoring) await lifecycle.whenReady(agent.session.id);
+          ptc.sync(agent);
+        } catch (error) {
+          log('ptc:prepare-failed', { error: String(error) });
+        }
+      }));
+      own(ctx.on('agent/inbox/inserted', ({ agent }) => {
+        if (agent !== undefined) ptc.sync(agent);
+      }));
 
       // ---- 7.5 post-next 的 agent/pre-step 屏障 ----
       //

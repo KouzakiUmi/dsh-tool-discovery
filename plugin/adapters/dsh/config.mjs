@@ -79,6 +79,10 @@ export function buildConfig(Schema) {
       .default(true)
       .volatile()
       .description('Always include tools registered by the current bound preset, even when manual initial injection is disabled. Applies at a new session or successful compaction; native permissions and eligibility remain enforced.'),
+    ptcCompatibility: Schema.boolean()
+      .default(false)
+      .volatile()
+      .description('Off by default: PTC sessions bypass this plugin and keep the host SDK. On: discovery runs inside run_code. The three entries and the current preset initial tools are injected into the next run_code SDK instead of the model tool list. Takes effect on the next turn.'),
     requireTrustedEpoch: Schema.boolean()
       .default(false)
       .description('Opt-in strict durable epoch verification. Enabling reloads the plugin and may block existing sessions until a successful user /compact. Disabled by default; tool eligibility and protocol checks remain enforced.'),

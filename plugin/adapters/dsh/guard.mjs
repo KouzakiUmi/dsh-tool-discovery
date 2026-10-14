@@ -24,6 +24,8 @@ export function createGuard(deps) {
   // 严格模式的常驻工具只由 storageDomain 记录背书；默认模式使用配置快照，
   // 所以基线判据必须排在 alwaysNameSet 早退**之前**（见下）。
   const entryNames = new Set(ENTRY_TOOL_NAMES);
+  const ptcEnabled = typeof deps.ptcEnabled === 'function' ? deps.ptcEnabled : () => false;
+  const sdkNames = typeof deps.sdkNames === 'function' ? deps.sdkNames : () => [];
   const log = deps.log ?? (() => {});
 
   return ctx.tools.guard((exec) => {
@@ -34,8 +36,20 @@ export function createGuard(deps) {
     if (agent === undefined || agent.session === undefined) {
       return `tool "${exec.name}" is not admitted by this composition: no agent scope (STATE_NOT_READY)`;
     }
-    if (ctx.tools.modeFor(agent) !== 'native') {
-      return `tool "${exec.name}" is not admitted: INCOMPATIBLE_PRESENTATION (tools mode is not native)`;
+    let mode = 'native';
+    try { mode = ctx.tools.modeFor(agent); } catch { mode = 'native'; }
+    if (mode !== 'native') {
+      if (ptcEnabled() !== true) return undefined;
+      if (exec.name === 'run_code' || entryNames.has(exec.name)) return undefined;
+      const runtime = lifecycle.runtimeFor(agent.session, agent);
+      const baseline = runtime.ledger?.state;
+      if (runtime.requireTrustedEpoch !== false && baseline !== undefined && baseline !== BASELINE_STATE.TRUSTED) {
+        const reason = runtime.ledger?.reason ?? 'TRUSTED_EPOCH_PENDING';
+        return `tool "${exec.name}" is not admitted: STATE_NOT_READY (${reason})`;
+      }
+      const allowed = new Set(sdkNames(agent));
+      if (allowed.has(exec.name)) return undefined;
+      return `${exec.name}: not disclosed in the run_code SDK (TOOL_NOT_LOADED)`;
     }
     const runtime = lifecycle.runtimeFor(agent.session, agent);
     // 三入口由协议保证；frameworkRetained 是**部署配置即授权**，且它排在上面的基线门禁
