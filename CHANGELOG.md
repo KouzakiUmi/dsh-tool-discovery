@@ -24,6 +24,9 @@ what is verified, what is unverified, and what this version refuses to support â
 
 ## [Unreleased]
 
+- PTC SDK disclosure drops a loaded name whose catalog revision no longer matches, and a live runtime
+  uses the adopted baseline rather than the current configuration. Unload lifts every installed
+  `run_code` restriction.
 - PTC compatibility is off by default. Off: a PTC session bypasses this plugin and keeps the host
   SDK. On: discovery runs inside `run_code`; the three entries and the current preset's initial
   tools are injected into the next `run_code` SDK instead of the model tool list. `run_code` in

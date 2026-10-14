@@ -371,6 +371,31 @@ export function createJournal(deps) {
     rememberDisclosedWire(headerTools);
     const byName = new Map(headerTools.map((tool) => [tool.name, tool]));
     applyAdvertisementPass(byName, event.seq);
+    if (transport.has('run_code')) advertiseSdkSelections(event.seq);
+  }
+
+  /**
+   * PTC 的出站表只有 run_code，已加载工具的曝光在 SDK 而不是 header。
+   * 只给当前目录里版本仍一致的 selected 记 advertised，换 request 仍要重新曝光。
+   */
+  function advertiseSdkSelections(headerSeq) {
+    const state = engine.getState(scope);
+    if (state?.mode !== 'ready' || typeof state.selected?.entries !== 'function') return;
+    const catalog = engine.getCatalog?.();
+    for (const [toolId, selection] of state.selected) {
+      if (state.invalidated?.has?.(toolId) === true) continue;
+      const entry = catalog?.entries?.get?.(toolId);
+      if (entry === undefined || entry.revision !== selection.revision || entry.name !== selection.name) continue;
+      if (entry.schemaDigest !== selection.schemaDigest || entry.wire === undefined) continue;
+      engine.recordAdvertisement(scope, {
+        requestId: requestIdFor(headerSeq),
+        toolId,
+        name: selection.name,
+        revision: selection.revision,
+        schemaDigest: selection.schemaDigest,
+        wire: entry.wire,
+      });
+    }
   }
 
   /**

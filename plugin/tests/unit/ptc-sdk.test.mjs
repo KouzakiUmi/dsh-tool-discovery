@@ -37,20 +37,38 @@ test('PTC off lifts any restriction and does not install one', () => {
   assert.equal(calls.length, 0);
 });
 
-test('PTC on restricts the SDK to entries, preset baseline, and loaded names', () => {
-  const { agent, ctx, calls } = agentWith(['tool_list', 'tool_search', 'tool_load', 'read', 'hidden', 'run_code']);
+test('PTC on uses the adopted baseline and only valid selections', () => {
+  const { agent, ctx, calls } = agentWith(['tool_list', 'tool_search', 'tool_load', 'read', 'hidden', 'stale', 'run_code']);
   const sessions = new Map([['s1', {
     scope: { sessionId: 's1' },
-    engine: { getState: () => ({ selected: new Map([['t', { name: 'hidden' }]]) }) },
+    alwaysNameSet: new Set(['read']),
+    engine: {
+      getState: () => ({
+        mode: 'ready',
+        invalidated: new Map([['gone', { reason: 'definition-changed' }]]),
+        selected: new Map([
+          ['ok', { toolId: 'ok', name: 'hidden', revision: 'r1' }],
+          ['old', { toolId: 'old', name: 'stale', revision: 'r0' }],
+          ['gone', { toolId: 'gone', name: 'hidden', revision: 'r9' }],
+        ]),
+      }),
+      getCatalog: () => ({
+        entries: new Map([
+          ['ok', { name: 'hidden', revision: 'r1' }],
+          ['old', { name: 'stale', revision: 'r1' }],
+        ]),
+      }),
+    },
   }]]);
   const ptc = createPtcDisclosure({
     ctx,
-    lifecycle: { currentAlwaysNames: () => ['read', 'run_code'], sessions },
+    lifecycle: { currentAlwaysNames: () => ['live-config', 'run_code'], sessions },
     enabled: () => true,
   });
   assert.equal(ptc.sync(agent), true);
   assert.deepEqual(calls[0].allow.sort(), ['hidden', 'read', 'tool_list', 'tool_load', 'tool_search']);
-  assert.equal(calls[0].allow.includes('run_code'), false);
+  assert.equal(calls[0].allow.includes('live-config'), false);
+  assert.equal(calls[0].allow.includes('stale'), false);
 });
 
 test('replacing the restriction disposes the previous one', () => {
@@ -67,4 +85,7 @@ test('replacing the restriction disposes the previous one', () => {
   assert.equal(disposed, 1);
   ptc.lift(agent);
   assert.equal(disposed, 2);
+  ptc.sync(agent);
+  ptc.disposeAll();
+  assert.equal(disposed, 3);
 });

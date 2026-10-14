@@ -514,6 +514,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
         },
       });
       const ptc = createPtcDisclosure({ ctx, lifecycle, log, enabled: ptcEnabled });
+      own(() => ptc.disposeAll());
       own(() => lifecycle.dispose());
 
       // ---- 8.5 可信周期存储：动态子 fiber，作用域内 open/close ----
@@ -582,7 +583,6 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
         locale,
         log,
         ptcEnabled,
-        sdkNames: (agent) => ptc.allowNames(agent),
       }));
 
       // ---- 7. session 与 registry 事件 ----

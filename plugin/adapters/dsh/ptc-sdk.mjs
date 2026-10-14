@@ -11,29 +11,47 @@ const RUN_CODE = 'run_code';
 export function createPtcDisclosure(deps) {
   const { ctx, lifecycle, enabled } = deps;
   const log = deps.log ?? (() => {});
-  /** @type {WeakMap<object, Function>} */
-  const installed = new WeakMap();
+  /** sessionId → { agent, dispose }。必须可枚举，插件卸载时才能全部撤下。 */
+  const installed = new Map();
 
   function lift(agent) {
-    const dispose = installed.get(agent);
-    if (typeof dispose !== 'function') return;
-    installed.delete(agent);
-    try { dispose(); }
+    const key = agent?.session?.id;
+    const entry = key === undefined ? undefined : installed.get(key);
+    if (entry === undefined) return;
+    installed.delete(key);
+    try { entry.dispose(); }
     catch (error) { log('ptc:restriction-lift-failed', { error: String(error) }); }
   }
 
-  /** 下一轮 SDK 应出现的名字。不含 run_code。 */
+  function disposeAll() {
+    for (const key of [...installed.keys()]) lift(installed.get(key)?.agent);
+  }
+
+  function runtimeOf(agent) {
+    return lifecycle.sessions?.get(agent?.session?.id);
+  }
+
+  /**
+   * 下一轮 SDK 应出现的名字。不含 run_code。
+   * 有 runtime 时基线只认已采纳的 alwaysNameSet，不读可能已经偏离可信记录的活配置。
+   * selected 只保留当前目录里版本仍一致、且引擎已就绪的项。
+   */
   function allowNames(agent) {
     const names = new Set(ENTRY_TOOL_NAMES);
-    for (const name of lifecycle.currentAlwaysNames?.(agent) ?? []) {
+    const runtime = runtimeOf(agent);
+    const baseline = runtime?.alwaysNameSet ?? lifecycle.currentAlwaysNames?.(agent) ?? [];
+    for (const name of baseline) {
       if (typeof name === 'string' && name.length > 0 && name !== RUN_CODE) names.add(name);
     }
-    const runtime = lifecycle.sessions?.get(agent?.session?.id);
-    const selected = runtime?.engine?.getState?.(runtime.scope)?.selected;
-    if (selected !== undefined && typeof selected.values === 'function') {
-      for (const item of selected.values()) {
-        if (typeof item?.name === 'string' && item.name !== RUN_CODE) names.add(item.name);
-      }
+    const state = runtime?.engine?.getState?.(runtime.scope);
+    if (state?.mode !== 'ready' || typeof state.selected?.values !== 'function') return names;
+    const catalog = runtime.engine.getCatalog?.();
+    for (const item of state.selected.values()) {
+      if (typeof item?.name !== 'string' || item.name === RUN_CODE || item.name.length === 0) continue;
+      if (state.invalidated?.has?.(item.toolId) === true) continue;
+      const entry = catalog?.entries?.get?.(item.toolId);
+      if (entry === undefined || entry.revision !== item.revision || entry.name !== item.name) continue;
+      names.add(item.name);
     }
     return names;
   }
@@ -60,7 +78,8 @@ export function createPtcDisclosure(deps) {
     const allow = [...allowNames(agent)].filter((name) => known?.has?.(name) === true);
     lift(agent);
     try {
-      installed.set(agent, agent.ctx.tools.restrict({ allow }));
+      const dispose = agent.ctx.tools.restrict({ allow });
+      if (agent.session?.id !== undefined) installed.set(agent.session.id, { agent, dispose });
       log('ptc:sdk-restricted', { sessionId: agent.session?.id, allow });
       return true;
     } catch (error) {
@@ -69,5 +88,5 @@ export function createPtcDisclosure(deps) {
     }
   }
 
-  return { sync, lift, allowNames };
+  return { sync, lift, disposeAll, allowNames };
 }

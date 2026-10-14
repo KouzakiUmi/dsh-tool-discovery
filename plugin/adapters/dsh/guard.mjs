@@ -25,7 +25,6 @@ export function createGuard(deps) {
   // 所以基线判据必须排在 alwaysNameSet 早退**之前**（见下）。
   const entryNames = new Set(ENTRY_TOOL_NAMES);
   const ptcEnabled = typeof deps.ptcEnabled === 'function' ? deps.ptcEnabled : () => false;
-  const sdkNames = typeof deps.sdkNames === 'function' ? deps.sdkNames : () => [];
   const log = deps.log ?? (() => {});
 
   return ctx.tools.guard((exec) => {
@@ -47,9 +46,18 @@ export function createGuard(deps) {
         const reason = runtime.ledger?.reason ?? 'TRUSTED_EPOCH_PENDING';
         return `tool "${exec.name}" is not admitted: STATE_NOT_READY (${reason})`;
       }
-      const allowed = new Set(sdkNames(agent));
-      if (allowed.has(exec.name)) return undefined;
-      return `${exec.name}: not disclosed in the run_code SDK (TOOL_NOT_LOADED)`;
+      if (runtime.alwaysNameSet?.has(exec.name) === true) return undefined;
+      // 已加载项走与 native 相同的 evaluateCall：失效、版本不符、未曝光都不能凭名字放行。
+      const outcome = runtime.engine.evaluateCall(runtime.scope, {
+        name: exec.name,
+        registeredInScope: ctx.tools.get(exec.name, agent) !== undefined,
+        pendingLoad: runtime.journal?.pendingLoadNames?.().has(exec.name) === true,
+        locale: config.locale,
+        requestId: runtime.journal?.currentRequestId?.(),
+      });
+      if (outcome.allowed) return undefined;
+      log('guard:ptc-denied', { sessionId: agent.session.id, name: exec.name, code: outcome.code });
+      return `${exec.name}: ${outcome.reason} (${outcome.code})`;
     }
     const runtime = lifecycle.runtimeFor(agent.session, agent);
     // 三入口由协议保证；frameworkRetained 是**部署配置即授权**，且它排在上面的基线门禁
