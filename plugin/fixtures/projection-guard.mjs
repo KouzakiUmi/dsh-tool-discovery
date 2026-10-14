@@ -100,7 +100,8 @@ const apply = (ctx, config) => {
     const agent = context.agent
     if (agent === undefined) return transformed
     if (ctx.tools.modeFor(context.scope) !== 'native') {
-      throw new Error('INCOMPATIBLE_PRESENTATION: stage-0 disclosure projection is native-only')
+      // 非 native 的 wire 已由宿主折叠；不投影、不终止本轮。
+      return transformed
     }
     const fold = foldSession(agent.session)
     const allowed = new Set([

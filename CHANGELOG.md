@@ -24,6 +24,14 @@ what is verified, what is unverified, and what this version refuses to support �
 
 ## [Unreleased]
 
+- Presentation is per scope. A non-native preset no longer aborts the turn: the host's collapsed
+  wire is left intact, and the initial allowlist is the configured list plus tools registered by
+  the bound preset. Activation no longer refuses the composition because the deployment default is
+  native while a preset presents as `ptc`.
+- Settings "Clear filtered" removes every occurrence of a name. Duplicate `alwaysVisible` entries
+  are accepted by the schema; removing only the first left the set comparison unchanged, so the
+  write was skipped.
+
 ## [0.4.0] — 2026-10-14 — settings home rebuild and entry copy
 
 - Rebuild the settings home as a card layout: a header with the design invariants folded behind a

@@ -90,6 +90,9 @@ test('C-U02: client.js 的纯逻辑与 model.mjs 行为一致（内联副本不�
   assert.equal(t.buildRows(meta, ['read']).missingCount, model.buildRows(meta, ['read']).missingCount)
   assert.deepEqual([...t.setMembership(['a'], ['b', 'c'], true)], [...model.setMembership(['a'], ['b', 'c'], true)])
   assert.deepEqual([...t.setMembership(['a', 'b'], ['a'], false)], [...model.setMembership(['a', 'b'], ['a'], false)])
+  assert.deepEqual([...t.setMembership(['a', 'a', 'b'], ['a'], false)], ['b'], '清空必须删掉每一次出现，否则集合比较会跳过写入')
+  assert.deepEqual([...model.setMembership(['a', 'a', 'b'], ['a'], false)], ['b'])
+  assert.equal(model.isDefaultSelection(model.setMembership(['read', 'read'], ['read'], false), ['read', 'read']), false)
   const groupInput = [{ name: 'read', selected: true }, { name: 'mcp__srv__do', selected: false }, { name: 'fixture_x', selected: false }]
   const grouped = t.groupRows(groupInput, ['read'])
   assert.deepEqual(JSON.parse(JSON.stringify(grouped)), JSON.parse(JSON.stringify(model.groupRows(groupInput, ['read']))))

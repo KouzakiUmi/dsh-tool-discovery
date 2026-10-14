@@ -34,13 +34,17 @@ export function createGuard(deps) {
     if (agent === undefined || agent.session === undefined) {
       return `tool "${exec.name}" is not admitted by this composition: no agent scope (STATE_NOT_READY)`;
     }
-    if (ctx.tools.modeFor(agent) !== 'native') {
-      return `tool "${exec.name}" is not admitted: INCOMPATIBLE_PRESENTATION (tools mode is not native)`;
-    }
     const runtime = lifecycle.runtimeFor(agent.session, agent);
     // 三入口由协议保证；frameworkRetained 是**部署配置即授权**，且它排在上面的基线门禁
     // 之前（pending/blocked 时也照放），所以这条放行必须可审计。
     if (entryNames.has(exec.name)) return undefined;
+    // 非 native 的模型只能直接调用宿主的展示传输（ptc 的 run_code）。它不是披露对象，
+    // 也不能因展示模式被拒，否则该 preset 的回合仍然发不出去。嵌套调用继续走下面的
+    // 常驻/已加载判据，初始放行仍是当前 preset 的名单。
+    if (exec.name === 'run_code' && ctx.tools.modeFor(agent) !== 'native') {
+      log('guard:presentation-transport', { sessionId: agent.session.id, name: exec.name });
+      return undefined;
+    }
     if (frameworkRetained.has(exec.name)) {
       log('guard:framework-admitted', { sessionId: agent.session.id, name: exec.name });
       return undefined;

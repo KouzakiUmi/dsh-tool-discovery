@@ -4,7 +4,7 @@
 // 激活顺序（任一步失败 → 逆序回滚已创建项，不留孤儿 listener/guard，L09）：
 //   1. Config 形状校验
 //   2. 三个入口名冲突检测（global 或任一活动 scope 可见面已存在即拒绝，不覆盖）
-//   3. native-only 断言
+//   3. （展示模式不在激活期拒绝：按会话 scope 处理，见 projection / guard）
 //   4. 注册三个 typed definition
 //   5. 投影监听（system-prompt/assemble）
 //   6. 执行 guard（tools.guard）
@@ -374,8 +374,9 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       throw new DomainError('INCOMPATIBLE_COMPOSITION', `控制入口名称冲突: ${conflicts.map((c) => `${c.name}@${c.where}`).join(', ')}`);
     }
 
-    // ---- 3. native-only ----
-    registry.assertNative(undefined);
+    // 展示模式不在这里拒绝。全局 mode 与 preset 的 presentAs() 可以不同；
+    // 激活期只看得到全局默认，按它拒绝会放过 preset、或反过来禁掉所有会话。
+    // 各 scope 的 wire 与初始放行由 projection / guard 按当前绑定 preset 处理。
 
     // sessionQuery 只用于**有历史**的会话做冷恢复（lifecycle: seq>0 才调
     // journal.restore()）。全新会话 seq===0 直接 ready，不读盘。
@@ -389,7 +390,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       sessions: ctx.get('sessions') !== undefined,
       sessionPersistence: ctx.get('sessionPersistence') !== undefined,
       agents: ctx.get('agents') !== undefined,
-      nativeOnly: true,
+      presentation: 'per-scope',
     });
     if (query === undefined) {
       log('degraded:no-session-query', {

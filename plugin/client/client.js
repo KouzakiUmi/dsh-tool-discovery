@@ -53,15 +53,20 @@ window.__ModuleLoader__.load({
       return true;
     }
 
+    // 移出时删掉该名字的每一次出现：schema 不拒绝重复，只删第一处会让
+    // isDefaultSelection 的集合比较认为没变化并跳过写入。
     function setMembership (selected, names, add) {
       const list = Array.isArray(selected) ? [...selected] : [];
+      const drop = new Set();
       for (const name of Array.isArray(names) ? names : []) {
         if (typeof name !== 'string' || name.length === 0) continue;
-        const at = list.indexOf(name);
-        if (add && at === -1) list.push(name);
-        if (!add && at !== -1) list.splice(at, 1);
+        if (add) {
+          if (!list.includes(name)) list.push(name);
+        } else {
+          drop.add(name);
+        }
       }
-      return list;
+      return drop.size === 0 ? list : list.filter((name) => !drop.has(name));
     }
 
     // 分组依据（注册表不携带来源信息，见 plugin/domain/core-tools.mjs 头注释）：

@@ -568,3 +568,11 @@ token、字符与字节是不同单位；没有 tokenizer 时一律走估算并�
 `respectAlwaysVisible`（默认 `false`）决定 `alwaysVisible` 是「下限」还是「精确集合」。默认关闭时，
 当前 scope 真实提供的 DSH 核心工具会被自动并入常驻名单且免披露放行；打开后两者都不再发生（没列出的
 核心工具必须先 `tool_load`）。它只影响适配层的名单维护与执行门禁，不改变本文件定义的协议。
+
+### 13.5 展示模式按 scope（2026-10-14）
+
+§9 表「展示模式 = native-only，非 native 报 `INCOMPATIBLE_PRESENTATION`」不再是适配层行为，以本节为准。
+激活期不再因全局或 preset 的展示模式拒绝组合。native scope 仍做披露投影；非 native scope 保留宿主已折叠的
+wire（ptc 只留 `run_code`），不把 native schema 投影回去，也不终止本轮。初始放行是配置的 `alwaysVisible`
+与当前绑定 preset 自有登记且可见的工具之并（`alwaysAllowPresetTools`）。`INCOMPATIBLE_PRESENTATION` 仍只用于
+引擎配置的 `capabilityKind` 不是 `native`。

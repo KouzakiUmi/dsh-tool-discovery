@@ -112,3 +112,27 @@ test('DF5 cold recovery freezes only own current-epoch header bytes, never heade
   assert.deepEqual(projected.tools, [wire('baseline', 'current')]);
   assert.equal(engine.getState(SCOPE_A).selected.size, 0);
 });
+
+test('DF8 non-native admits the transport and the preset baseline, not every name', () => {
+  const listeners = new Map();
+  const runtime = {
+    scope: SCOPE_A, restoring: false, compositionBypass: null, requireTrustedEpoch: false,
+    initialToolsEnabled: true, alwaysNameSet: new Set(['preset_only']),
+    engine: { evaluateCall: () => ({ allowed: false, reason: 'not loaded', code: 'TOOL_NOT_LOADED', visibility: 'hidden' }) },
+    journal: { pendingLoadNames: () => new Set(), currentRequestId: () => 'r1' },
+  };
+  const ctx = {
+    tools: {
+      modeFor: () => 'ptc',
+      get: (name) => ({ name }),
+      guard: (fn) => { listeners.set('guard', fn); return () => {}; },
+    },
+  };
+  createGuard({ ctx, lifecycle: { runtimeFor: () => runtime }, log: () => {} });
+  const agent = { session: { id: SCOPE_A.sessionId } };
+  const guard = listeners.get('guard');
+  assert.equal(guard({ name: 'run_code', agent }), undefined);
+  assert.equal(guard({ name: 'tool_list', agent }), undefined);
+  assert.equal(guard({ name: 'preset_only', agent }), undefined);
+  assert.match(guard({ name: 'hidden_tool', agent }), /TOOL_NOT_LOADED/);
+});

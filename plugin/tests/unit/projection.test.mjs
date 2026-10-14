@@ -42,8 +42,9 @@ function restoringRuntime (overrides = {}) {
   };
 }
 
-function harness ({ runtime, whenReady }) {
+function harness ({ runtime, whenReady, mode = 'native' }) {
   const ctx = fakeCtx();
+  ctx.tools.modeFor = () => mode;
   const lifecycle = { runtimeFor: () => runtime, whenReady };
   createProjection({ ctx, lifecycle, log: () => {} });
   const listener = ctx.listeners.find(([name]) => name === 'system-prompt/assemble')[1];
@@ -127,4 +128,23 @@ test('PR5: incoming 只有一份重复候选时正常通过（查重不引入额
   const incoming = { sections: [], contexts: [], tools: [...ENTRY.map((name) => ({ name })), { name: 'dup' }] };
   const transformed = await listener(incoming, { agent, scope: agent }, async () => incoming);
   assert.deepEqual(transformed.tools.map((tool) => tool.name), [...ENTRY, 'dup']);
+});
+
+test('PR6: 非 native 不终止本轮，且不改写宿主已折叠的 wire', async () => {
+  const runtime = restoringRuntime({ restoring: false });
+  let created = 0;
+  const ctx = fakeCtx();
+  ctx.tools.modeFor = () => 'ptc';
+  const lifecycle = {
+    runtimeFor: () => { created += 1; return runtime; },
+    whenReady: () => Promise.resolve({ mode: 'ready' }),
+  };
+  createProjection({ ctx, lifecycle, log: () => {} });
+  const listener = ctx.listeners.find(([name]) => name === 'system-prompt/assemble')[1];
+  const agent = { id: 'a1', session: { id: 'u1' } };
+  const incoming = { sections: [], contexts: [], tools: [{ name: 'run_code' }, { name: 'read' }] };
+  const transformed = await listener(incoming, { agent, scope: agent }, async () => incoming);
+  assert.equal(created, 1, '仍要建立 runtime，初始名单才能按当前 preset 合并');
+  assert.deepEqual(transformed.tools.map((tool) => tool.name), ['run_code', 'read'],
+    '不得把 native 投影盖掉宿主的折叠 wire，也不得抛错');
 });

@@ -111,17 +111,6 @@ export function createRegistryAdapter(deps) {
     }
   }
 
-  /** 宿主是否允许本组合：native-only（ptc/both 一律拒绝激活）。 */
-  function assertNative(scope) {
-    const mode = ctx.tools.modeFor(scope);
-    if (mode !== 'native') {
-      const error = new Error(`INCOMPATIBLE_PRESENTATION: tools mode "${mode}" is not supported; this composition is native-only`);
-      error.code = 'INCOMPATIBLE_PRESENTATION';
-      throw error;
-    }
-    return mode;
-  }
-
   /**
    * 当前 scope 的可见集合 → CatalogBindingDTO[]。
    * 入口与可信 framework 保留项不进目录（它们不可 load/unload）。
@@ -225,7 +214,6 @@ export function createRegistryAdapter(deps) {
     frameworkRetained,
     scopeKeyOf,
     generationFor,
-    assertNative,
     bindingsFor,
     remember,
     bumpGeneration,

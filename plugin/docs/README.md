@@ -97,7 +97,7 @@
 | `defaultSearchLimit` | `5`（默认输出策略，始终有界） |
 | `listCursorTtlMs` | `900000` |
 | `candidateTtlMs` | `900000` |
-| 展示模式 | `native-only`（非 native 报 `INCOMPATIBLE_PRESENTATION`，不静默降级） |
+| 展示模式 | 按 scope。非 native 不终止本轮、不改写宿主已折叠的 wire；初始放行含当前绑定 preset 的登记工具 |
 | fork 选择继承 | `reset`（子会话不隐式继承父 `selected` / `ref` / `cursor` / `advertised`） |
 
 ### 3.1 可选限额：默认关闭

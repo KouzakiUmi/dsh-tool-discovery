@@ -147,7 +147,7 @@
 ### 5.1 RegistryAdapter — 资格事实的唯一入口
 
 - 读取当前 agent scope 实际可见的工具，而非全局工具全集。
-- 判定当前展示模式；非 native 模式在激活期即拒绝。
+- 按当前 agent scope 读取展示模式。非 native 不在激活期拒绝，也不改写宿主已折叠的 wire；初始放行按该 scope 绑定的 preset。
 - 生成不可变 schema 快照与版本摘要。
 - 在 `load` 与执行前重新核验工具解析结果。
 - 监听工具变化并使相关索引与版本失效。
@@ -316,7 +316,7 @@
 | 不用 `restrict()` 承载加载状态 | 其对自身注册有豁免，且隐藏后资格查询困难 | 不宣称与原生 `UNKNOWN_TOOL` 错误一致 |
 | 不用 `deferLoading` 作基础 | 本机对应适配器明确拒绝，且它不是完整发现/加载协议 | 放弃 provider 专属优化 |
 | 以成功 `tool_load` 的 canonical 结果作 journal | 使用宿主已知事件，不自造持久化格式 | renderer / meta 改写需检测 |
-| `native-only` | 非 native 路径可能在 SDK prompt 另行泄露全量工具 | 支持范围较小但诚实 |
+| 展示模式按 scope，初始工具按 preset | 非 native 的 SDK 段仍可能列出尚未放行的工具；执行门禁才是放行边界 | 不把一种展示模式静默改成另一种 |
 | 子代理默认独立发现 | 不把父能力与大 schema 隐式带给子代理 | 子代理多一次发现轮次 |
 | 一会话一活动模型 agent | 无法仅凭最近 header 无歧义绑定请求与调用 | 并发共享 session 的组合被拒绝 |
 
