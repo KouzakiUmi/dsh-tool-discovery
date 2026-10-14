@@ -360,10 +360,10 @@ stands.
 
 ## Get the source
 
-The source version on this branch is **`0.4.0`** (in development; the versions published to npm so
-far are `0.2.1`, `0.2.2`, `0.3.0` and `0.3.1`). Which version a given download
-carries is decided by the manifest inside that build's tarball — compare it with the release name
-(`v<version> · <sha>`) rather than assuming that `main` and this document agree.
+The source version on this branch is **`0.4.1`**. npm publication and provenance must be checked in
+[the registry](https://www.npmjs.com/package/dsh-tool-discovery); a GitHub build release alone does
+not establish npm availability. Which version a download carries is decided by its tarball manifest,
+not by assuming that `main`, the release name and this document always agree.
 
 ```sh
 git clone https://github.com/KouzakiUmi/dsh-tool-discovery
@@ -400,12 +400,10 @@ it with two-factor authentication.
 The workflow requires Node 24 and npm 11.5.1 or newer. It does not use an `NPM_TOKEN` GitHub
 secret. Pre-release tags are not published by this job.
 
-**Nothing here was executed in this round.** No install, reload or restart was performed, no profile
-was touched, and installation through this channel is therefore **not verified here**. What was
-checked is only that an already-published release and its asset metadata exist (a read-only `gh
-release view`: tag, target commit, asset name); no payload was downloaded, unpacked or installed, and
-the artifact of a *future* build — including its digest — can only be verified after that release
-runs. Exact flags and spec forms come from the target CLI's own `plugin --help`. If an install fails,
+**Build and publication checks are not installation acceptance.** This release process does not
+install into, reload or restart a real profile. A release's payload, digest and provenance must be
+checked against that specific published artifact; they do not establish that a host GUI loaded it.
+Exact flags and spec forms come from the target CLI's own `plugin --help`. If an install fails,
 keep the manifest, lockfile and CLI output and report it rather than hand-editing a profile.
 
 ## Architecture and what it costs

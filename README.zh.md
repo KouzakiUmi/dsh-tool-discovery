@@ -299,8 +299,9 @@ DSH profile；但会在被 Git 忽略的 `plugin/fixtures/tmp/` 下创建临时�
 
 ## 获取源码
 
-本分支的源码版本为 **`0.4.0`**（开发中；已发布到 npm 的是 `0.2.1`、`0.2.2`、`0.3.0`、`0.3.1`）。某次下载究竟带哪个版本，由该构建 tarball 里的清单决定
-——请与 Release 名（`v<version> · <sha>`）对照，而不是假设 `main` 与本文一致。
+本分支的源码版本为 **`0.4.1`**。npm 是否已发布及其 provenance 应以
+[registry](https://www.npmjs.com/package/dsh-tool-discovery) 为准，GitHub 构建版存在本身不证明 npm 已发布。
+某次下载究竟带哪个版本，以 tarball 内清单为准，不假设 `main`、Release 名与本文始终一致。
 
 ```sh
 git clone https://github.com/KouzakiUmi/dsh-tool-discovery
@@ -331,11 +332,10 @@ Windows Hello。当前 Trusted Publisher 配置如下：
 
 工作流需要 Node 24 和 npm 11.5.1 或更高版本，不使用 GitHub 的 `NPM_TOKEN` secret。预发布标签不会触发 npm 发布。
 
-**本轮没有执行上述任何命令。** 未安装、未重载、未重启，也没有改动任何 profile，因此这条渠道的
-**安装行为在本轮未验证**。核到的只是「某个已发布的 Release 及其资产元数据存在」（只读 `gh release
-view`：标签、目标提交、资产名）；没有下载、解包或安装任何产物，而**未来**构建的产物（含其摘要）
-只能在该次发布跑完后才能核对。确切的参数与 spec 形式以目标 CLI 自己的 `plugin --help` 为准。安装
-失败时请保留 manifest、lockfile 与 CLI 输出并如实报告，不要手改 profile。
+**构建与发布核验不等于安装验收。** 本发布流程不向真实 profile 安装、重载或重启。
+每次发布的载荷、摘要与 provenance 都必须对照该次实际产物核验；这些证据不证明宿主 GUI 已加载它。
+确切的参数与 spec 形式以目标 CLI 自己的 `plugin --help` 为准。安装失败时请保留 manifest、
+lockfile 与 CLI 输出并如实报告，不要手改 profile。
 
 ## 架构与其代价
 

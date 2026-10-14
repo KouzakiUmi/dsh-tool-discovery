@@ -12,7 +12,8 @@ was rebuilt on 2026-10-06: the earlier history — including the `2a1f9c0` and `
 which are quoted in older entries below — was rewritten away and **no longer resolves**. Entries
 below the functional-build entry are historical source-baseline records, not claims about current
 release availability. The package was first published to npm as `0.2.1`; `0.2.2`, `0.3.0` and
-`0.3.1` were published by the trusted workflow described in their entries. The **GitHub Release build asset** remains a separate
+`0.3.1` and `0.4.0` were published by the trusted workflow. Later entries describe source releases;
+npm availability and provenance are verified against the registry rather than inferred from a heading. The **GitHub Release build asset** remains a separate
 distribution — a green `main` run publishes `dsh-tool-discovery.tgz` on a `build-<sha>` release,
 which is neither an npm publication nor evidence that any profile has it installed. Neither
 publication is a product-acceptance statement or a profile installation, GUI reload, or application
@@ -23,6 +24,8 @@ what is verified, what is unverified, and what this version refuses to support �
 [`plugin/docs/05-current-status.md`](plugin/docs/05-current-status.md).
 
 ## [Unreleased]
+
+## [0.4.1] — 2026-10-14 — load lifecycle and PTC disclosure hardening
 
 - Re-read selection state inside the load queue and reject queued work after disposal, session destruction,
   fail-closed transitions or an epoch change. Interleaved canonical receipts no longer bypass active-tool budgets.
