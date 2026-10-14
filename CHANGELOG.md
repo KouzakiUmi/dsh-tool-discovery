@@ -11,8 +11,8 @@ The source baseline is published on `main` as its single initial-publish commit.
 was rebuilt on 2026-10-06: the earlier history — including the `2a1f9c0` and `257ddc0` commits,
 which are quoted in older entries below — was rewritten away and **no longer resolves**. Entries
 below the functional-build entry are historical source-baseline records, not claims about current
-release availability. The package was first published to npm as `0.2.1`; `0.2.2` and `0.3.0` were published by
-the trusted workflow described in their entries. The **GitHub Release build asset** remains a separate
+release availability. The package was first published to npm as `0.2.1`; `0.2.2`, `0.3.0` and
+`0.3.1` were published by the trusted workflow described in their entries. The **GitHub Release build asset** remains a separate
 distribution — a green `main` run publishes `dsh-tool-discovery.tgz` on a `build-<sha>` release,
 which is neither an npm publication nor evidence that any profile has it installed. Neither
 publication is a product-acceptance statement or a profile installation, GUI reload, or application
@@ -23,6 +23,28 @@ what is verified, what is unverified, and what this version refuses to support �
 [`plugin/docs/05-current-status.md`](plugin/docs/05-current-status.md).
 
 ## [Unreleased]
+
+## [0.4.0] — 2026-10-14 — settings home rebuild and entry copy
+
+- Rebuild the settings home as a card layout: a header with the design invariants folded behind a
+  summary, tinted status banners (saving/saved/failed/read-only/loading), the three-entry reference
+  cards, feature settings as `role=switch` toggles (the four reload-triggering ones moved under the
+  advanced section, next to the reload warning), and advanced fields behind native collapse. The
+  manual initial list gains a toolbar — filter, select/clear filtered as single writes, restore
+  default — and collapsible source groups: built-in (the DSH default list), MCP (`mcp__` prefix
+  naming), and plugin/third-party, each with a selected/total count and all groups force-expanded
+  while filtering. Grouping is name-based because the tool registry records no owning plugin; the
+  list states that basis instead of claiming a per-plugin attribution. Save paths, snapshot
+  identity, draft survival across section navigation, and every other behaviour contract are
+  unchanged. Verified with the unit suite, the real-Loader composition gates, and the real
+  React/DOM probe (65 assertions, real Chromium); not exercised inside an installed host GUI, and
+  not installed or released by this entry.
+- Sharpen the three entries' model-facing descriptions to state their actual bounds: paged
+  name-only browsing for `tool_list`, candidate-card search within one controlled category for
+  `tool_search`, and load by exact name or version-bound ref with no unload for `tool_load`.
+  Copy only; entry behaviour is unchanged.
+
+## [0.3.1] — 2026-10-13 — activation lifetime, home completion, and runtime hardening
 
 - Release owned discovery runtimes through the plugin's Cordis effect on unload. Invalidate only the
   old activation's pending assembly, restoration and pre-step waits with an explicit `STATE_NOT_READY`

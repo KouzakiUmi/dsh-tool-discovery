@@ -360,8 +360,8 @@ stands.
 
 ## Get the source
 
-The source version on this branch is **`0.3.1`** (in development; the versions published to npm so
-far are `0.2.1`, `0.2.2` and `0.3.0`). Which version a given download
+The source version on this branch is **`0.4.0`** (in development; the versions published to npm so
+far are `0.2.1`, `0.2.2`, `0.3.0` and `0.3.1`). Which version a given download
 carries is decided by the manifest inside that build's tarball — compare it with the release name
 (`v<version> · <sha>`) rather than assuming that `main` and this document agree.
 

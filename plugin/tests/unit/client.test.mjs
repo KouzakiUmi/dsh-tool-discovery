@@ -88,6 +88,14 @@ test('C-U02: client.js 的纯逻辑与 model.mjs 行为一致（内联副本不�
   const meta = { choices: [{ name: 'read' }, { name: 'gone_tool' }], default: ['read'] }
   assert.deepEqual(names(t.buildRows(meta, ['read']).rows), names(model.buildRows(meta, ['read']).rows))
   assert.equal(t.buildRows(meta, ['read']).missingCount, model.buildRows(meta, ['read']).missingCount)
+  assert.deepEqual([...t.setMembership(['a'], ['b', 'c'], true)], [...model.setMembership(['a'], ['b', 'c'], true)])
+  assert.deepEqual([...t.setMembership(['a', 'b'], ['a'], false)], [...model.setMembership(['a', 'b'], ['a'], false)])
+  const groupInput = [{ name: 'read', selected: true }, { name: 'mcp__srv__do', selected: false }, { name: 'fixture_x', selected: false }]
+  const grouped = t.groupRows(groupInput, ['read'])
+  assert.deepEqual(JSON.parse(JSON.stringify(grouped)), JSON.parse(JSON.stringify(model.groupRows(groupInput, ['read']))))
+  assert.deepEqual([...grouped].map((g) => g.key), ['core', 'mcp', 'plugin'])
+  assert.equal(grouped[0].selectedCount, 1)
+  assert.deepEqual([...t.groupRows([], ['read'])], [], '空清单不产生任何分组')
 })
 
 test('C-U03: 活目录接缝 —— 未选中的第三方工具必须成行且可勾（端到端真实 metadata）', () => {

@@ -77,8 +77,9 @@ export function createEntryDefinitions(deps) {
     definitionFor({ ...deps, toolName: 'tool_list', operation: 'list' }, {
       name: 'tool_list',
       operation: 'list',
-      description:
-        'Browse discoverable tool names by category in bounded pages. Returns complete native names only — no descriptions, no schemas, no parameters. Never loads anything.',
+      // 顶层 description 是模型每轮都读到的面，取自文案表（唯一来源）：
+      // 语言由激活期探测结果钉住，与参数说明、nextAction、错误 message 同一套。
+      description: d('entry', 'tool_list', 'description'),
       parameters: {
         view: { type: 'string', enum: ['available', 'loaded', 'categories', 'state'], description: d('entry', 'tool_list', 'view') },
         category: { type: 'string', description: d('entry', 'tool_list', 'category') },
@@ -90,8 +91,7 @@ export function createEntryDefinitions(deps) {
     definitionFor({ ...deps, toolName: 'tool_search', operation: 'search' }, {
       name: 'tool_search',
       operation: 'search',
-      description:
-        'Find a few candidate tools for a task described in natural language, within one controlled category. Returns candidate cards and short-lived refs only; loading happens later via tool_load.',
+      description: d('entry', 'tool_search', 'description'),
       parameters: {
         category: { type: 'string', required: true, description: d('entry', 'tool_search', 'category') },
         query: { type: 'string', required: true, description: d('entry', 'tool_search', 'query') },
@@ -102,8 +102,7 @@ export function createEntryDefinitions(deps) {
     definitionFor({ ...deps, toolName: 'tool_load', operation: 'load' }, {
       name: 'tool_load',
       operation: 'load',
-      description:
-        'Explicitly select tools by exact native name, or by candidate ref from tool_search — the candidate revision is optional and inferred from the version that ref is bound to. Prefer loading all tools needed for the task in a single batch to maximize cache reuse. Disclosed tools accumulate and stay available until the context is compacted — there is no unload. Takes effect on the NEXT request — it never executes a target tool.',
+      description: d('entry', 'tool_load', 'description'),
       parameters: {
         action: {
           type: 'string',

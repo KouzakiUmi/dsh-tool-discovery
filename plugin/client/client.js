@@ -1,7 +1,7 @@
 // plugin/client/client.js
 // 插件主页（设置 → 工具发现，顶层 `settings.section` 区）：官方 ModuleLoader 惰性 CJS
-// factory，**无 JSX、无构建**。布局参照 dsh-subusage 的设置页形态：页头 + 状态条 +
-// 分区卡片（三入口说明 / 可选功能 / 初始工具名单 / 高级配置），全部走 `--dsw-alias-*`
+// factory，**无 JSX、无构建**。卡片式分区布局：页头（说明折叠）+ 状态横幅 + 分区卡片
+// （三入口 / 可选功能开关 / 分组折叠的工具清单 / 高级配置），全部走 `--dsw-alias-*`
 // 设计令牌，深浅色自动适配。
 //
 // 取舍说明（此前这里有一条未经验证的推断，已删）：
@@ -51,6 +51,33 @@ window.__ModuleLoader__.load({
       if (a.size !== b.size) return false;
       for (const name of a) if (!b.has(name)) return false;
       return true;
+    }
+
+    function setMembership (selected, names, add) {
+      const list = Array.isArray(selected) ? [...selected] : [];
+      for (const name of Array.isArray(names) ? names : []) {
+        if (typeof name !== 'string' || name.length === 0) continue;
+        const at = list.indexOf(name);
+        if (add && at === -1) list.push(name);
+        if (!add && at !== -1) list.splice(at, 1);
+      }
+      return list;
+    }
+
+    // 分组依据（注册表不携带来源信息，见 plugin/domain/core-tools.mjs 头注释）：
+    //   mcp = 宿主强制命名契约 `mcp__<server>__<tool>`（dsh-mcp-client publicToolName）；
+    //   core = 调用方给的 coreNames（设置页即 meta.default = CORE_TOOL_NAMES）；其余 = 插件/第三方。
+    function groupRows (rows, coreNames) {
+      const core = new Set(Array.isArray(coreNames) ? coreNames : []);
+      const buckets = { core: [], mcp: [], plugin: [] };
+      for (const row of Array.isArray(rows) ? rows : []) {
+        const key = typeof row?.name === 'string' && row.name.startsWith('mcp__') ? 'mcp'
+          : core.has(row?.name) ? 'core' : 'plugin';
+        buckets[key].push(row);
+      }
+      return ['core', 'mcp', 'plugin']
+        .filter((key) => buckets[key].length > 0)
+        .map((key) => ({ key, rows: buckets[key], selectedCount: buckets[key].filter((r) => r.selected).length }));
     }
 
     /**
@@ -114,6 +141,7 @@ window.__ModuleLoader__.load({
     const en = {
       nav: 'Tool discovery',
       hero: 'The first request carries the three small entries below plus full schemas for the configured initial set (core tools and the current preset’s retained tools by default). Other tools disclose their real native schemas on the turn after explicit selection, and every call still follows the host’s own approval and sandbox chain.',
+      about: 'Design invariants & permissions',
       entriesGroup: 'Three entries',
       entryListAnswer: 'Which tools are discoverable in this category?',
       entryListResult: 'Returns paginated full tool names',
@@ -141,8 +169,14 @@ window.__ModuleLoader__.load({
       childEpochHelp: 'Off by default. Effective only when strict epoch verification is on. Subagents cannot perform user /compact, so enabling may block legacy child sessions. Changing this reloads the plugin; native ownership, not session labels, identifies children.',
       title: 'Manual initial tool list',
       intro: 'Lists application-wide registered tools, not session loading state. When manual injection is on, checked tools are advertised initially. Preset retention is controlled separately; registration does not guarantee permission in every session.',
+      groupNote: 'Grouping: built-in = DSH default list, MCP = mcp__ prefix, everything else is plugin/third-party (the registry does not record the owning plugin).',
+      groupCore: 'Built-in tools',
+      groupMcp: 'MCP tools',
+      groupPlugin: 'Plugin & third-party tools',
       search: 'Filter tools',
       searchLabel: 'Filter tools by name',
+      selectVisible: 'Select filtered',
+      clearVisible: 'Clear filtered',
       restore: 'Restore DSH default',
       empty: 'No tool matches the filter.',
       missing: 'not registered in the application catalog — uncheck to remove',
@@ -171,6 +205,7 @@ window.__ModuleLoader__.load({
     const zh = {
       nav: '工具发现',
       hero: '首轮携带下面三个小入口，以及配置的初始集合的完整 schema（默认含核心工具与当前 preset 保留的工具）。其它工具在显式选定后的下一轮披露真实原生 schema；每次调用仍走宿主原生的审批与沙箱链。',
+      about: '设计约束与权限说明',
       entriesGroup: '三个入口',
       entryListAnswer: '某类别里有哪些可发现工具？',
       entryListResult: '返回分页的完整工具名',
@@ -198,8 +233,14 @@ window.__ModuleLoader__.load({
       childEpochHelp: '默认关闭，仅在强制可信周期校验开启时生效。子代理不能自行执行用户 /compact，开启可能阻断旧子会话；切换会重新加载插件。身份按宿主运行时父子所有权判断，不信会话自称。',
       title: '手动初始工具名单',
       intro: '以下是应用全局登记目录，不是会话加载状态。开启手动初始注入后，勾选工具会直接披露；preset 保留由独立开关控制。全局已登记不代表每个会话都具有执行权限。',
+      groupNote: '分组依据：内置 = DSH 默认名单，MCP = mcp__ 前缀命名，其余归为插件与第三方（注册表不记录工具归属的具体插件）。',
+      groupCore: '内置工具',
+      groupMcp: 'MCP 工具',
+      groupPlugin: '插件与第三方工具',
       search: '筛选工具',
       searchLabel: '按名称筛选工具',
+      selectVisible: '全选筛选结果',
+      clearVisible: '清空筛选结果',
       restore: '恢复 DSH 默认',
       empty: '没有匹配的工具。',
       missing: '未在应用全局目录登记（取消勾选可移除）',
@@ -307,6 +348,84 @@ window.__ModuleLoader__.load({
       };
     }
 
+    // ---- 设计令牌（--dsw-alias-* 均带兜底值；跟随宿主深浅色主题） ------------------
+    // 面板共用等宽字体栈：本机引用已装字体，不打包不分发（许可边界见仓库 AGENTS 规范）。
+    const MONO = 'ui-monospace, "Cascadia Code", "Sarasa Term SC", monospace';
+    const INK = 'var(--dsw-alias-label-primary, inherit)';
+    const INK2 = 'var(--dsw-alias-label-secondary, inherit)';
+    const INK3 = 'var(--dsw-alias-label-tertiary, inherit)';
+    const FILL2 = 'var(--dsw-alias-fill-tsp-secondary, rgba(128,128,128,.15))';
+    const STROKE = 'var(--dsw-alias-settings-card-stroke, rgba(128,128,128,.25))';
+    const ACCENT = 'var(--dsw-alias-state-business-primary, #3b82f6)';
+    const WARN = 'var(--dsw-alias-state-business-warning, #b7791f)';
+    const DANGER = 'var(--dsw-alias-state-business-danger, #dc4c4c)';
+    const OK = 'var(--dsw-alias-state-business-success, #2f9e6e)';
+
+    const S = {
+      page: { maxWidth: '760px', display: 'flex', flexDirection: 'column', gap: '20px', color: INK },
+      header: { display: 'flex', flexDirection: 'column', gap: '8px' },
+      title: { margin: 0, fontSize: '18px', fontWeight: '600' },
+      hero: { margin: 0, fontSize: '13px', lineHeight: '20px', color: INK3 },
+      aboutSummary: { cursor: 'pointer', fontSize: '12px', color: INK3 },
+      banners: { display: 'flex', flexDirection: 'column', gap: '8px' },
+      banner: (color) => ({ margin: 0, padding: '10px 14px', fontSize: '12.5px', lineHeight: '18px', borderRadius: '10px',
+        border: `1px solid color-mix(in srgb, ${color} 45%, transparent)`,
+        background: `color-mix(in srgb, ${color} 10%, transparent)`, color: INK }),
+      card: { border: `.5px solid ${STROKE}`, borderRadius: 'var(--dsw-radius-xl, 14px)', background: 'var(--dsw-alias-settings-card-fill, transparent)', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '12px' },
+      cardTitle: { margin: 0, fontSize: '14px', fontWeight: '600' },
+      cardDesc: { margin: 0, fontSize: '12px', lineHeight: '18px', color: INK3 },
+      chips: { display: 'flex', flexWrap: 'wrap', gap: '6px' },
+      chip: { height: '22px', lineHeight: '22px', padding: '0 10px', fontSize: '12px', borderRadius: '999px', background: FILL2, color: INK2, whiteSpace: 'nowrap' },
+      cards: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '12px' },
+      entryCard: { border: `.5px solid ${STROKE}`, borderRadius: 'var(--dsw-radius-l, 10px)', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '6px' },
+      entryName: { fontSize: '13px', fontWeight: '600', fontFamily: MONO },
+      entryText: { margin: 0, fontSize: '12px', lineHeight: '18px', color: INK2 },
+      entryMeta: { margin: 0, fontSize: '11px', lineHeight: '16px', color: INK3 },
+      badge: (on) => ({ alignSelf: 'flex-start', fontSize: '11px', lineHeight: '16px', padding: '1px 8px', borderRadius: '999px', background: 'var(--dsw-alias-fill-tsp-secondary, rgba(128,128,128,.15))', color: on ? 'var(--dsw-alias-state-business-primary, inherit)' : 'var(--dsw-alias-label-tertiary, inherit)' }),
+      featRow: (hairline) => ({ display: 'flex', alignItems: 'flex-start', gap: '12px', padding: '10px 0', borderTop: hairline ? `.5px solid ${STROKE}` : 'none' }),
+      featText: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '3px' },
+      featLabel: { fontSize: '13px', fontWeight: '500', cursor: 'pointer' },
+      featHelp: { margin: 0, fontSize: '12px', lineHeight: '17px', color: INK3 },
+      switchTrack: (checked, disabled) => ({ flex: 'none', width: '36px', height: '20px', marginTop: '1px', padding: 0, border: 'none', borderRadius: '999px', position: 'relative', cursor: disabled ? 'not-allowed' : 'pointer', background: checked ? ACCENT : FILL2, opacity: disabled ? 0.5 : 1, transition: 'background .15s ease' }),
+      switchThumb: (checked) => ({ position: 'absolute', top: '2px', left: '2px', width: '16px', height: '16px', borderRadius: '50%', background: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,.35)', transform: checked ? 'translateX(16px)' : 'translateX(0)', transition: 'transform .15s ease' }),
+      toolbar: { display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' },
+      searchInput: { flex: '1 1 180px', minWidth: 0, padding: '6px 10px', fontSize: '13px', borderRadius: '8px', border: `.5px solid ${STROKE}`, background: 'transparent', color: 'inherit', font: 'inherit' },
+      btn: (disabled) => ({ padding: '5px 10px', fontSize: '12px', borderRadius: '8px', border: `.5px solid ${STROKE}`, background: 'transparent', color: INK2, font: 'inherit', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.55 : 1, whiteSpace: 'nowrap' }),
+      btnAccent: (disabled) => ({ padding: '5px 12px', fontSize: '12px', borderRadius: '8px', border: `1px solid ${ACCENT}`, background: 'transparent', color: ACCENT, font: 'inherit', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.55 : 1, whiteSpace: 'nowrap' }),
+      group: { display: 'flex', flexDirection: 'column', gap: '2px' },
+      groupHead: (disabled) => ({ display: 'flex', alignItems: 'center', gap: '8px', width: '100%', padding: '6px 8px', border: 'none', borderRadius: '8px', background: FILL2, color: INK, font: 'inherit', fontSize: '12.5px', fontWeight: '600', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.55 : 1, textAlign: 'left' }),
+      caret: (open) => ({ flex: 'none', fontSize: '10px', color: INK3, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .12s ease' }),
+      groupCount: { marginLeft: 'auto', fontSize: '11px', fontWeight: '500', color: INK3 },
+      toolList: { listStyle: 'none', margin: 0, padding: '2px 0 4px', display: 'flex', flexDirection: 'column', gap: '2px' },
+      toolRow: (selected) => ({ display: 'flex', alignItems: 'center', gap: '10px', padding: '5px 8px', borderRadius: '8px', background: selected ? `color-mix(in srgb, ${ACCENT} 8%, transparent)` : 'transparent' }),
+      checkbox: { accentColor: ACCENT, width: '14px', height: '14px', margin: 0, flex: 'none' },
+      toolLabel: { flex: 1, minWidth: 0, cursor: 'pointer', display: 'flex', alignItems: 'center' },
+      toolName: { fontSize: '12.5px', fontFamily: MONO },
+      statusTag: (kind) => ({ flex: 'none', fontSize: '11px', lineHeight: '16px', padding: '0 8px', borderRadius: '999px', color: kind === 'unknown' ? WARN : DANGER, border: `.5px solid ${kind === 'unknown' ? WARN : DANGER}` }),
+      fixedLine: { margin: 0, fontSize: '12px', lineHeight: '18px', color: INK3 },
+      emptyBox: { margin: 0, padding: '18px', textAlign: 'center', fontSize: '12.5px', color: INK3, border: `.5px dashed ${STROKE}`, borderRadius: '10px' },
+      note: { margin: 0, fontSize: '12px', lineHeight: '18px', color: INK3 },
+      summary: { cursor: 'pointer', fontSize: '14px', fontWeight: '600' },
+      select: { padding: '5px 8px', fontSize: '12.5px', borderRadius: '8px', border: `.5px solid ${STROKE}`, background: 'transparent', color: 'inherit', font: 'inherit' },
+      textarea: { width: '100%', boxSizing: 'border-box', padding: '8px 10px', fontSize: '12px', lineHeight: '18px', fontFamily: MONO, borderRadius: '8px', border: `.5px solid ${STROKE}`, background: 'transparent', color: 'inherit', resize: 'vertical' },
+      jsonSection: { display: 'flex', flexDirection: 'column', gap: '6px', padding: '10px 0', borderTop: `.5px solid ${STROKE}` },
+      jsonKeys: { fontSize: '11px', overflowWrap: 'anywhere', color: INK3, fontFamily: MONO },
+      alertText: { margin: 0, fontSize: '12px', lineHeight: '18px', color: DANGER },
+    };
+
+    /** 开关：role=switch 的按钮（内联样式无法命中 :checked 伪类，故不用 checkbox 伪装）。 */
+    function Switch ({ id, checked, disabled, onChange, labelledBy, describedBy }) {
+      return h('button', {
+        type: 'button', role: 'switch', id,
+        'aria-checked': checked ? 'true' : 'false',
+        'aria-labelledby': labelledBy,
+        'aria-describedby': describedBy,
+        disabled,
+        onClick: () => onChange(!checked),
+        style: S.switchTrack(checked, disabled),
+      }, h('span', { 'aria-hidden': 'true', style: S.switchThumb(checked) }));
+    }
+
     function JsonSetting ({ t, name, value, disabled, keys, onSave, draftStore }) {
       const [draft, setDraft] = useState(() => draftStore.read(name, value));
       const [error, setError] = useState(null);
@@ -322,133 +441,177 @@ window.__ModuleLoader__.load({
         setError(null);
         onSave(name, parsed);
       };
-      return h('section', null,
-        h('label', { htmlFor: `tool-discovery-${name}` }, t(name)),
-        h('p', { style: { fontSize: '12px' } }, t(`${name}Help`)),
-        h('code', { style: { display: 'block', fontSize: '11px', overflowWrap: 'anywhere' } }, (keys ?? []).join(', ')),
+      return h('section', { style: S.jsonSection },
+        h('label', { htmlFor: `tool-discovery-${name}`, style: S.featLabel }, t(name)),
+        h('p', { style: S.featHelp }, t(`${name}Help`)),
+        h('code', { style: S.jsonKeys }, (keys ?? []).join(', ')),
         h('textarea', { id: `tool-discovery-${name}`, rows: 6, value: draft, disabled,
-          style: { width: '100%', boxSizing: 'border-box', fontFamily: 'monospace' },
+          style: S.textarea,
           onChange: event => {
             draftStore.write(name, value, event.target.value);
             setDraft(event.target.value);
           } }),
-        h('button', { type: 'button', disabled, onClick: submit }, t('apply')),
-        error ? h('p', { role: 'alert' }, error) : null);
+        h('div', null,
+          h('button', { type: 'button', style: S.btnAccent(disabled), disabled, onClick: submit }, t('apply'))),
+        error ? h('p', { role: 'alert', style: S.alertText }, error) : null);
     }
 
-    // ---- 设计令牌（--dsw-alias-* 均带兜底值；跟随宿主深浅色主题） ------------------
-    const S = {
-      section: { maxWidth: '720px', display: 'flex', flexDirection: 'column', gap: '16px', color: 'var(--dsw-alias-label-primary, inherit)' },
-      title: { margin: 0, fontSize: '18px', fontWeight: '600' },
-      hero: { margin: 0, fontSize: '13px', lineHeight: '20px', color: 'var(--dsw-alias-label-tertiary, inherit)' },
-      chips: { display: 'flex', flexWrap: 'wrap', gap: '6px' },
-      chip: { height: '22px', lineHeight: '22px', padding: '0 10px', fontSize: '12px', borderRadius: '999px', background: 'var(--dsw-alias-fill-tsp-secondary, rgba(128,128,128,.15))', color: 'var(--dsw-alias-label-secondary, inherit)', whiteSpace: 'nowrap' },
-      groupHead: { margin: 0, fontSize: '12px', fontWeight: '600', letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--dsw-alias-label-tertiary, inherit)' },
-      cards: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '12px' },
-      card: { border: '.5px solid var(--dsw-alias-settings-card-stroke, rgba(128,128,128,.25))', borderRadius: 'var(--dsw-radius-xl, 14px)', background: 'var(--dsw-alias-settings-card-fill, transparent)', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '6px' },
-      cardTitle: { fontSize: '13px', fontWeight: '600' },
-      cardText: { margin: 0, fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-secondary, inherit)' },
-      cardMeta: { margin: 0, fontSize: '11px', lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary, inherit)' },
-      badge: (on) => ({ alignSelf: 'flex-start', fontSize: '11px', lineHeight: '16px', padding: '1px 8px', borderRadius: '999px', background: 'var(--dsw-alias-fill-tsp-secondary, rgba(128,128,128,.15))', color: on ? 'var(--dsw-alias-state-business-primary, inherit)' : 'var(--dsw-alias-label-tertiary, inherit)' }),
-      note: { margin: 0, fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary, inherit)' },
-    };
-
     /** 叶子组件：只收 props，不读 ctx。 */
-    function SettingsPanel ({ t, snapshot, error, notice, busy, onToggle, onRestore, onFeature, onSetting, draftStore }) {
+    function SettingsPanel ({ t, snapshot, error, notice, busy, onToggle, onBulk, onRestore, onFeature, onSetting, draftStore }) {
       const [query, setQuery] = useState('');
+      // 分组折叠状态：默认全部展开；搜索时强制展开（受控渲染，不用 details 避免 open 属性脱同步）。
+      const [collapsed, setCollapsed] = useState({});
       const disabled = busy === true || snapshot?.status !== 'ready' || snapshot?.writable === false;
       const locale = snapshot?.value?.locale ?? 'auto';
       const selected = Array.isArray(snapshot?.value?.alwaysVisible) ? snapshot.value.alwaysVisible : [];
       const built = buildRows(snapshot?.meta, selected);
       const visible = filterRows(built.rows, query);
+      const searching = query.trim() !== '';
+      const groups = groupRows(visible, snapshot?.meta?.default);
+      const features = Object.fromEntries(featureChoices(snapshot?.value).map((row) => [row[0], row]));
 
-      return h('div', { style: S.section },
-        h('h2', { style: S.title }, t('nav')),
-        h('p', { style: S.hero }, t('hero')),
-        h('div', { style: S.chips },
-          h('span', { style: S.chip }, `${t('statFixed')}: ${built.fixed.length}`),
-          h('span', { style: S.chip }, `${t('statCatalog')}: ${built.rows.filter(row => row.available).length}`),
-          h('span', { style: S.chip }, `${t('statSelected')}: ${built.selectedCount}`),
-          built.missingCount > 0 ? h('span', { style: S.chip }, `${t('statMissing')}: ${built.missingCount}`) : null,
-          built.unknownCount > 0 ? h('span', { style: S.chip }, `${t('statUnknown')}: ${built.unknownCount}`) : null,
-          snapshot?.metaAvailable === false ? h('span', { style: S.chip }, t('statNoMeta')) : null),
-        snapshot?.status !== 'ready' ? h('p', { role: 'status', style: S.note }, t('loading')) : null,
-        snapshot?.writable === false ? h('p', { role: 'status', style: S.note }, t('readOnly')) : null,
-        busy ? h('p', { role: 'status', style: S.note }, t('saving')) : null,
-        h('h3', { style: S.groupHead }, t('entriesGroup')),
-        h('div', { style: S.cards },
-          ...[['tool_list', 'entryListAnswer', 'entryListResult', false],
-            ['tool_search', 'entrySearchAnswer', 'entrySearchResult', false],
-            ['tool_load', 'entryLoadAnswer', 'entryLoadResult', true]].map(([name, answer, result, activates]) =>
-            h('div', { key: name, style: S.card },
-              h('code', { style: S.cardTitle }, name),
-              h('p', { style: S.cardText }, t(answer)),
-              h('p', { style: S.cardMeta }, t(result)),
-              h('span', { style: S.badge(activates) }, t(activates ? 'activeYes' : 'activeNo'))))),
-        h('p', { style: S.note }, t('invariants')),
-        h('h3', { style: S.groupHead }, t('features')),
-        ...featureChoices(snapshot?.value).map(([key, label, help, checked]) => h('section', { key },
-          h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
+      const featureRow = (key, hairline) => {
+        const row = features[key];
+        if (row === undefined) return null;
+        const [, label, help, checked] = row;
+        return h('div', { key, style: S.featRow(hairline) },
+          h('div', { style: S.featText },
+            h('label', { id: `tool-discovery-${key}-label`, htmlFor: `tool-discovery-${key}`, style: S.featLabel }, t(label)),
+            h('p', { id: `tool-discovery-${key}-help`, style: S.featHelp }, t(help))),
+          h(Switch, {
+            id: `tool-discovery-${key}`, checked, disabled,
+            labelledBy: `tool-discovery-${key}-label`,
+            describedBy: `tool-discovery-${key}-help`,
+            onChange: (next) => onFeature(key, next),
+          }));
+      };
+
+      const toolRow = (row) => h('li', { key: row.name, style: S.toolRow(row.selected) },
+        h('input', {
+          type: 'checkbox',
+          id: `initial-tool-${row.name}`,
+          checked: row.selected, disabled,
+          onChange: () => onToggle(selected, row.name),
+          style: S.checkbox,
+        }),
+        h('label', { htmlFor: `initial-tool-${row.name}`, style: S.toolLabel },
+          h('code', { style: S.toolName }, row.name)),
+        row.status === 'registered' ? null
+          : h('span', { style: S.statusTag(row.status) }, t(row.status === 'unknown' ? 'unknown' : 'missing')));
+
+      const banners = [];
+      if (busy) banners.push(h('p', { key: 'busy', role: 'status', style: S.banner(ACCENT) }, t('saving')));
+      if (error) banners.push(h('p', { key: 'error', role: 'alert', style: S.banner(DANGER) }, error));
+      if (notice) banners.push(h('p', { key: 'notice', role: 'status', style: S.banner(OK) }, notice));
+      if (snapshot?.status !== 'ready') banners.push(h('p', { key: 'loading', role: 'status', style: S.banner(INK3) }, t('loading')));
+      if (snapshot?.writable === false) banners.push(h('p', { key: 'readonly', role: 'status', style: S.banner(INK3) }, t('readOnly')));
+
+      return h('div', { style: S.page },
+        h('header', { style: S.header },
+          h('h2', { style: S.title }, t('nav')),
+          h('p', { style: S.hero }, t('hero')),
+          h('details', null,
+            h('summary', { style: S.aboutSummary }, t('about')),
+            h('p', { style: S.note }, t('invariants')))),
+        banners.length > 0 ? h('div', { style: S.banners }, ...banners) : null,
+
+        h('section', { style: S.card },
+          h('h3', { style: S.cardTitle }, t('entriesGroup')),
+          h('div', { style: S.cards },
+            ...[['tool_list', 'entryListAnswer', 'entryListResult', false],
+              ['tool_search', 'entrySearchAnswer', 'entrySearchResult', false],
+              ['tool_load', 'entryLoadAnswer', 'entryLoadResult', true]].map(([name, answer, result, activates]) =>
+              h('div', { key: name, style: S.entryCard },
+                h('code', { style: S.entryName }, name),
+                h('p', { style: S.entryText }, t(answer)),
+                h('p', { style: S.entryMeta }, t(result)),
+                h('span', { style: S.badge(activates) }, t(activates ? 'activeYes' : 'activeNo')))))),
+
+        h('section', { style: S.card },
+          h('h3', { style: S.cardTitle }, t('features')),
+          featureRow('initialToolsEnabled', false),
+          featureRow('alwaysAllowPresetTools', true)),
+
+        h('section', { style: S.card },
+          h('h3', { style: S.cardTitle }, t('title')),
+          h('p', { style: S.cardDesc }, t('intro')),
+          h('div', { style: S.chips },
+            h('span', { style: S.chip }, `${t('statFixed')}: ${built.fixed.length}`),
+            h('span', { style: S.chip }, `${t('statCatalog')}: ${built.rows.filter(row => row.available).length}`),
+            h('span', { style: S.chip }, `${t('statSelected')}: ${built.selectedCount}`),
+            built.missingCount > 0 ? h('span', { style: S.chip }, `${t('statMissing')}: ${built.missingCount}`) : null,
+            built.unknownCount > 0 ? h('span', { style: S.chip }, `${t('statUnknown')}: ${built.unknownCount}`) : null,
+            snapshot?.metaAvailable === false ? h('span', { style: S.chip }, t('statNoMeta')) : null),
+          h('div', { style: S.toolbar },
             h('input', {
-              type: 'checkbox', checked, id: `tool-discovery-${key}`,
-              'aria-describedby': `tool-discovery-${key}-help`,
-              disabled,
-              onChange: (event) => onFeature(key, event.target.checked),
-            }), t(label)),
-          h('p', { id: `tool-discovery-${key}-help`, style: { margin: '4px 0', fontSize: '12px' } }, t(help)))),
-        h('h3', { style: S.groupHead }, t('title')),
-        h('p', { style: S.note }, t('intro')),
+              type: 'search',
+              'aria-label': t('searchLabel'),
+              placeholder: t('search'),
+              value: query,
+              onChange: (event) => setQuery(event.target.value),
+              style: S.searchInput,
+            }),
+            h('button', {
+              type: 'button',
+              style: S.btn(disabled || visible.length === 0),
+              disabled: disabled || visible.length === 0,
+              onClick: () => onBulk(visible.map((row) => row.name), true),
+            }, t('selectVisible')),
+            h('button', {
+              type: 'button',
+              style: S.btn(disabled || visible.length === 0),
+              disabled: disabled || visible.length === 0,
+              onClick: () => onBulk(visible.map((row) => row.name), false),
+            }, t('clearVisible')),
+            h('button', {
+              type: 'button',
+              style: S.btn(disabled || snapshot?.metaAvailable === false),
+              disabled: disabled || snapshot?.metaAvailable === false,
+              onClick: () => { setQuery(''); onRestore(selected); },
+            }, t('restore'))),
+          h('p', { style: S.fixedLine },
+            h('strong', null, `${t('fixed')}: `),
+            built.fixed.join(', '),
+            ` — ${t('fixedNote')}`),
+          visible.length === 0
+            ? h('p', { style: S.emptyBox }, t('empty'))
+            : groups.map((group) => {
+              const open = searching || collapsed[group.key] !== true;
+              return h('section', { key: group.key, style: S.group },
+                h('button', {
+                  type: 'button',
+                  'aria-expanded': open ? 'true' : 'false',
+                  style: S.groupHead(disabled),
+                  disabled,
+                  onClick: () => setCollapsed((prev) => ({ ...prev, [group.key]: open })),
+                },
+                  h('span', { 'aria-hidden': 'true', style: S.caret(open) }, '▸'),
+                  t(`group${group.key[0].toUpperCase()}${group.key.slice(1)}`),
+                  h('span', { style: S.groupCount }, `${group.selectedCount}/${group.rows.length}`)),
+                open ? h('ul', { style: S.toolList }, group.rows.map(toolRow)) : null);
+            }),
+          h('p', { style: S.note }, `${t('pending')} ${t('groupNote')}`)),
 
-        h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } },
-          h('input', {
-            type: 'search',
-            'aria-label': t('searchLabel'),
-            placeholder: t('search'),
-            value: query,
-            onChange: (event) => setQuery(event.target.value),
-          }),
-          h('button', {
-            type: 'button', disabled: disabled || snapshot?.metaAvailable === false,
-            onClick: () => { setQuery(''); onRestore(selected); },
-          }, t('restore'))),
-
-        h('div', { style: { fontSize: '12px' } },
-          h('strong', null, `${t('fixed')}: `),
-          built.fixed.join(', '),
-          h('div', null, t('fixedNote'))),
-
-        visible.length === 0
-          ? h('p', { style: { fontSize: '13px' } }, t('empty'))
-          : h('ul', { style: { listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '4px' } },
-            visible.map((row) => h('li', { key: row.name, style: { display: 'flex', gap: '8px', alignItems: 'center' } },
-              h('input', {
-                type: 'checkbox',
-                id: `initial-tool-${row.name}`,
-                checked: row.selected, disabled,
-                onChange: () => onToggle(selected, row.name),
-              }),
-              h('label', { htmlFor: `initial-tool-${row.name}`, style: { fontSize: '13px' } },
-                row.name,
-                row.status === 'registered' ? null : h('span', { style: { marginLeft: '8px', fontSize: '11px' } }, `(${t(row.status === 'unknown' ? 'unknown' : 'missing')})`)),
-            ))),
-
-        h('p', { style: S.note }, t('pending')),
-        h('details', null,
-          h('summary', { style: S.groupHead }, t('advanced')),
+        h('details', { style: S.card },
+          h('summary', { style: S.summary }, t('advanced')),
           h('p', { style: S.note }, t('reload')),
-          h('label', { htmlFor: 'tool-discovery-locale' }, t('locale')),
-          h('select', { id: 'tool-discovery-locale', value: locale, disabled,
-            onChange: event => onSetting('locale', event.target.value) },
-            ...[...new Set(['auto', 'en', 'zh', locale])].map(value => h('option', { key: value, value }, ['auto', 'en', 'zh'].includes(value) ? t(value) : value))),
+          h('div', { style: S.featRow(true) },
+            h('div', { style: S.featText },
+              h('label', { htmlFor: 'tool-discovery-locale', style: S.featLabel }, t('locale'))),
+            h('select', { id: 'tool-discovery-locale', value: locale, disabled, style: S.select,
+              onChange: event => onSetting('locale', event.target.value) },
+              ...[...new Set(['auto', 'en', 'zh', locale])].map(value => h('option', { key: value, value }, ['auto', 'en', 'zh'].includes(value) ? t(value) : value)))),
+          featureRow('requireTrustedEpoch', true),
+          featureRow('requireTrustedEpochForSubagents', true),
+          featureRow('tolerantLoadProtected', true),
+          featureRow('respectAlwaysVisible', true),
           ...['budgets', 'categoryConfig'].map(name => h(JsonSetting, {
             key: `${name}:${JSON.stringify(snapshot?.value?.[name])}`,
             t, name, draftStore, value: snapshot?.value?.[name] ?? (name === 'budgets' ? null : {}),
             disabled: disabled || !snapshot?.meta?.constraints,
             keys: snapshot?.meta?.constraints?.[name === 'budgets' ? 'budgetKeys' : 'categoryKeys'], onSave: onSetting,
           })),
-          h('p', { style: S.note }, `${t('framework')}: ${(snapshot?.value?.frameworkRetained ?? []).join(', ') || '—'}`)),
-        error ? h('p', { role: 'alert', style: S.note }, error) : null,
-        notice ? h('p', { role: 'status', style: S.note }, notice) : null)
+          h('p', { style: S.note }, `${t('framework')}: ${(snapshot?.value?.frameworkRetained ?? []).join(', ') || '—'}`)))
     }
 
     /**
@@ -544,6 +707,13 @@ window.__ModuleLoader__.load({
           if (FIXED_ENTRIES.includes(name)) return false;
           return write(toggleName(getSnapshot().value.alwaysVisible, name));
         }, []);
+        const onBulk = useCallback((names, add) => {
+          if (!Array.isArray(names) || names.length === 0 || typeof add !== 'boolean') return false;
+          const current = getSnapshot().value.alwaysVisible;
+          const next = setMembership(current, names, add);
+          if (isDefaultSelection(next, current)) return false;
+          return write(next);
+        }, []);
         const onRestore = useCallback(() => {
           const current = getSnapshot();
           if (!current.metaAvailable || isDefaultSelection(current.value.alwaysVisible, current.defaults)) return false;
@@ -562,7 +732,7 @@ window.__ModuleLoader__.load({
           }
           return write(value, key);
         }, []);
-        return h(SettingsPanel, { t, snapshot, error, notice, busy, onToggle, onRestore, onFeature, onSetting, draftStore });
+        return h(SettingsPanel, { t, snapshot, error, notice, busy, onToggle, onBulk, onRestore, onFeature, onSetting, draftStore });
       };
     }
 
@@ -584,9 +754,9 @@ window.__ModuleLoader__.load({
 
     // 供 vm 内测试取用（不参与渲染）：纯逻辑 + 接缝 + 装配点。
     exports.__test = {
-      buildRows, filterRows, toggleName, isDefaultSelection, featureChoices, saveSetting, validAdvancedSetting,
+      buildRows, filterRows, toggleName, isDefaultSelection, setMembership, groupRows, featureChoices, saveSetting, validAdvancedSetting,
       ownView, alwaysVisibleNode, readMeta, createTabRoot, createSnapshotSource, SettingsPanel,
-      FIXED_ENTRIES, NS, PLUGIN_TAB_ID, SECTION_ID, SLOT, createDraftStore, S,
+      FIXED_ENTRIES, NS, PLUGIN_TAB_ID, SECTION_ID, SLOT, createDraftStore, S, zh, en,
     };
 
     exports.apply = apply;

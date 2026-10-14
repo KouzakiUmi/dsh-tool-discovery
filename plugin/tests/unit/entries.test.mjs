@@ -7,6 +7,7 @@
 //
 // 覆盖：
 //   * 中英文两种 locale 下，顶层 description 与每个参数 description 非空；
+//   * 三个顶层 description **确实取自文案表**（硬编码会把 zh 界面退回英文）；
 //   * 嵌套的 candidates.items.properties.ref/revision（最容易漏的一层）；
 //   * 3 个入口名与顺序不变；
 //   * action 只允许 load，且保留"缺省 load"信息；
@@ -73,6 +74,18 @@ for (const locale of LOCALES) {
       }
     }
     assert.deepEqual(empty, [], `空 description: ${empty.join(', ')}`);
+  });
+
+  test(`[${locale}] 三个顶层 description 取自文案表，不得硬编码`, () => {
+    // 硬编码英文时该断言在 zh 下必红：这正是「入口描述无视钉住的 locale」那类回归。
+    const table = createText(locale);
+    for (const definition of capture(locale).definitions) {
+      assert.equal(
+        definition.description,
+        table.t(['entry', definition.name, 'description']),
+        `${definition.name} 的 description 必须等于 entry.${definition.name}.description`,
+      );
+    }
   });
 
   test(`[${locale}] tool_load 参数说明全部已接线`, () => {

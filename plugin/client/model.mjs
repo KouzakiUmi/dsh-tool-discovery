@@ -35,6 +35,42 @@ export function restoreDefaults (selected, defaults) {
   return { names: next, changed: !isDefaultSelection(selected, next) };
 }
 
+/** 批量把一组名字并入/移出名单。返回新数组；内容是否变化由调用方用 isDefaultSelection 判定。 */
+export function setMembership (selected, names, add) {
+  const list = Array.isArray(selected) ? [...selected] : [];
+  for (const name of Array.isArray(names) ? names : []) {
+    if (typeof name !== 'string' || name.length === 0) continue;
+    const at = list.indexOf(name);
+    if (add && at === -1) list.push(name);
+    if (!add && at !== -1) list.splice(at, 1);
+  }
+  return list;
+}
+
+/**
+ * 把行按来源分组成可折叠区段：core（DSH 内置）→ mcp（MCP 提供）→ plugin（插件/第三方）。
+ * 空组不返回。
+ *
+ * 分组依据（注册表不携带来源信息，见 plugin/domain/core-tools.mjs 头注释）：
+ *   - mcp：宿主强制命名契约 `mcp__<server>__<tool>`（dsh-mcp-client publicToolName）；
+ *   - core：调用方传入的 coreNames（设置页即 schema 的 meta.default = CORE_TOOL_NAMES）；
+ *   - 其余：插件/第三方。无法精确归属到具体插件，组名如实写"插件与第三方"。
+ * @param {ReadonlyArray<{name:string,selected:boolean}>} rows buildRows/filterRows 的产物
+ * @param {readonly string[]} coreNames 内置工具名（面板传 meta.default）
+ */
+export function groupRows (rows, coreNames) {
+  const core = new Set(Array.isArray(coreNames) ? coreNames : []);
+  const buckets = { core: [], mcp: [], plugin: [] };
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const key = typeof row?.name === 'string' && row.name.startsWith('mcp__') ? 'mcp'
+      : core.has(row?.name) ? 'core' : 'plugin';
+    buckets[key].push(row);
+  }
+  return ['core', 'mcp', 'plugin']
+    .filter((key) => buckets[key].length > 0)
+    .map((key) => ({ key, rows: buckets[key], selectedCount: buckets[key].filter((r) => r.selected).length }));
+}
+
 /**
  * 把"目录 + 当前配置"折成面板要渲染的行。
  * @param {{choices?: readonly any[]}} meta `alwaysVisible` 节点上的 meta
