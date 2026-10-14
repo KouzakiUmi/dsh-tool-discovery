@@ -101,11 +101,9 @@ export function validateBinding(b) {
  * @returns {CatalogEntry}
  */
 export function buildEntry(b) {
-  // 只浅拷贝一层:wire.parameters(以及任何嵌套对象)仍与调用方共享引用。
-  // 快照的不可变性靠 digest 口径(canonical JSON)而非深拷贝保证 —— 摘要与比较
-  // 都按内容算,共享引用不影响 identity;代价是调用方**不得**在 buildCatalog
-  // 之后改写原 wire 对象。
-  const wire = { ...b.wire };
+  // 冻结的只能是内核自有快照，不能递归冻结 adapter/宿主共享的 parameters。
+  // 先按身份核算的同一 canonical JSON 口径深复制；非法 JSON 值仍明确拒绝。
+  const wire = JSON.parse(canonicalJson(b.wire));
   const schemaDigest = digestOf(wire);
   const skillRevision = b.skill ? b.skill.skillRevision : 'none';
   // revision 同时覆盖 wire 身份、技能版本与可证明的注册绑定代次。

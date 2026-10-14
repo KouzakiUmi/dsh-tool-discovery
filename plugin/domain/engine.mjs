@@ -378,8 +378,14 @@ export function createDiscoveryEngine(config) {
      */
     async handleLoad(raw, scope, ctx) {
       const requestedAction = isPlainObject(raw) && raw.action === 'unload' ? 'unload' : 'load';
-      const runLocked = (req, st) => {
+      const runLocked = (req, queuedEpoch, queuedLock) => {
         try {
+          // 入队之后可能折叠回执、压缩、fail closed 或销毁会话：锁内才读取预算状态。
+          if (disposed || locks.get(scope.sessionId) !== queuedLock) {
+            throw new DomainError('STATE_NOT_READY');
+          }
+          const st = requireReady(scope);
+          if (st.epoch !== queuedEpoch) throw new DomainError('SELECTION_CHANGED');
           return this.handleLoadLocked(req, st, scope, ctx, raw);
         } catch (e) {
           return { response: errorEnvelope('tool_load', requestedAction, toDomainError(e)), operation: null };
@@ -389,6 +395,7 @@ export function createDiscoveryEngine(config) {
       /** @type {any} */
       let req;
       try {
+        if (disposed) throw new DomainError('STATE_NOT_READY');
         requireReady(scope);
         req = validateLoadRequest(raw, budgets);
         // 模型不得自主 unload:缓存周期的清空点只有成功压缩(`/unloadtool` 暂缓)。
@@ -405,9 +412,10 @@ export function createDiscoveryEngine(config) {
           operation: null,
         };
       }
-      const st = requireState(scope);
-      // load/unload 对同一会话串行(FIFO)
-      return lockFor(scope.sessionId).run(() => runLocked(req, st));
+      const queuedEpoch = requireState(scope).epoch;
+      const queuedLock = lockFor(scope.sessionId);
+      // FIFO 只串行事务；不能把入队前的状态快照跨越异步队列复用。
+      return queuedLock.run(() => runLocked(req, queuedEpoch, queuedLock));
     },
 
     /**

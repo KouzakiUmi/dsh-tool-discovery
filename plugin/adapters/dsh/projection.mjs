@@ -252,9 +252,25 @@ export function createProjection(deps) {
       throw error;
     }
     if (mode !== 'native') {
-      // 兼容开启：出站 wire 仍只留宿主的 run_code。披露在 assemble 之前写入
-      // run_code SDK（ptc-sdk.mjs），不把 native schema 投影回来。
-      return transformed;
+      // 只投影宿主公开 SDK section；宿主资格目录与 run_code transport 不变。
+      if (typeof deps.projectPtc !== 'function') {
+        throw new DomainError('INCOMPATIBLE_COMPOSITION', 'PTC disclosure projection is unavailable.');
+      }
+      const projected = deps.projectPtc(agent, transformed, runtime);
+      runtime.refreshPendingProjection = () => {
+        assertActive();
+        try {
+          const refreshed = deps.projectPtc(agent, transformed, runtime);
+          projected.sections.splice(0, projected.sections.length, ...refreshed.sections);
+          runtime.pendingProjectionError = null;
+          return true;
+        } catch (error) {
+          runtime.pendingProjectionError = error;
+          log('projection:pending-refresh-failed', { sessionId: runtime.scope.sessionId, error: String(error) });
+          return false;
+        }
+      };
+      return projected;
     }
     const incoming = Array.isArray(transformed?.tools) ? transformed.tools : [];
     const kept = project(runtime, scope, incoming);

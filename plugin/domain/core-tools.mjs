@@ -7,6 +7,9 @@
 // @deepseek-ai/dsh-web-app/presets/standard.patch.yml 与各核心包逐项扫描。动态注入的子代理
 // 工具（subagent、subagent_fork、list_agents）、workflow 与 exit_plan_mode 一并收录。
 //
+// 维护约定：Core 升版须核验并按差集更新此名单及派生依据；离线检查与动态贡献边界见
+// plugin/docs/12-core-tools-maintenance.md，不能仅更新 peer 范围。
+//
 // 这是**默认值**，不是强制集合：配置里显式给出的 `alwaysVisible` 会完整替换它（包括 `[]`），
 // 部署因此可以增删初始工具而无需改这个文件。某个宿主没有的名字无害：投影只保留该宿主真正
 // 提供的工具。

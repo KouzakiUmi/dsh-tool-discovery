@@ -301,10 +301,19 @@ export function validateConfig(raw) {
 export function createProgressiveDiscoveryAdapter(deps = {}) {
   const apply = async function apply(ctx, rawConfig) {
     const resolved = deps.defineTool === undefined
-      ? { defineTool: (await import('@deepseek-ai/dsh-tools')).defineTool }
+      ? await import('@deepseek-ai/dsh-tools')
       : deps;
     if (typeof resolved.defineTool !== 'function') {
       throw new DomainError('INCOMPATIBLE_COMPOSITION', 'The defineTool dependency is missing.');
+    }
+    let isAgentLoopRequest = deps.isAgentLoopRequest;
+    if (isAgentLoopRequest === undefined) {
+      try { ({ isAgentLoopRequest } = await import('@deepseek-ai/dsh-llm')); }
+      catch (error) {
+        if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error;
+        // native/off 不需要它；开启 PTC 时投影明确拒绝缺失的出站观测契约。
+        isAgentLoopRequest = undefined;
+      }
     }
     // 可信周期的存储依赖：生产按裸包名解析；解析不到就**保持 unavailable 终态**，
     // 不伪造一套内存 domain —— 那等于把"没有权威"伪装成"有权威"。
@@ -513,8 +522,10 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
           catch { return false; }
         },
       });
-      const ptc = createPtcDisclosure({ ctx, lifecycle, log, enabled: ptcEnabled });
-      own(() => ptc.disposeAll());
+      const ptc = createPtcDisclosure({ ctx, lifecycle, log, enabled: ptcEnabled,
+        frameworkRetained: config.frameworkRetained,
+        renderToolsSdk: resolved.renderToolsSdk, renderToolsSdkPy: resolved.renderToolsSdkPy,
+        isAgentLoopRequest });
       own(() => lifecycle.dispose());
 
       // ---- 8.5 可信周期存储：动态子 fiber，作用域内 open/close ----
@@ -572,7 +583,13 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       }
 
       // ---- 5. 投影 ----
-      own(createProjection({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, log, ptcEnabled }));
+      own(createProjection({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, log, ptcEnabled,
+        projectPtc: (agent, assembly, runtime) => ptc.project(agent, assembly, runtime) }));
+      own(ctx.on('llm/stream', (options, next) => {
+        lifecycle.assertActive();
+        ptc.observeRequest(options);
+        return next();
+      }));
 
       // ---- 6. guard（只增拒绝） ----
       own(createGuard({
@@ -586,35 +603,8 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       }));
 
       // ---- 7. session 与 registry 事件 ----
-      own(ctx.on('session/event', (session, event) => {
-        lifecycle.onSessionEvent(session, event);
-        const agent = lifecycle.sessions.get(session.id)?.agentScope;
-        if (agent !== undefined) ptc.sync(agent);
-      }));
-      own(ctx.on('session/disposed', (session) => {
-        const agent = lifecycle.sessions.get(session.id)?.agentScope;
-        lifecycle.disposeSession(session.id);
-        if (agent !== undefined) ptc.lift(agent);
-      }));
-      // SDK 在 assemble 瀑布之前生成。agent/created 赶在首轮之前；inbox 插入赶在
-      // 下一条用户消息的 assemble 之前。load 落定则由上面的 session/event 刷新。
-      own(ctx.on('agent/created', async ({ agent }) => {
-        try {
-          if (agent?.session === undefined) return;
-          if (ptcEnabled() !== true || ctx.tools.modeFor(agent) === 'native') {
-            ptc.lift(agent);
-            return;
-          }
-          const runtime = lifecycle.ensureRuntime(agent.session, agent);
-          if (runtime.restoring) await lifecycle.whenReady(agent.session.id);
-          ptc.sync(agent);
-        } catch (error) {
-          log('ptc:prepare-failed', { error: String(error) });
-        }
-      }));
-      own(ctx.on('agent/inbox/inserted', ({ agent }) => {
-        if (agent !== undefined) ptc.sync(agent);
-      }));
+      own(ctx.on('session/event', (session, event) => lifecycle.onSessionEvent(session, event)));
+      own(ctx.on('session/disposed', (session) => lifecycle.disposeSession(session.id)));
 
       // ---- 7.5 post-next 的 agent/pre-step 屏障 ----
       //

@@ -19,6 +19,9 @@ DSH STORE 对每个第三方插件都从**固定 Commit**读取 manifest、Bundl
 | npm 发布 | `0.2.1`、`0.2.2`、`0.3.0` 已发布（`0.3.0` 自 tag `v0.3.0`，run 38074858965，含 SLSA provenance）；发布不等于已安装到任何 Profile |
 | DSH STORE 收录 / 真实 Profile 加载 | **未验证**；本仓库无上架记录，也未对真实 Profile 执行安装 |
 
+核心工具跟版须同时核验默认名单、动态贡献与周期生效条件，维护流程见
+[核心工具跟版与名单漂移](<12-core-tools-maintenance.md>)。只更新版本范围不能证明工具面已经跟版。
+
 ## 2. 兼容矩阵（manifest 声明）
 
 `package.json` 的 `dsh.compatibility.dshReleases` 对官方当前三个发行版逐项声明：

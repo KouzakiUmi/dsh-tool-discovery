@@ -19,6 +19,7 @@ import { createDiscoveryEngine, CORE_TOOL_NAMES, DomainError } from '../../domai
 import { createJournal, normalizeInheritedBoundary } from './journal.mjs';
 import { resolveAlwaysVisible } from './config.mjs';
 import { requiresTrustedEpoch } from './epoch-policy.mjs';
+import { createNamesDriftObserver } from './names-drift.mjs';
 import {
   BASELINE_STATE, TRUSTED_EPOCH_REASONS, createEpochLedger, trustedEpochBlockedError,
 } from './trusted-epoch.mjs';
@@ -37,6 +38,15 @@ function normalizeOwnBoundary(session) {
  */
 export function createLifecycle(deps) {
   const { ctx, registry, config, clock, random, query, log = () => {} } = deps;
+  const observeNamesDrift = createNamesDriftObserver(log);
+  // 诊断失败不得改变原有屏障或授权结果，不记录可能含私有数据的异常原文。
+  function reportNamesDrift(runtime, point, names) {
+    try {
+      observeNamesDrift(runtime, names ?? currentAlwaysNames(runtime.agentScope), point);
+    } catch {
+      log('lifecycle:names-drift-unavailable', { sessionId: runtime.scope.sessionId, point });
+    }
+  }
 
   /** sessionId → runtime */
   const sessions = new Map();
@@ -166,6 +176,8 @@ export function createLifecycle(deps) {
     assertActive();
     const runtime = sessions.get(sessionId);
     if (runtime === undefined) return { state: 'trusted' };
+    // 恢复期间空名单尚未形成周期快照，不能把它误报为配置漂移。
+    if (!runtime.restoring) reportNamesDrift(runtime, 'pre-step');
     if (!runtime.requireTrustedEpoch) {
       if (runtime.pendingProjectionError) {
         const error = runtime.pendingProjectionError;
@@ -237,6 +249,7 @@ export function createLifecycle(deps) {
    */
   function onEpochBoundary(runtime, info) {
     const names = currentAlwaysNames(runtime.agentScope);
+    if (!runtime.restoring) reportNamesDrift(runtime, 'epoch-boundary', names);
     runtime.initialToolsEnabled = currentInitialToolsEnabled();
     const trigger = info.userInitiated ? 'manual' : 'auto';
     if (!runtime.requireTrustedEpoch) {

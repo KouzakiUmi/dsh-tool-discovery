@@ -24,11 +24,24 @@ what is verified, what is unverified, and what this version refuses to support â
 
 ## [Unreleased]
 
-- PTC advertisement replay also covers SDK selections. A tool removed and loaded again with an unchanged
-  `run_code` header is no longer stuck at `TOOL_NOT_ADVERTISED`.
-- PTC SDK disclosure drops a loaded name whose catalog revision no longer matches, and a live runtime
-  uses the adopted baseline rather than the current configuration. Unload lifts every installed
-  `run_code` restriction.
+- Re-read selection state inside the load queue and reject queued work after disposal, session destruction,
+  fail-closed transitions or an epoch change. Interleaved canonical receipts no longer bypass active-tool budgets.
+- Deep-copy catalog wire before freezing it; host-owned parameter schemas remain mutable and catalog refresh
+  can detect their in-place updates without mutating the previous snapshot.
+- Rebuild compaction observations from the seq-deduplicated restore stream. A live summary also present in
+  the snapshot no longer counts twice; genuinely duplicated summaries still do not reset the epoch.
+- PTC discovery projects the public `tools:sdk` section without installing registry restrictions. Only
+  adopted baseline names and valid selections enter that text; discovery still sees host-authorized tools.
+  The actual branded `llm/stream` request must contain the projected SDK before selections become advertised.
+  Old `run_code` headers and successful loads alone never advertise a newly selected tool. Cold restoration
+  and identical-wire reloading are covered by isolated real-host composition gates for both SDK languages;
+  the program backend and model are declarative fixtures, not production Node/Python workers or a remote model.
+- Fold public PTC dispatch start/settlement events only after verifying the own `run_code` parent, child id,
+  original arguments and final receipt/error state. Orphaned, rewritten and late settlements cannot activate
+  a tool, and unresolved reservations are released when the parent completes.
+- Add deduplicated lifecycle name-drift diagnostics and an evidence-inventory-based offline core-list check.
+  These do not alter core self-admission or trusted-epoch authorization; automatic host inventory export
+  remains unimplemented. Maintenance and activation conditions are documented in `plugin/docs/12-core-tools-maintenance.md`.
 - PTC compatibility is off by default. Off: a PTC session bypasses this plugin and keeps the host
   SDK. On: discovery runs inside `run_code`; the three entries and the current preset's initial
   tools are injected into the next `run_code` SDK instead of the model tool list. `run_code` in

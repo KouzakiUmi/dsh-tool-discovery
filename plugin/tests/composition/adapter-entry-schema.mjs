@@ -6,13 +6,14 @@
 import { dshModule } from '../../contracts/install-resolver.mjs'
 import { createProgressiveDiscoveryAdapter } from '../../adapters/dsh/index.mjs'
 
-const { defineTool } = await import(dshModule('@deepseek-ai/dsh-tools'))
+const { defineTool, renderToolsSdk, renderToolsSdkPy } = await import(dshModule('@deepseek-ai/dsh-tools'))
+const { isAgentLoopRequest } = await import(dshModule('@deepseek-ai/dsh-llm'))
 const Schema = (await import(dshModule('@deepseek-ai/schemastery'))).default
 const storageDomainApi = await import(dshModule('@deepseek-ai/dsh-storage-domain'))
 const zModule = await import(dshModule('zod'))
 
 export default createProgressiveDiscoveryAdapter({
-  defineTool,
+  defineTool, renderToolsSdk, renderToolsSdkPy, isAgentLoopRequest,
   Schema,
   storageDomainApi: { defineDomain: storageDomainApi.defineDomain, domainTable: storageDomainApi.domainTable },
   z: zModule.default ?? zModule
