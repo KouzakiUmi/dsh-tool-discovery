@@ -25,10 +25,12 @@ what is verified, what is unverified, and what this version refuses to support �
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-10-15 — admit newer DSH Core releases
+
 - Open the DSH Core install constraint from the two tested alpha releases to `>=0.2.1-alpha.1` on
-  every `@deepseek-ai/dsh` and `@deepseek-ai/dsh-*` peer, so a newer host release is not refused
-  at installation. This changes admission only. `dshReleases` still records compatibility evidence
-  solely for `0.2.1-alpha.1` and `0.2.1-alpha.2`.
+  every `@deepseek-ai/dsh` and `@deepseek-ai/dsh-*` peer, so a newer host release such as
+  `0.2.1-alpha.3` is not refused at installation. This changes admission only. `dshReleases` still
+  records compatibility evidence solely for `0.2.1-alpha.1` and `0.2.1-alpha.2`.
 
 ## [0.4.1] — 2026-10-14 — load lifecycle and PTC disclosure hardening
 

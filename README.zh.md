@@ -300,7 +300,7 @@ DSH profile；但会在被 Git 忽略的 `plugin/fixtures/tmp/` 下创建临时�
 
 ## 获取源码
 
-本分支的源码版本为 **`0.4.1`**。npm 是否已发布及其 provenance 应以
+本分支的源码版本为 **`0.4.2`**。npm 是否已发布及其 provenance 应以
 [registry](https://www.npmjs.com/package/dsh-tool-discovery) 为准，GitHub 构建版存在本身不证明 npm 已发布。
 某次下载究竟带哪个版本，以 tarball 内清单为准，不假设 `main`、Release 名与本文始终一致。
 

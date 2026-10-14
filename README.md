@@ -360,7 +360,7 @@ stands.
 
 ## Get the source
 
-The source version on this branch is **`0.4.1`**. npm publication and provenance must be checked in
+The source version on this branch is **`0.4.2`**. npm publication and provenance must be checked in
 [the registry](https://www.npmjs.com/package/dsh-tool-discovery); a GitHub build release alone does
 not establish npm availability. Which version a download carries is decided by its tarball manifest,
 not by assuming that `main`, the release name and this document always agree.
