@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeEngine, SCOPE_A, SCOPE_B, SCOPE_FORK, nextOpId, fakeClock, binding, sampleBindings } from './helpers.mjs';
+import { domainText } from '../../domain/locale.mjs';
 
 const searchOnce = (engine, scope, q = 'glob', cat = 'files') =>
   engine.handleSearch({ category: cat, query: q }, scope);
@@ -47,6 +48,42 @@ test('F03 候选 load 成功,回执 selectionSource=candidate', async () => {
   assert.equal(response.data.schemaDelivery, 'native_tools_only');
   assert.equal(applied, true);
   assert.equal(engine.getState(SCOPE_A).selected.size, 1);
+});
+
+test('F03b 同批次两个候选对同一 toolId 携带冲突 revision → candidateRevisionConflict', async () => {
+  const { engine } = await makeEngine();
+  // 同一工具发两张候选卡（两次检索各铸一个 ref）→ 两个 ref 解析到同一 toolId。
+  const c1 = searchOnce(engine, SCOPE_A).data.candidates[0];
+  const c2 = searchOnce(engine, SCOPE_A).data.candidates.find((c) => c.toolId === c1.toolId);
+  assert.ok(c2 && c2.ref !== c1.ref, '前置：需要同一工具的第二条 ref');
+
+  const conflict = await engine.handleLoad(
+    { candidates: [{ ref: c1.ref, revision: c1.revision }, { ref: c2.ref, revision: 'r_conflict' }] },
+    SCOPE_A,
+    { operationId: nextOpId() },
+  );
+  assert.equal(conflict.response.ok, false);
+  assert.equal(conflict.response.error.code, 'INVALID_ARGS');
+  assert.equal(
+    conflict.response.error.message,
+    domainText.t(['detail', 'candidateRevisionConflict']),
+    '必须是同批次 revision 冲突这条专用错误，而不是被 STALE_CANDIDATE 抢先',
+  );
+  assert.equal(engine.getState(SCOPE_A).selected.size, 0);
+
+  // 既有行为不变①：单候选显式传错 revision 仍是 STALE_CANDIDATE。
+  const stale = await engine.handleLoad(
+    { candidates: [{ ref: c1.ref, revision: 'r_wrong' }] }, SCOPE_A, { operationId: nextOpId() },
+  );
+  assert.equal(stale.response.error.code, 'STALE_CANDIDATE');
+  // 既有行为不变②：同一工具携带**相同** revision 的两张卡是幂等的正常路径。
+  const same = await engine.handleLoad(
+    { candidates: [{ ref: c1.ref, revision: c1.revision }, { ref: c2.ref, revision: c1.revision }] },
+    SCOPE_A,
+    { operationId: nextOpId() },
+  );
+  assert.equal(same.response.ok, true, JSON.stringify(same.response.error));
+  assert.equal(same.response.data.receipt.selected.length, 1, '同一 toolId 只应出现一次');
 });
 
 test('完整 native schema 不进 skills/history(F02/§6)', async () => {

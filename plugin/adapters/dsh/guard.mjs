@@ -47,6 +47,13 @@ export function createGuard(deps) {
         return `tool "${exec.name}" is not admitted: STATE_NOT_READY (${reason})`;
       }
       if (runtime.alwaysNameSet?.has(exec.name) === true) return undefined;
+      // 与 native 分支同一道闸（有 listener 在我们的投影之后重加了未披露工具 →
+      // 整会话 fail closed）：位置与 native 语义对齐 —— alwaysNameSet 早退之后、
+      // evaluateCall 之前。漏掉它，bypass 会话在 PTC 模式下仍可凭已曝光工具执行。
+      if (runtime.compositionBypass !== null) {
+        log('guard:bypass-closed', { sessionId: agent.session.id, name: exec.name, leaked: runtime.compositionBypass.names });
+        return `tool "${exec.name}" is not admitted: INCOMPATIBLE_COMPOSITION`;
+      }
       // 已加载项走与 native 相同的 evaluateCall：失效、版本不符、未曝光都不能凭名字放行。
       const outcome = runtime.engine.evaluateCall(runtime.scope, {
         name: exec.name,

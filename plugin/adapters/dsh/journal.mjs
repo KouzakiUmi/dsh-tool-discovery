@@ -110,6 +110,10 @@ export function foldPairs(events) {
     for (const callSeq of sources) {
       const call = calls.get(callSeq);
       if (call === undefined || (call.ptcParentCallId !== undefined) !== (event.ptcNormalized === true)) continue;
+      // 命中即消费（与热态 onEvent 的 liveCalls.delete 同一语义）：callSeq 被首个
+      // result 认领后就从候选里删除 —— 即使该 result 外壳非法（解析失败、不激活），
+      // 也不给后续同 callSeq 的伪造/重复 result 第二次折叠机会。
+      calls.delete(callSeq);
       const shell = parseResultEnvelope(resultText(event));
       if (shell === null) continue;
       pairs.push({
@@ -457,6 +461,9 @@ export function createJournal(deps) {
    */
   function applyAdvertisementPass(byName, headerSeq) {
     const state = engine.getState(scope);
+    // 与 recordSdkAdvertisements 同一形状守卫：上游传入非预期形状时不得抛错
+    // （restore 重放 / replayAdvertisements 都可能赶在引擎 ready 之前触达这里）。
+    if (state?.mode !== 'ready' || typeof state.selected?.entries !== 'function') return;
     for (const [toolId, selection] of state.selected) {
       const advertisedTool = byName.get(selection.name);
       if (advertisedTool === undefined) continue;
@@ -849,6 +856,38 @@ export function createJournal(deps) {
       for (const event of ownEvents) {
         if (event.seq > lastSuccessCompactionEndSeq && event.type === 'request/header') {
           rememberDisclosedWire(event.data?.header?.tools);
+          // 恢复头部状态，并按热态同一函数（applyAdvertisementPass，与 onEvent 的
+          // recordAdvertisements 应用段共用）重放曝光对账：
+          //   * 不重放 → 冷恢复后按需加载工具的 frozen/advertised 恒为空；
+          //   * 恢复窗口内 buffer 里已有的本轮 header 激发的 advertised，会被随后
+          //     完成的 engine.restore()（reducePair 重选清 advertised）覆盖清空，
+          //     当轮已加载工具被误拒 TOOL_NOT_ADVERTISED。
+          // latestHeaderSeq / latestHeaderTools 一并还原：requestId 判据依赖它。
+          // **刻意不**重放泄漏检测（reportBypass）：历史 header 的披露集合对应
+          // "当时"的 selected，与恢复完成后的最终 selected 对不上，拿最终状态
+          // 对账会把当时合法披露、之后被 unload 的工具误判成泄漏。
+          const headerTools = event.data?.header?.tools;
+          if (Array.isArray(headerTools)) {
+            latestHeaderSeq = event.seq;
+            latestHeaderTools = headerTools;
+            applyAdvertisementPass(new Map(headerTools.map((tool) => [tool.name, tool])), event.seq);
+          }
+        }
+      }
+      // 缓冲期由 live onEvent 写入、但已并入合并流的配对现场：快照结算之后它们
+      // 不再是"在途"——不清掉，pendingLoadNames 会把这些已结算的 load 永久当作
+      // "即将生效"。语义与热态一致：每个事件先过**同一个** normalizePtcEvent 归一口径
+      // （raw `tool/ptc-dispatch` 的 PTC 子调用结算在这里才归一成 canonical tool/result；
+      // 只按 raw type 过滤会漏掉它们，快照里结算的 PTC 子调用会在 liveCalls 残留），
+      // result 的 sourceEventSeqs 命中即消费（tool_load 子调用直接删；PTC 父调用按
+      // normalizePtcEvent 的同一判据删）。
+      for (const rawEvent of ownEvents) {
+        const event = normalizePtcEvent(rawEvent, ptcParents, liveCalls);
+        if (event === null || event.type !== 'tool/result') continue;
+        const sources = Array.isArray(event.sourceEventSeqs) ? event.sourceEventSeqs : [];
+        for (const callSeq of sources) liveCalls.delete(callSeq);
+        for (const [id, parentSeq] of [...ptcParents]) {
+          if (sources.includes(parentSeq)) ptcParents.delete(id);
         }
       }
       stopBuffering();

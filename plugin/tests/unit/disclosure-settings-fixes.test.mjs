@@ -162,3 +162,41 @@ test('DF9 PTC compatibility off bypasses the guard', () => {
   assert.equal(listeners.get('guard')({ name: 'hidden_tool', agent }), undefined);
   assert.equal(created, 0);
 });
+
+// DF10（PTC 分支缺 bypass 门禁）：与 native 分支同一道闸 —— 位置对齐
+// （alwaysNameSet 早退之后、evaluateCall 之前）。否则 bypass 会话在 PTC 模式下
+// 仍可凭已曝光/已加载工具执行。
+test('DF10 PTC 模式下 bypass 会话拒绝已曝光工具并记 guard:bypass-closed 日志', () => {
+  const logs = [];
+  const listeners = new Map();
+  const runtime = {
+    scope: SCOPE_A, restoring: false, compositionBypass: { names: ['leaked_tool'] }, requireTrustedEpoch: false,
+    initialToolsEnabled: true, alwaysNameSet: new Set(['preset_only']),
+    // 引擎本身放行（allowed:true）：拒绝只能来自 bypass 门禁，而非 evaluateCall
+    engine: { evaluateCall: () => ({ allowed: true }) },
+    journal: { pendingLoadNames: () => new Set(), currentRequestId: () => 'r1' },
+  };
+  const ctx = {
+    tools: {
+      modeFor: () => 'ptc',
+      get: (name) => ({ name }),
+      guard: (fn) => { listeners.set('guard', fn); return () => {}; },
+    },
+  };
+  createGuard({
+    ctx,
+    lifecycle: { runtimeFor: () => runtime },
+    log: (event, detail) => logs.push([event, detail]),
+    ptcEnabled: () => true,
+  });
+  const agent = { session: { id: SCOPE_A.sessionId } };
+  const guard = listeners.get('guard');
+  assert.match(guard({ name: 'loaded_tool', agent }), /INCOMPATIBLE_COMPOSITION/,
+    'bypass 会话在 PTC 模式下必须拒绝（与 native 分支同语义）');
+  const bypassLogs = logs.filter(([event]) => event === 'guard:bypass-closed');
+  assert.equal(bypassLogs.length, 1, '必须保留 bypass-closed 审计日志');
+  assert.deepEqual(bypassLogs[0][1].leaked, ['leaked_tool']);
+  assert.equal(bypassLogs[0][1].name, 'loaded_tool');
+  // 与 native 分支放行顺序一致：alwaysNameSet 早退仍在门禁之前
+  assert.equal(guard({ name: 'preset_only', agent }), undefined);
+});

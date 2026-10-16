@@ -224,3 +224,57 @@ test('R8: scope 目录代次仍按 tools/change 推进（旧 ref/cursor 失效�
   assert.notEqual(bumped, initial)
   assert.equal(registry.generationFor('agent:agent_A'), registry.generationFor('agent:agent_A'))
 })
+// ---------------------------------------------------------------------------
+// R10（跨会话字典只增不减）：disposeScope 删除该 scope 的 generations/lastSeen/
+// bindingState 条目；retireAbsent 的「留键清值」语义（重加不得复用旧代次）不受影响。
+// ---------------------------------------------------------------------------
+test('R10: disposeScope 删除该 scope 的键；retireAbsent 留键语义与其他 scope 不受影响', () => {
+  const { ctx, global, scopes } = fakeCtx()
+  const registry = makeRegistry(ctx)
+  const scopeA = { id: 'agent_A' }
+  const scopeB = { id: 'agent_B' }
+  global.set('read_file', def('read_file'))
+  scopes.set(scopeKeyOf(scopeA), new Map([['a_only', def('a_only')]]))
+  scopes.set(scopeKeyOf(scopeB), new Map([['b_only', def('b_only')]]))
+
+  const viewA = registry.bindingsFor(scopeA)
+  registry.remember(viewA.scopeKey, viewA.bindings)
+  const viewB = registry.bindingsFor(scopeB)
+  registry.remember(viewB.scopeKey, viewB.bindings)
+
+  // retireAbsent 既有语义回归：缺席 → 留键清值 + 预换代；重加不得复用旧代次
+  scopes.get(scopeKeyOf(scopeA)).delete('a_only')
+  const viewA2 = registry.bindingsFor(scopeA)
+  assert.equal(viewA2.bindings.some((b) => b.name === 'a_only'), false)
+  scopes.get(scopeKeyOf(scopeA)).set('a_only', def('a_only'))
+  const viewA3 = registry.bindingsFor(scopeA)
+  assert.notEqual(genOf(viewA3, 'a_only'), genOf(viewA, 'a_only'),
+    '前置：retireAbsent 留键语义必须先成立（重加得到新代次），否则本例空过')
+
+  // 世代字典也有内容（bump 后 >1），dispose 后必须回到冷启动初值
+  registry.bumpGeneration(scopeA)
+  assert.notEqual(registry.generationFor(viewA.scopeKey), registry.generationFor(viewB.scopeKey))
+
+  registry.disposeScope(scopeA)
+
+  // scope 目录代次回到初值（键已删除）
+  assert.equal(registry.generationFor(viewA.scopeKey), `bg_${viewA.scopeKey}_1`,
+    'scope A 的目录代次键必须已删除（回到冷启动初值）')
+  assert.notEqual(registry.generationFor(viewA.scopeKey), registry.generationFor(viewB.scopeKey),
+    '其他 scope 的旧键不受影响')
+  // 绑定代次也回到首见初值
+  const viewA4 = registry.bindingsFor(scopeA)
+  assert.equal(genOf(viewA4, 'a_only'), genOf(viewA, 'a_only'),
+    'bindingState 的键必须已删除（绑定代次回到首见初值）')
+  // lastSeen 已删除：重新登记前 diff 视为「全新快照」（全部计入 added）
+  const diff = registry.diffAgainst(scopeA, viewA4.bindings)
+  assert.deepEqual(sortedAdded(diff), sortedAdded({ added: viewA4.bindings.map((b) => b.toolId) }),
+    'lastSeen 键必须已删除（diff 回到无上一次快照形态）')
+  // scope B 照常工作
+  const viewB2 = registry.bindingsFor(scopeB)
+  assert.equal(genOf(viewB2, 'b_only'), genOf(viewB, 'b_only'), 'scope B 的绑定代次不受影响')
+})
+
+function sortedAdded (diff) {
+  return [...diff.added].sort()
+}

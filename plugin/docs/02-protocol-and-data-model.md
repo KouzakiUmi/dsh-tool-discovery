@@ -412,8 +412,10 @@ interface SessionDiscoveryState {
     applied: number
     duplicatesIgnored: number
     outOfOrderIgnored: number
-    gaps: number[]
+    gaps: number[] // 仅保留最近 GAP_HISTORY_LIMIT(8) 条
+    gapsTotal: number // 缺口累计总数（gaps 被裁剪后仍可追溯）
     rejected: number
+    coldCandidateRestores: number
   }
 }
 ```
@@ -496,7 +498,7 @@ token、字符与字节是不同单位；没有 tokenizer 时一律走估算并�
 8. 入口与框架保留项在折叠侧再次拦截（`protected-tool`），不被热态逐字比较或冷态重算绕过。
 9. `unload`：`toolIds` 必须 ⊇ `deselected`，且不得包含入口或框架保留项。
 10. 幂等：同 `toolId` 同 `revision` 重复 → 接受但不重复计费或追加；同 `toolId` **不同** revision 的显式重选 = 新选择，先失效旧记录。
-11. 序号：重复或更小的 `seq` 计入 `duplicatesIgnored` / `outOfOrderIgnored` 且不改状态；`seq > lastAppliedSeq+1` 记入 `integrity.gaps`，不静默丢弃。
+11. 序号：重复或更小的 `seq` 计入 `duplicatesIgnored` / `outOfOrderIgnored` 且不改状态；`seq > lastAppliedSeq+1` 记入 `integrity.gaps`，不静默丢弃；`gaps` 只保留最近 8 条（`GAP_HISTORY_LIMIT`），累计总数另记在 `gapsTotal`。
 12. 成功条件为 `isError === false` **且** 协议 `ok === true`，**只满足协议 ok 不算成功**。
 13. `tool_list` / `tool_search` 的结果、用户文本、网页内容与压缩摘要**都不能授权激活**；被 renderer / pruner 改写的回执不激活。
 14. 恢复先订阅并缓存，再读 query 快照，按 `seq` 合并去重，防止漏事件。

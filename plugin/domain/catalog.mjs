@@ -2,7 +2,7 @@
 // schema 身份、版本与不可变目录快照。
 // 不依赖宿主:schema 身份由"有效 wire 字段"的无损 canonical JSON 完全重算。
 import { classifyBinding } from './categories.mjs';
-import { canonicalJson, deepFreeze, deepEqualCanonical, digestOf, utf8Bytes } from './canonical.mjs';
+import { canonicalJson, deepFreeze, deepEqualCanonical, digestOf, sha256Hex, utf8Bytes } from './canonical.mjs';
 import { DomainError } from './errors.mjs';
 import { isNonEmptyString, isPlainObject, sortBy } from './util.mjs';
 
@@ -103,8 +103,12 @@ export function validateBinding(b) {
 export function buildEntry(b) {
   // 冻结的只能是内核自有快照，不能递归冻结 adapter/宿主共享的 parameters。
   // 先按身份核算的同一 canonical JSON 口径深复制；非法 JSON 值仍明确拒绝。
-  const wire = JSON.parse(canonicalJson(b.wire));
-  const schemaDigest = digestOf(wire);
+  // 同一份 wire 只序列化一次：schemaDigest 与 wireBytes 必须落在**同一份** canonical
+  // 文本上（canonicalJson 是 JSON 的规范形，`parse → 再序列化` 是它的不动点，
+  // 故 `sha256Hex(wireJson)` 与 `digestOf(wire)` 逐字相等，字节数同理）。
+  const wireJson = canonicalJson(b.wire);
+  const wire = JSON.parse(wireJson);
+  const schemaDigest = `sha256:${sha256Hex(wireJson)}`;
   const skillRevision = b.skill ? b.skill.skillRevision : 'none';
   // revision 同时覆盖 wire 身份、技能版本与可证明的注册绑定代次。
   const revision = `r_${digestOf({ schemaDigest, skillRevision, bindingGeneration: b.bindingGeneration ?? null })}`;
@@ -128,7 +132,7 @@ export function buildEntry(b) {
     shadowOf: b.shadowOf ?? null,
     bindingGeneration: b.bindingGeneration ?? null,
     wire,
-    wireBytes: utf8Bytes(canonicalJson(wire)),
+    wireBytes: utf8Bytes(wireJson),
     skill: b.skill ? { ...b.skill, limitations: b.skill.limitations.slice() } : null,
   };
 }

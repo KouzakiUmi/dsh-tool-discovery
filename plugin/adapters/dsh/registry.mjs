@@ -112,6 +112,28 @@ export function createRegistryAdapter(deps) {
   }
 
   /**
+   * 会话释放：删除该 scope 的全部跨会话字典条目（generations / lastSeen / bindingState）。
+   *
+   * 为什么**不**沿用 retireAbsent 的"留键清值"：那是给**还活着**的 scope 用的 ——
+   * 缺席绑定的代次计数必须保留（重加时从旧值 +1，不得复用旧代次），所以键不能删。
+   * 而 scope 本身随会话释放后，这些键不再有任何读者（同一 agent scope id 不会
+   * 复活成需要延续代次语义的会话），留着就是纯泄漏。唯一调用点是 lifecycle 的
+   * disposeSession。global 键（scope 为 undefined）不由本方法负责 —— 会话释放
+   * 永远带着自己的 agent scope。
+   * @param {any} scope agent scope
+   */
+  function disposeScope(scope) {
+    const scopeKey = scopeKeyOf(scope);
+    generations.delete(scopeKey);
+    lastSeen.delete(scopeKey);
+    const prefix = `${scopeKey}\u0000`;
+    for (const key of [...bindingState.keys()]) {
+      if (key.startsWith(prefix)) bindingState.delete(key);
+    }
+    log('registry:scope-disposed', { scopeKey });
+  }
+
+  /**
    * 当前 scope 的可见集合 → CatalogBindingDTO[]。
    * 入口与可信 framework 保留项不进目录（它们不可 load/unload）。
    * 每个绑定带**自己的**绑定代次（见文件头「绑定代次」段）。
@@ -218,6 +240,7 @@ export function createRegistryAdapter(deps) {
     remember,
     bumpGeneration,
     diffAgainst,
+    disposeScope,
     findEntryConflicts,
     /** 当前 scope 下按名称解析的 toolId（guard/projection 只读）。 */
     toolIdFor(scope, name) {

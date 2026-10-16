@@ -224,3 +224,29 @@ test('R12 审查报告#8: recomputeSelectionIdentity 复用 recomputeIdentity，
   assert.equal(selection.computed.revision, direct.revision);
   assert.equal(selection.computed.schemaDigest, direct.schemaDigest);
 });
+
+test('R13 destroySession 回收本会话的 ref 与 cursor（不留残留，也不误杀别的会话）', async () => {
+  const { engine } = await makeEngine();
+  const refA = engine.handleSearch({ category: 'files', query: 'glob' }, SCOPE_A).data.candidates[0].ref;
+  const pageA = engine.handleList({ view: 'available', category: 'all', limit: 1 }, SCOPE_A);
+  assert.equal(typeof pageA.data.nextCursor, 'string', '前置：必须有第二页才能拿到游标');
+  // 正控制：另一个会话的条目必须原样活着。
+  const refB = engine.handleSearch({ category: 'files', query: 'glob' }, SCOPE_B).data.candidates[0].ref;
+  const pageB = engine.handleList({ view: 'available', category: 'all', limit: 1 }, SCOPE_B);
+  assert.equal(typeof pageB.data.nextCursor, 'string');
+
+  engine.destroySession(SCOPE_A.sessionId);
+
+  // ref：同一 sessionId 的 runtime 重建后旧 ref 仍会解析成功 —— 必须已被回收。
+  const load = await engine.handleLoad({ candidates: [{ ref: refA }] }, SCOPE_A, { operationId: nextOpId() });
+  assert.equal(load.response.ok, false, '销毁后旧 ref 不得继续可用');
+  assert.equal(load.response.error.code, 'CANDIDATE_UNAVAILABLE');
+  // cursor：只在 issue 时顺带清扫过期项时，单页列表的游标永远不会被清。
+  const page2 = engine.handleList({ view: 'available', category: 'all', cursor: pageA.data.nextCursor }, SCOPE_A);
+  assert.equal(page2.ok, false, '销毁后旧游标不得继续可用');
+  assert.equal(page2.error.code, 'CURSOR_UNAVAILABLE');
+
+  // 正控制：B 的 ref 与游标不受影响。
+  assert.equal((await engine.handleLoad({ candidates: [{ ref: refB }] }, SCOPE_B, { operationId: nextOpId() })).response.ok, true);
+  assert.equal(engine.handleList({ view: 'available', category: 'all', cursor: pageB.data.nextCursor }, SCOPE_B).ok, true);
+});

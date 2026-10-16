@@ -84,9 +84,11 @@ export function validateListRequest(raw, budgets = DEFAULT_BUDGETS) {
   }
 
   if (view === 'state') {
-    assertOnlyKeys(o, ['view']);
+    // 先给这两条**专用**错误机会：category / cursor 是已知键，报 unknownField 会把
+    // "这个视图不接受它" 误述成 "这个字段不存在"。其余键的判定顺序与结果不变。
     if (o.category !== undefined) throw new DomainError('INVALID_ARGS', t(['detail', 'stateViewRejectsCategory']));
     if (o.cursor !== undefined) throw new DomainError('INVALID_ARGS', t(['detail', 'stateViewRejectsCursor']));
+    assertOnlyKeys(o, ['view']);
     return { view, limit };
   }
 

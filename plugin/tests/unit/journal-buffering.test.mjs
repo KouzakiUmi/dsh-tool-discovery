@@ -27,7 +27,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createJournal } from '../../adapters/dsh/journal.mjs';
+import { createJournal, foldPairs } from '../../adapters/dsh/journal.mjs';
 import { createLifecycle } from '../../adapters/dsh/lifecycle.mjs';
 import { epochKeyOfRecord } from '../../adapters/dsh/trusted-epoch.mjs';
 import { makeEngine, sampleBindings, fakeRandom } from './helpers.mjs';
@@ -311,3 +311,176 @@ function makeRegistry() {
     diffAgainst: () => ({ added: [], removed: [] }),
   };
 }
+// ---------------------------------------------------------------------------
+// JB-U10（冷恢复配对语义）：foldPairs 命中 call 必须立即消费 callSeq，与热态
+// onEvent 的 liveCalls.delete 同一语义 —— 否则首个非法 result 之后，同 callSeq 的
+// 伪造/重复 result 会被折叠激活。
+// ---------------------------------------------------------------------------
+test('JB-U10 foldPairs 命中即消费：非法首个 result 不得给伪造重复 result 第二次机会', () => {
+  const events = [
+    toolCallEvent(1, 'c1', ['glob']),
+    // 首个 result 命中 call，但外壳非法（非 tool_load 协议外壳）→ 不激活
+    { seq: 2, sourceEventSeqs: [1], type: 'tool/result', data: { message: { isError: false, content: [{ type: 'text', text: 'plain error text' }] } } },
+    // 同 callSeq 的伪造/重复 result，外壳合法 → 冷恢复不得把它折叠激活
+    toolResultEvent(3, 1, { names: ['glob'] }),
+  ];
+  assert.deepEqual(foldPairs(events), [], 'callSeq 被首个 result 认领后必须删除，伪造重复不得激活');
+  // 正向对照：合法首个 result 照常折叠（修的是消费时序，不是折叠能力）
+  const good = [toolCallEvent(1, 'c1', ['glob']), toolResultEvent(2, 1, { names: ['glob'] })];
+  assert.equal(foldPairs(good).length, 1, '合法配对必须照常折叠');
+});
+
+// ---------------------------------------------------------------------------
+// JB-U11/12（冷恢复丢失 frozen/advertised 与头部状态）：restore 必须按热态同一
+// 函数（applyAdvertisementPass）重放压缩边界之后的 request/header，并还原
+// latestHeaderSeq / latestHeaderTools —— 否则冷恢复后当轮已加载工具被误拒
+// TOOL_NOT_ADVERTISED。fixture 用真实 domain 引擎（回执来自真实 handleLoad）。
+// ---------------------------------------------------------------------------
+const loadedWireOf = (engine, name) => [...engine.getCatalog().entries.values()].find((e) => e.name === name).wire;
+const entryHeaderEvent = (seq) => ({ seq, type: 'request/header', data: { header: { tools: [{ name: 'tool_list' }] } } });
+
+test('JB-U11 冷恢复重放 header 曝光：恢复后当轮已加载工具可执行，requestId 还原', async () => {
+  const { engine } = await makeEngine({ bindings: sampleBindings() });
+  const scope = { sessionId: 'sess_jb11', actorId: 'actor_jb11' };
+  // 真实回执：保证 result payload 与 catalog 的 revision/digest 匹配
+  const loaded = await engine.handleLoad({ names: ['glob'] }, scope, { operationId: 'op_c1' });
+  assert.equal(loaded.response.ok, true, '前置：load 必须成功');
+  const receipt = loaded.response.data.receipt;
+  const loadedWire = loadedWireOf(engine, 'glob');
+  const logs = [];
+  const journal = createJournal({
+    ctx: {}, session: { inheritedEventCount: 0 }, scope, engine,
+    query: { readSession: async () => ({ inheritedEventCount: 0, events: [
+      entryHeaderEvent(0),
+      toolCallEvent(1, 'c1', ['glob']),
+      toolResultEvent(2, 1, receipt),
+      { seq: 3, type: 'request/header', data: { header: { tools: [loadedWire] } } },
+    ] }) },
+    log: (event, detail) => logs.push([event, detail]),
+  });
+
+  const outcome = await journal.restore();
+
+  assert.equal(outcome.mode, 'ready', `前置：恢复必须 ready：${JSON.stringify(outcome)}`);
+  assert.equal(engine.getState(scope).selected.size, 1, '前置：pair 已折叠激活');
+  assert.equal(journal.currentRequestId(), 'sess_jb11#3', 'latestHeaderSeq 必须还原为本轮最后一次 header');
+  const verdict = engine.evaluateCall(scope, { name: 'glob', requestId: journal.currentRequestId(), registeredInScope: true });
+  assert.equal(verdict.allowed, true, `恢复后必须按重放的 header 记账放行（修复前 TOOL_NOT_ADVERTISED）：${JSON.stringify(verdict)}`);
+  // 首见 wire 披露缓存照旧恢复（本轮两个 header 的工具都在）
+  const disclosed = journal.disclosedWire().map((w) => w.name);
+  assert.deepEqual([...disclosed].sort(), ['glob', 'tool_list']);
+});
+
+test('JB-U12 恢复重放幂等：engine.restore 不得把 live 期间已建立的曝光记账退回去', async () => {
+  // 回归护栏（修复前后皆绿）：热态先折叠 + 记账、随后 restore 重选同代次 ——
+  // reducePair 对同 revision 重选幂等保留 advertised；重放（applyAdvertisementPass）
+  // 是覆盖写/按 digest 删除语义，重复执行只会让记账回到与 header 一致的状态。
+  // 注：缺陷单里"engine.restore() 覆盖清空 advertised"的形态在当前 domain 引擎
+  // （同代次重选不清 advertised、stale-seq 去重）下无法复现；红灯核实的是
+  // JB-U11（冷恢复从未记账）与头部状态还原两处。
+  const { engine } = await makeEngine({ bindings: sampleBindings() });
+  const scope = { sessionId: 'sess_jb12', actorId: 'actor_jb12' };
+  const loaded = await engine.handleLoad({ names: ['glob'] }, scope, { operationId: 'op_c1' });
+  const receipt = loaded.response.data.receipt;
+  const loadedWire = loadedWireOf(engine, 'glob');
+  const gate = deferred();
+  const logs = [];
+  const journal = createJournal({
+    ctx: {}, session: { inheritedEventCount: 0 }, scope, engine,
+    // readSession 卡住：header 在恢复窗口内经 live onEvent 抵达并完成记账
+    query: { readSession: async () => { await gate.promise; return { inheritedEventCount: 0, events: [] }; } },
+    log: (event, detail) => logs.push([event, detail]),
+  });
+  journal.onEvent(entryHeaderEvent(0));
+  journal.onEvent(toolCallEvent(1, 'c1', ['glob']));
+  journal.onEvent(toolResultEvent(2, 1, receipt));
+  journal.onEvent({ seq: 3, type: 'request/header', data: { header: { tools: [loadedWire] } } });
+  assert.equal(
+    engine.evaluateCall(scope, { name: 'glob', requestId: journal.currentRequestId(), registeredInScope: true }).allowed,
+    true, '前置：live 路径已按 header 记账放行');
+
+  gate.resolve();
+  const outcome = await journal.restore();
+  assert.equal(outcome.mode, 'ready', `前置：恢复必须 ready：${JSON.stringify(outcome)}`);
+  // engine.restore 重选会清掉 advertised（reducePair）；重放必须把它补回
+  const verdict = engine.evaluateCall(scope, { name: 'glob', requestId: journal.currentRequestId(), registeredInScope: true });
+  assert.equal(verdict.allowed, true, `engine.restore 清掉的曝光必须由重放补回：${JSON.stringify(verdict)}`);
+  assert.deepEqual([...journal.pendingLoadNames()], [], '已结算的 load 不得停留在"即将生效"');
+});
+
+// ---------------------------------------------------------------------------
+// JB-U13（恢复后残留 liveCalls）：缓冲期 live 写入、但快照已结算的配对现场必须
+// 清理 —— 否则 pendingLoadNames 永久返回该工具，guard 把已生效的 load 永远当作
+// "即将生效"。
+// ---------------------------------------------------------------------------
+test('JB-U13 缓冲期 live 写入、快照已结算的配对现场不得残留', async () => {
+  const { engine } = await makeEngine({ bindings: sampleBindings() });
+  const scope = { sessionId: 'sess_jb13', actorId: 'actor_jb13' };
+  const loaded = await engine.handleLoad({ names: ['glob'] }, scope, { operationId: 'op_c1' });
+  const receipt = loaded.response.data.receipt;
+  const gate = deferred();
+  const logs = [];
+  const journal = createJournal({
+    ctx: {}, session: { inheritedEventCount: 0 }, scope, engine,
+    // call 在缓冲期 live 抵达，result 只存在于快照里
+    query: { readSession: async () => { await gate.promise; return { inheritedEventCount: 0, events: [
+      entryHeaderEvent(0),
+      toolCallEvent(1, 'c1', ['glob']),
+      toolResultEvent(2, 1, receipt),
+    ] }; } },
+    log: (event, detail) => logs.push([event, detail]),
+  });
+  journal.onEvent(entryHeaderEvent(0));
+  journal.onEvent(toolCallEvent(1, 'c1', ['glob']));
+  assert.deepEqual([...journal.pendingLoadNames()], ['glob'], '前置：缓冲期它确实被当作在途');
+
+  gate.resolve();
+  const outcome = await journal.restore();
+  assert.equal(outcome.mode, 'ready', `前置：恢复必须 ready：${JSON.stringify(outcome)}`);
+  assert.equal(engine.getState(scope).selected.size, 1, '前置：快照里的 pair 已结算激活');
+  assert.deepEqual([...journal.pendingLoadNames()], [], '已结算的 load 不得永久停留在"即将生效"（修复前这里残留 glob）');
+});
+
+// ---------------------------------------------------------------------------
+// JB-U14（PTC 子调用的快照结算同样必须清理配对现场）：raw `tool/ptc-dispatch`
+// 在热态经 normalizePtcEvent 归一成 canonical tool/result 后命中即消费；restore 的
+// 清理循环只按 raw type 过滤 `tool/result` 时会漏掉它 —— 结算只存在于快照里的
+// PTC 子调用会在 liveCalls 残留，pendingLoadNames 把已生效的 load 永久当作"即将生效"。
+// 判据必须与热态同源：清理前先过同一个 normalizePtcEvent。
+// ---------------------------------------------------------------------------
+test('JB-U14 PTC 子调用结算只在快照里时，恢复后不得残留在途配对现场', async () => {
+  const { engine } = await makeEngine({ bindings: sampleBindings() });
+  const scope = { sessionId: 'sess_jb14', actorId: 'actor_jb14' };
+  // 真实回执：保证 PTC 子调用的 content 与 catalog 的 revision/digest 匹配
+  const input = { names: ['glob'] };
+  const loaded = await engine.handleLoad(input, scope, { operationId: 'op_child' });
+  assert.equal(loaded.response.ok, true, '前置：load 必须成功');
+  const parent = { seq: 1, type: 'tool/call', data: { callId: 'rc1', name: 'run_code', arguments: {} } };
+  const start = { seq: 2, type: 'tool/ptc-dispatch-start', data: { parentCallId: 'rc1', subCallId: 'child',
+    name: 'tool_load', arguments: input } };
+  const settlement = { seq: 3, type: 'tool/ptc-dispatch', data: { ...start.data, isError: false,
+    content: [{ type: 'text', text: JSON.stringify(loaded.response) }] } };
+  const gate = deferred();
+  const logs = [];
+  const journal = createJournal({
+    ctx: {}, session: { inheritedEventCount: 0 }, scope, engine,
+    // run_code 父调用与 ptc-dispatch-start 在缓冲期 live 抵达，raw tool/ptc-dispatch
+    // 结算只存在于快照里
+    query: { readSession: async () => { await gate.promise; return { inheritedEventCount: 0, events: [
+      entryHeaderEvent(0), parent, start, settlement,
+    ] }; } },
+    log: (event, detail) => logs.push([event, detail]),
+  });
+  journal.onEvent(entryHeaderEvent(0));
+  journal.onEvent(parent);
+  journal.onEvent(start);
+  assert.deepEqual([...journal.pendingLoadNames()], ['glob'],
+    '前置：缓冲期 PTC 子调用确实被当作在途');
+
+  gate.resolve();
+  const outcome = await journal.restore();
+  assert.equal(outcome.mode, 'ready', `前置：恢复必须 ready：${JSON.stringify(outcome)}`);
+  assert.equal(engine.getState(scope).selected.size, 1, '前置：快照里的 PTC 子调用已结算激活');
+  assert.deepEqual([...journal.pendingLoadNames()], [],
+    '快照里已结算的 PTC 子调用不得永久停留在"即将生效"（修复前这里残留 glob）');
+});

@@ -77,7 +77,7 @@
 | `invalidated` | 作废原因，供状态视图解释 | 同 selected |
 
 外加 `epoch`（缓存周期号）、`lastAppliedSeq`、`integrity`（applied / duplicatesIgnored /
-outOfOrderIgnored / gaps / rejected / coldCandidateRestores）。
+outOfOrderIgnored / gaps / gapsTotal / rejected / coldCandidateRestores）。
 
 ### 关键不变量
 

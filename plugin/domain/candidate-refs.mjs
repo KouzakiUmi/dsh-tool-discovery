@@ -73,6 +73,18 @@ export function createRefStore(deps) {
       }
     },
 
+    /**
+     * 按会话回收（会话销毁 / HMR）：ref 由 sessionId 归属，销毁后不得继续可用
+     * （同一 sessionId 的 runtime 重建后，旧 ref 仍会解析成功 —— 那是同一会话的残留数据）。
+     * 只在 `issue()` 里顺带清扫过期项不够：TTL 未到时它一条都不会被清。
+     * @param {string} sessionId
+     */
+    dropForSession(sessionId) {
+      for (const [ref, rec] of store) {
+        if (rec.sessionId === sessionId) store.delete(ref);
+      }
+    },
+
     /** 清空(会话销毁 / HMR)。 */
     clear() {
       store.clear();

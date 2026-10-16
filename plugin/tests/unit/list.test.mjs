@@ -1,7 +1,7 @@
 // tool_list 四视图、opaque 分页与游标失效测试(F11/F12/F13)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeEngine, SCOPE_A, SCOPE_B, nextOpId, fakeClock } from './helpers.mjs';
+import { makeEngine, SCOPE_A, SCOPE_B, nextOpId, fakeClock, sampleBindings } from './helpers.mjs';
 import { binding } from './helpers.mjs';
 
 test('F11 available:只返回完整名称,无描述/schema/revision', async () => {
@@ -302,4 +302,86 @@ test('STATE_NOT_READY:恢复未完成的会话不可执行任何入口', async (
   assert.equal(ld.response.error.code, 'STATE_NOT_READY');
   const g = engine.evaluateCall(SCOPE_A, { name: 'glob' });
   assert.equal(g.allowed, false);
+});
+
+test('F12e state 视图与 tool_load 门禁使用同一份活跃预算核算', async () => {
+  /** 同一状态装配：① 已披露(冻结)的 glob ② 已选未披露的 grep ③ 未决预留的 read_file。 */
+  async function assemble(engine) {
+    const globOp = nextOpId();
+    const globRes = await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: globOp });
+    assert.equal(globRes.response.ok, true);
+    engine.applyCanonicalPair({
+      seq: 1,
+      call: { operationId: globOp, tool: 'tool_load', input: { names: ['glob'] } },
+      result: { isError: false, ok: true, payload: globRes.response.data.receipt },
+    }, SCOPE_A);
+    const globEntry = engine.getCatalog().entries.get('t_files_glob');
+    engine.recordAdvertisement(SCOPE_A, {
+      requestId: 'req_1',
+      toolId: 't_files_glob',
+      name: 'glob',
+      revision: globEntry.revision,
+      schemaDigest: globEntry.schemaDigest,
+      wire: globEntry.wire,
+    });
+    const grepOp = nextOpId();
+    const grepRes = await engine.handleLoad({ names: ['grep'] }, SCOPE_A, { operationId: grepOp });
+    assert.equal(grepRes.response.ok, true);
+    engine.applyCanonicalPair({
+      seq: 2,
+      call: { operationId: grepOp, tool: 'tool_load', input: { names: ['grep'] } },
+      result: { isError: false, ok: true, payload: grepRes.response.data.receipt },
+    }, SCOPE_A);
+    // 未决预留：尚未折叠进 selected，但它已经占住额度。
+    const readRes = await engine.handleLoad({ names: ['read_file'] }, SCOPE_A, { operationId: nextOpId() });
+    assert.equal(readRes.response.ok, true, '前置：未决预留必须成功');
+    return engine.getCatalog().entries;
+  }
+
+  const capped = await makeEngine({ engineConfig: { budgets: { maxActiveTools: 3 } } });
+  const entries = await assemble(capped.engine);
+  const view = capped.engine.handleList({ view: 'state' }, SCOPE_A);
+  assert.equal(view.ok, true);
+  assert.equal(view.data.budgets.activeCount, 3, '冻结 ∪ 有效 selected ∪ 未决预留 必须全部计入');
+  assert.equal(
+    view.data.budgets.activeSchemaBytes,
+    entries.get('t_files_glob').wireBytes + entries.get('t_files_grep').wireBytes + entries.get('t_files_read').wireBytes,
+    '字节口径必须与 tool_load 的核算一致（含已冻结 schema）',
+  );
+  // 同一状态上门禁看到的是同一个数字：上限 3 时再加一个工具必须被拒。
+  const overflow = await capped.engine.handleLoad({ names: ['web_fetch'] }, SCOPE_A, { operationId: nextOpId() });
+  assert.equal(overflow.response.ok, false);
+  assert.equal(overflow.response.error.code, 'BUDGET_EXCEEDED');
+
+  // 正控制：同一装配、上限 4 → 同一个 load 成功（证明上面的 3 不是多算出来的）。
+  const roomy = await makeEngine({ engineConfig: { budgets: { maxActiveTools: 4 } } });
+  await assemble(roomy.engine);
+  const ok = await roomy.engine.handleLoad({ names: ['web_fetch'] }, SCOPE_A, { operationId: nextOpId() });
+  assert.equal(ok.response.ok, true, JSON.stringify(ok.response.error));
+});
+
+test('F12f 撤权后仍冻结的 schema 照旧计费（state 视图不得把它算漏）', async () => {
+  const { engine } = await makeEngine();
+  const op = nextOpId();
+  const res = await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: op });
+  engine.applyCanonicalPair({
+    seq: 1,
+    call: { operationId: op, tool: 'tool_load', input: { names: ['glob'] } },
+    result: { isError: false, ok: true, payload: res.response.data.receipt },
+  }, SCOPE_A);
+  const entry = engine.getCatalog().entries.get('t_files_glob');
+  engine.recordAdvertisement(SCOPE_A, {
+    requestId: 'req_1', toolId: 't_files_glob', name: 'glob',
+    revision: entry.revision, schemaDigest: entry.schemaDigest, wire: entry.wire,
+  });
+  assert.equal(engine.getState(SCOPE_A).selected.size, 1);
+  // 撤权：selected 立即失效，但披露缓存按契约不清空（它仍在上下文里、仍占预算）。
+  engine.refreshCatalog(sampleBindings().filter((b) => b.toolId !== 't_files_glob'));
+  assert.equal(engine.getState(SCOPE_A).selected.size, 0);
+  assert.equal(engine.getFrozenWire(SCOPE_A).length, 1);
+
+  const view = engine.handleList({ view: 'state' }, SCOPE_A);
+  assert.equal(view.data.budgets.activeCount, 1, '已披露的 schema 仍在上下文里 → 必须计费');
+  assert.equal(view.data.budgets.activeSchemaBytes, engine.getFrozenWire(SCOPE_A)[0].bytes);
+  assert.deepEqual(view.data.selected, [], '撤销执行授权不等于撤销披露');
 });

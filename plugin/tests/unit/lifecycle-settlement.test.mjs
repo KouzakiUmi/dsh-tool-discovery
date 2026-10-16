@@ -40,6 +40,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createLifecycle } from '../../adapters/dsh/lifecycle.mjs';
+import { CORE_TOOL_NAMES } from '../../domain/index.mjs';
 import {
   BASELINE_STATE, TRUSTED_EPOCH_REASONS, epochKeyOfRecord,
 } from '../../adapters/dsh/trusted-epoch.mjs';
@@ -691,4 +692,203 @@ test('LS-U12：缺失资格与初始记录的启动必须在同一同步块内�
     '过期资格快照不得把手动迁移改写成 initial 记录');
   assert.equal(runtime.restoring, false, '终态后 restoring 必须归 false');
   for (const [, detail] of blockedLogs(logs)) assert.notEqual(detail.reason, null, '归因不得为 null');
+});
+
+// ---------------------------------------------------------------------------
+// LS-U13/14（微任务活锁修复的 lifecycle 级回归）：settleBaselineWith 的跟随循环
+// 依赖「纯读 load 不自增 revision」+「循环体内 assertActive」两件事：
+//   * 旧实现里 N 个并发 settle 驱动的 load 互相 supersede，各自立即重读，
+//     微任务队列被打满（timer 也被饿死）；
+//   * dispose 之后该循环必须能被打断，不得继续自旋。
+// 两个驱动经 retryBaseline 注入（白盒放开 restoring 闸门制造并发窗口）。
+// ---------------------------------------------------------------------------
+function livelockFixture(id) {
+  // 冷崩复用形态：durable 记录在盘，恢复读路径 + 两个并发 retry 驱动同抢一个 PENDING 账本。
+  const durable = {
+    protocolVersion: 2, schemaVersion: 1, sessionId: id, ownSeqStart: 0,
+    epochId: 'initial', compactionEndSeq: -1, names: ['from_durable_record'],
+    trigger: 'initial', writtenAt: 1,
+  };
+  const store = perCallOpenGatedStore({ [epochKeyOfRecord(durable)]: durable });
+  // 每次 ensureOpen 让出一个**宏任务**：旧实现活锁时 race 守卫计时器有机会触发，
+  // 测试会干净地失败而不是把整个 runner 挂死。
+  const realEnsureOpen = store.ensureOpen;
+  store.ensureOpen = async () => { await tick(); return realEnsureOpen(); };
+  const events = [headerEvent(0), headerEvent(1)];
+  const session = { id, seq: events.length, inheritedEventCount: 0, snapshotEvents: () => events };
+  const query = { readSession: async () => ({ inheritedEventCount: 0, events: events.map((e) => structuredClone(e)) }) };
+  return { store, session, query };
+}
+
+/** 有限时间内必须落定的守卫：unref 计时器，落定后不拖住进程退出。 */
+function settleGuard(ms = 2000) {
+  return new Promise((_resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('活锁：并发 settle 驱动未在时限内落定')), ms);
+    timer.unref?.();
+  });
+}
+
+test('LS-U13 并发 settle 驱动不得互相 supersede 成活锁（load 纯读化回归）', async () => {
+  const id = 's_settle_concurrent';
+  const { store, session, query } = livelockFixture(id);
+  const logs = [];
+  const lc = makeLifecycle({ store, query, logs });
+
+  const firstOpen = store.gateOpen();   // restore 的首个 load 挂在 open 闸门上
+  lc.ensureRuntime(session, { id: `agent-${id}` });
+  await until(() => store.openCalls === 1, 'restore 的 load 进入 ensureOpen');
+  const runtime = runtimeOf(lc, id);
+  assert.equal(runtime.restoring, true, '前置：restore 尚在途');
+  // 白盒放开 retryBaseline 的 restoring 闸门：restore 跟随循环 + 两个 retry = 三个并发驱动。
+  runtime.restoring = false;
+  const retryA = lc.retryBaseline(runtime);
+  const retryB = lc.retryBaseline(runtime);
+  firstOpen.resolve();
+
+  const [outcomeA, outcomeB] = await Promise.race([
+    Promise.all([retryA, retryB]),
+    settleGuard(),
+  ]);
+  await until(() => lc.baselineOf(id).state === BASELINE_STATE.TRUSTED, '基线落定');
+  await drain();
+
+  // 有限次读即收敛：旧实现每次自旋都要再开一次 ensureOpen（无界）。
+  assert.ok(store.openCalls <= 8, `读次数必须有界（实际 ${store.openCalls}）`);
+  const baseline = lc.baselineOf(id);
+  assert.equal(baseline.state, BASELINE_STATE.TRUSTED);
+  assert.deepEqual(baseline.names, ['from_durable_record'], '权威名单来自 durable 记录');
+  assert.equal(store.putCalls, 0, '纯读收敛不得写盘（冷崩复用路径零写）');
+  assert.equal(outcomeA === undefined || outcomeA === null || typeof outcomeA === 'object', true);
+  assert.equal(outcomeB === undefined || outcomeB === null || typeof outcomeB === 'object', true);
+  for (const [, detail] of blockedLogs(logs)) assert.notEqual(detail.reason, null, '归因不得为 null');
+});
+
+test('LS-U14 dispose 打断在途的 settle 驱动：卸载后必须落定，不得继续自旋', async () => {
+  const id = 's_settle_abort';
+  const { store, session, query } = livelockFixture(id);
+  const logs = [];
+  const lc = makeLifecycle({ store, query, logs });
+
+  const firstOpen = store.gateOpen();
+  lc.ensureRuntime(session, { id: `agent-${id}` });
+  await until(() => store.openCalls === 1, 'restore 的 load 进入 ensureOpen');
+  const runtime = runtimeOf(lc, id);
+  runtime.restoring = false;
+  const retryA = lc.retryBaseline(runtime);
+  const retryB = lc.retryBaseline(runtime);
+
+  lc.dispose();                 // 卸载：activation abort + 全部 runtime dispose
+  firstOpen.resolve();
+
+  await Promise.race([
+    Promise.all([retryA, retryB]).catch(() => 'rejected-but-settled'),
+    settleGuard(),
+  ]);
+  await drain();
+  assert.equal(lc.sessions.size, 0, '卸载后 runtime 必须已释放');
+  assert.ok(store.openCalls <= 8, `卸载后读次数必须有界（实际 ${store.openCalls}）`);
+});
+
+// ---------------------------------------------------------------------------
+// LS-U15（周期边界名单时序）：adopt 落盘确认成功之前，新名单不得提前入 runtime。
+// 旧实现同步 adoptNames → 一次被判 superseded 的 adopt 会把尚未落盘的名单残留在
+// alwaysNameSet 与 engine 里。与 onUserCompactionComplete 的「先落盘、后入 runtime」对齐。
+// ---------------------------------------------------------------------------
+test('LS-U15 周期边界 adopt 落定前名单不得提前入 runtime，superseded 不残留', async () => {
+  const id = 's_settle_adopt_window';
+  const session = { id, seq: 0, inheritedEventCount: 0 };
+  const store = perCallOpenGatedStore();
+  const logs = [];
+  // bootstrap 名单 = CONFIG_NAMES；两次压缩边界各自捕获的名单刻意不同。
+  let generation = 0;
+  const lc = makeLifecycle({
+    store, query: undefined, logs,
+    getAlwaysVisible: () => (generation === 0 ? [...CONFIG_NAMES] : generation === 1 ? ['boundary_a'] : ['boundary_b']),
+  });
+
+  lc.ensureRuntime(session, { id: `agent-${id}` });
+  await lc.whenReady(id);
+  assert.equal(lc.baselineOf(id).state, BASELINE_STATE.TRUSTED, '前置：bootstrap 已 trusted');
+  assert.deepEqual(runtimeOf(lc, id).alwaysNames, [...CONFIG_NAMES], '前置：bootstrap 名单在位');
+
+  const putA = store.gatePut();
+  generation = 1;
+  for (const event of userCompactionChain(0, 'cmp-a', 'cmd-a')) lc.onSessionEvent(session, event);
+  await until(() => store.putCalls === 2, '第一次 adopt 的 put 进入在途');
+  const runtime = runtimeOf(lc, id);
+  assert.deepEqual(runtime.alwaysNames, [...CONFIG_NAMES], 'adopt 落定前不得提前 adoptNames（旧实现这里是 boundary_a）');
+  assert.deepEqual([...runtime.alwaysNameSet], [...CONFIG_NAMES]);
+
+  const putB = store.gatePut();
+  generation = 2;
+  for (const event of userCompactionChain(5, 'cmp-b', 'cmd-b')) lc.onSessionEvent(session, event);
+  await until(() => store.putCalls === 3, '第二次 adopt 的 put 进入在途');
+  assert.deepEqual(runtime.alwaysNames, [...CONFIG_NAMES], '两次 adopt 在途期间名单都不得提前换上');
+
+  putA.resolve();            // 被 supersede 的第一次写落定：stale → 直接 return
+  await drain();
+  assert.deepEqual(runtime.alwaysNames, [...CONFIG_NAMES], '被 supersede 的 adopt 不得把名单装进 runtime');
+
+  putB.resolve();
+  await until(() => lc.baselineOf(id).epochId === 'cmp-b@8', '第二次 adopt 落定');
+  await drain();
+  assert.deepEqual(runtime.alwaysNames, ['boundary_b'], '落盘确认成功后名单才换上');
+  assert.deepEqual([...runtime.alwaysNameSet], ['boundary_b']);
+  assert.equal(lc.baselineOf(id).state, BASELINE_STATE.TRUSTED);
+  assert.deepEqual(blockedLogs(logs), [], '全程不得出现 baseline-blocked');
+});
+
+// ---------------------------------------------------------------------------
+// LS-U16（respectAlwaysVisible 活读取）：lifecycle 必须优先读 deps 注入的活读取器
+// （index.mjs 提供，优先读 fiber 上的 volatile 配置），而不是 validateConfig 拍平
+// 后的布尔快照。三条路径共用"view 返回含核心工具的可见集合"这一 fixture，使
+// 自证补入 / 跳过自证真正可区分（view 抛错的降级路径单独留在 LS-U16b）。
+// ---------------------------------------------------------------------------
+test('LS-U16 respectAlwaysVisible 从注入的活读取器读取', () => {
+  // 核心工具名取自 domain 导出（不硬编码猜名）；并核它与配置名不重合，
+  // 否则"补入"与"本来就在"无法区分。
+  const coreTool = CORE_TOOL_NAMES[0];
+  assert.notEqual(coreTool, 'cfg_tool', 'fixture 前置：核心名不得与配置名重合');
+  // 可见集合用 Map 形态（lifecycle 判据：visible instanceof Map ||
+  // typeof visible.has === 'function'），内含一个真实核心工具。
+  const ctxWithCore = () => ({
+    tools: { view: () => ({ visible: new Map([[coreTool, { name: coreTool }]]) }) },
+  });
+  const baseConfig = { requireTrustedEpoch: false, categoryConfig: CATEGORY_CONFIG, budgets: null, alwaysVisible: ['cfg_tool'], initialToolsEnabled: true };
+  const base = {
+    registry: makeRegistry(),
+    config: baseConfig,
+    clock, random, query: undefined,
+    log: () => {},
+    getAlwaysVisible: () => ['cfg_tool'],
+    getInitialToolsEnabled: () => true,
+  };
+  const names = (deps) => createLifecycle(deps).currentAlwaysNames({ id: 'agent_ls_u16' });
+
+  // 1) 活读取器 true：跳过自证 —— 用户的名单是精确集合（上限）。
+  assert.deepEqual(names({ ...base, ctx: ctxWithCore(), getRespectAlwaysVisible: () => true }), ['cfg_tool'],
+    '活读取器 true：核心工具不得自证补入（view 已返回含它的可见集合，补入即缺陷）');
+  // 2) 活读取器 false：走自证 —— 可见的核心工具必须被补入名单。
+  assert.deepEqual(names({ ...base, ctx: ctxWithCore(), getRespectAlwaysVisible: () => false }),
+    ['cfg_tool', coreTool],
+    '活读取器 false：可见的核心工具必须自证补入');
+  // 3) 未注入读取器、config.respectAlwaysVisible=true 的回落读取：同样以上限为准。
+  assert.deepEqual(names({ ...base, ctx: ctxWithCore(),
+    config: { ...baseConfig, respectAlwaysVisible: true } }), ['cfg_tool'],
+    'config.respectAlwaysVisible=true 的回落读取同样不得自证补入');
+});
+
+// 容错路径独立保留：自省抛错只降级、不放大为失败，名单回落配置值。
+test('LS-U16b 自省 view 抛错只降级不放大', () => {
+  const lc = createLifecycle({
+    ctx: { tools: { view: () => { throw new Error('自省故障'); } } },
+    registry: makeRegistry(),
+    config: { requireTrustedEpoch: false, categoryConfig: CATEGORY_CONFIG, budgets: null, alwaysVisible: ['cfg_tool'], initialToolsEnabled: true },
+    clock, random, query: undefined,
+    log: () => {},
+    getAlwaysVisible: () => ['cfg_tool'],
+    getInitialToolsEnabled: () => true,
+    getRespectAlwaysVisible: () => false,
+  });
+  assert.deepEqual(lc.currentAlwaysNames({ id: 'agent_ls_u16b' }), ['cfg_tool']);
 });

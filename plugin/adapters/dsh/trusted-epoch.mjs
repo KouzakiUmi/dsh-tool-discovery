@@ -583,7 +583,12 @@ export function createEpochLedger (deps) {
 
   /** 冷恢复一个**有 own 出站历史**的老会话：只认当前 epoch 的那一份记录。 */
   async function load () {
-    const rev = (revision += 1);
+    // **纯读不自增 revision**：自增会让两个并发的读互相判成"被取代"（各自
+    // isCurrent(rev) 永假、各自立即重读），在 settleBaselineWith 的跟随循环里
+    // 形成占满微任务队列的活锁。过期判据不受影响：只有 begin/adopt/failClosed
+    // 才推进 revision —— 读的 await 窗口里发生过其中任何一个，isCurrent(rev)
+    // 依旧为 false，这份读结果同样会被丢弃（绝不把旧 epoch 的记录装进新身份）。
+    const rev = revision;
     const store = storeHolder?.store ?? null;
     if (store === null) {
       markBlocked(TRUSTED_EPOCH_REASONS.UNAVAILABLE);

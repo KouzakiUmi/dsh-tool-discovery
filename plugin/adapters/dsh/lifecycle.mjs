@@ -34,7 +34,15 @@ function normalizeOwnBoundary(session) {
 
 /**
  * @param {{ctx:any, registry:any, config:any, clock:any, random:any, query:any, log?:Function,
- *          getAlwaysVisible?:() => readonly string[]}} deps
+ *          getAlwaysVisible?:() => readonly string[]|{get:Function},
+ *          getInitialToolsEnabled?:() => boolean|{get:Function},
+ *          getRespectAlwaysVisible?:() => boolean|{get:Function},
+ *          getPresetTools?:(agentScope:any) => readonly string[],
+ *          onRuntimeCreated?:(runtime:any) => void,
+ *          trustedEpoch?:{store:any},
+ *          collapsedPresentation?:(scope:any) => boolean}} deps
+ * 全部注入项均为可选（缺失时按各自回落：config 快照 / 空实现 / 无 durable store）；
+ * `get*` 读取器由 index.mjs 提供，优先读 fiber 上的 volatile 配置。
  */
 export function createLifecycle(deps) {
   const { ctx, registry, config, clock, random, query, log = () => {} } = deps;
@@ -97,7 +105,10 @@ export function createLifecycle(deps) {
    * guard 侧也同步不再免披露放行。默认关闭 = 现状。
    */
   function respectAlwaysVisible() {
-    const raw = config.respectAlwaysVisible;
+    // 与 currentInitialToolsEnabled 同一读法：优先 deps 注入的活读取器
+    // （index.mjs 提供，优先读 fiber 上的 volatile 配置），回落 apply 期捕获值。
+    const raw = typeof deps.getRespectAlwaysVisible === 'function'
+      ? deps.getRespectAlwaysVisible() : config.respectAlwaysVisible;
     const value = raw !== null && typeof raw === 'object' && typeof raw.get === 'function' ? raw.get() : raw;
     return value === true;
   }
@@ -278,7 +289,11 @@ export function createLifecycle(deps) {
 
     // 已可信会话的既定契约：成功压缩即重开周期、换此刻配置、清 selected/frozen、
     // 并刷新那份**尚未发送**的投影。
-    adoptNames(runtime, names);
+    //
+    // 名单与 onUserCompactionComplete 同一写法：**先落盘、后入 runtime**。在 adopt
+    // 落定之前同步 adoptNames 的话，一次被判 superseded（随后直接 return）的 adopt
+    // 会把尚未落盘的新名单残留在 alwaysNameSet 与 engine 里。等待窗口内基线是
+    // PENDING，门禁本就拒绝一切非入口调用 —— 旧名单留在 runtime 上不构成授权。
     runtime.ledger.adopt({ identity: info.identity, names, trigger }).then((outcome) => {
       // **无论 put 成功与否都要先看基线状态**：写失败时 outcome.ok 为 false，
       // 若在这里直接 return，刚换上去的名单就会留在 alwaysNameSet 里 ——
@@ -289,6 +304,7 @@ export function createLifecycle(deps) {
         blockBaseline(runtime, runtime.ledger.reason ?? TRUSTED_EPOCH_REASONS.UNAVAILABLE);
         return;
       }
+      adoptNames(runtime, names);
       const refreshed = typeof runtime.refreshPendingProjection === 'function'
         ? runtime.refreshPendingProjection()
         : false;
@@ -506,8 +522,10 @@ export function createLifecycle(deps) {
    *    重新核验。若在 PENDING 时反复 `await whenSettled()`，它在没有在途写时会**立即
    *    resolve**，于是一个 `while (PENDING)` 就变成占满微任务的忙轮询，把 timer 与真实
    *    I/O 饿死 —— 那比原来的 bug 更糟。
-   * 3. **有在途写时绝不 `load()`。** `load()` 会自增 revision，把那条正在落盘的 adopt
-   *    变成 superseded，记录永远写不出去（TE4b 修复的既有理由，必须保持）。
+   * 3. **有在途写时绝不 `load()`。** 在途写的落定优先于读：先 `whenSettled()` 等它
+   *    落定，再发起读 —— 避免一次读落在"身份已推进、记录尚未落盘"的中间态上
+   *    （TE4b 的既有纪律）。`load()` 本身是纯读、不自增 revision（见
+   *    trusted-epoch.mjs 的 load），因此它也不再是"读会 supersede 在途写"的来源。
    * 4. **读状态与用它裁决必须在同一个同步块里，中间不得有 `await`。** 任何"先返回
    *    一个终态快照、外层再 await、然后拿快照去用"的写法都会重蹈 F3：外层 await 的
    *    间隙里又一轮 adopt 会把账本翻回 PENDING、`names` 翻成 `null`，于是拿着过期的
@@ -523,8 +541,9 @@ export function createLifecycle(deps) {
    * * `true`（冷恢复入口 / `retryBaseline`）：**必须**读一次 durable 记录，即使账本已经
    *   是终态 —— 这正是"冷崩重放"与"存储迟到后重试"的既有语义。
    * * `false`（`begin()` 之后 / 恢复收尾）：**跟随已有工作**。先同步看当前状态：已终态
-   *   就直接裁决，**不再多读一次**。`begin()` 刚落定时若还强制 load，会自增 revision
-   *   并凭空多给一次 IO 失败机会 —— 而那次读没有任何信息量。
+   *   就直接裁决，**不再多读一次**。`begin()` 刚落定时若还强制 load，那次读没有
+   *   任何信息量，却凭空多给一次 IO 失败机会（读盘失败还会把刚建立好的初始记录
+   *   误判成存储不可用）。
    *
    * @param {any} runtime
    * @param {(state: string, reason: string|null) => any} decide 同步裁决；只在终态上调用。
@@ -536,10 +555,14 @@ export function createLifecycle(deps) {
   async function settleBaselineWith(runtime, decide, mustRead = false) {
     let readRequired = mustRead;
     for (;;) {
+      // 卸载即打断：这个跟随循环必须能在插件 dispose 后停止自旋，而不是占满
+      // 微任务队列（assertActive 抛出的 abort reason 由既有基线 catch 链收口）。
+      assertActive();
       // ---- 唯一的 await 点：只等真正的工作（纪律 2/3） ----
       if (runtime.ledger.inFlight) {
-        // 有在途写：真等它落定。**绝不在此刻 load** —— load 会自增 revision、supersede
-        // 掉正在落盘的 adopt，让那条记录永远写不出去（TE4b 修复的既有理由）。
+        // 有在途写：真等它落定。**绝不在此刻并发 load** —— 写启动时已推进 revision，
+        // 并发读的 rev 必被判 stale、其结果整个被丢弃，纯属多一次 IO 失败面；
+        // 等写落定后由本循环按终态同步裁决。
         await runtime.ledger.whenSettled();
       } else if (readRequired || runtime.ledger.state === BASELINE_STATE.PENDING) {
         // 没有在途写：用一次真正的读工作推进并重新核验。`readRequired` 覆盖"已终态也
@@ -594,8 +617,8 @@ export function createLifecycle(deps) {
       //
       // 裁决交给 settleBaselineWith，它逐轮跟随**最新**的在途工作直到落定：
       //   * 有在途写（缓冲重放已在 live 链上把那次手动 /compact 走完了）→ 先等它落定，
-      //     **不**在此刻 load（load 会自增 revision，让那次 adopt 永远 superseded，
-      //     记录永远写不出去 —— TE4b 的既有理由）；
+      //     **不**在此刻并发 load（写启动时已推进 revision，并发读会被判 stale 整个
+      //     丢弃，纯属多一次 IO 失败面）；
       //   * 没有在途写 → 读一次 durable 记录；这一次读的 await 窗口里若又抵达一次
       //     live 用户 /compact（F3 的形态），它返回的 PENDING/null 不再被当成失败，
       //     而是跟到那次正在成功的写上。
@@ -698,8 +721,8 @@ export function createLifecycle(deps) {
     // 2) `begin()` 同样会被更晚的 adopt supersede 并返回 PENDING/null —— 过去这里
     //    只判一次 `!== TRUSTED` 就 `blockBaseline(runtime. ledger.reason)`，于是又是
     //    一次 reason=null 的过度反应。这里用 `mustRead = false` **跟随已有工作**：
-    //    `begin()` 已落定就**不再多读一次**（那次读没有信息量，却会自增 revision
-    //    并凭空多给一次 IO 失败机会）；有在途写就等它；无在途写而仍 pending 才读。
+    //    `begin()` 已落定就**不再多读一次**（那次读没有信息量，却凭空多给一次 IO
+    //    失败机会）；有在途写就等它；无在途写而仍 pending 才读。
     return await settleBaselineWith(runtime, (state, reason) => {
       if (state === BASELINE_STATE.TRUSTED) {
         adoptNames(runtime, runtime.ledger.names);
@@ -758,6 +781,11 @@ export function createLifecycle(deps) {
       // ledger 也要 dispose：pending 的写在落定后**不得**再复活授权。
       runtime.ledger.dispose();
       sessions.delete(sessionId);
+      // registry 的跨会话字典（generations/lastSeen/bindingState）以 scope 建键：
+      // 会话释放后这些键不再有任何读者，必须一并删除，否则只增不减。
+      // （retireAbsent 的"留键清值"是给**还活着**的 scope 用的：缺席绑定的代次
+      // 计数要保留，重加时从旧值 +1 —— 那个语义不受这里影响。）
+      if (typeof registry.disposeScope === 'function') registry.disposeScope(runtime.agentScope);
     }
     buffers.delete(sessionId);
   }
@@ -813,6 +841,21 @@ export function createLifecycle(deps) {
           count: runtime.ledger.names.length,
         });
         return outcome;
+      }).catch((error) => {
+        // 基线解析按契约**永不 reject**，但两类错误的处置必须分开：
+        //   * 预期终止：dispose 打断 settleBaselineWith（assertActive 抛出的 abort
+        //     reason，与 activation.signal.reason 同一引用）。retryBaseline 是 index.mjs
+        //     的 fire-and-forget 调用面（retryStorageUnavailable 不挂 catch），这里必须
+        //     收口成日志，不能让卸载路径变成 unhandled rejection。
+        //   * 其它错误是 then 链里的**真实内部故障**（如 engine.restore / ledger 抛错）：
+        //     与终止静默等同会把故障藏进同一条日志里，必须换更醒目的事件名并保留堆栈。
+        const terminated = error === activation.signal.reason;
+        const detail = { sessionId: runtime.scope.sessionId, error: String(error) };
+        if (!terminated && error instanceof Error && typeof error.stack === 'string') {
+          detail.stack = error.stack;
+        }
+        log(terminated ? 'lifecycle:baseline-retry-stopped' : 'lifecycle:baseline-retry-failed', detail);
+        return null;
       });
     },
     /** 供调用方等待某会话恢复完成（宿主不会 await session/created 的返回值）。 */

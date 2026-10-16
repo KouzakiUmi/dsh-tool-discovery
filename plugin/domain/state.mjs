@@ -14,6 +14,13 @@ export const RECEIPT_KIND = 'tool-discovery.selection';
 export const RECEIPT_VERSION = 2;
 
 /**
+ * `integrity.gaps` 的保留上限。`pair.seq` 是会话全局事件序号，任何一次带缺口的
+ * 折叠都会 push 一条；无界数组会让长会话的内存与每次状态迁移的浅拷贝持续增长。
+ * 它是**诊断段**（不参与任何判定），因此只保留最近若干条，总量另计 `gapsTotal`。
+ */
+export const GAP_HISTORY_LIMIT = 8;
+
+/**
  * @typedef {Object} SelectionRecord
  * @property {string} toolId
  * @property {string} name
@@ -55,7 +62,7 @@ export const RECEIPT_VERSION = 2;
  * @property {number} frozenOrder 追加计数
  * @property {number} epoch 缓存周期号，每次成功压缩 +1
  * @property {number} lastAppliedSeq
- * @property {{applied:number,duplicatesIgnored:number,outOfOrderIgnored:number,gaps:number[],rejected:number,coldCandidateRestores:number}} integrity
+ * @property {{applied:number,duplicatesIgnored:number,outOfOrderIgnored:number,gaps:number[],gapsTotal:number,rejected:number,coldCandidateRestores:number}} integrity
  */
 
 /** @param {string} sessionId */
@@ -75,6 +82,7 @@ export function createState(sessionId) {
       duplicatesIgnored: 0,
       outOfOrderIgnored: 0,
       gaps: [],
+      gapsTotal: 0,
       rejected: 0,
       coldCandidateRestores: 0,
     },
@@ -223,7 +231,12 @@ export function reducePair(state, pair, ctx) {
   }
 
   const next = cloneState(state);
-  if (pair.seq > state.lastAppliedSeq + 1) next.integrity.gaps.push(pair.seq);
+  if (pair.seq > state.lastAppliedSeq + 1) {
+    // 缺口只作诊断：保留最近 GAP_HISTORY_LIMIT 条，总量单独计数（见 GAP_HISTORY_LIMIT）。
+    next.integrity.gaps.push(pair.seq);
+    if (next.integrity.gaps.length > GAP_HISTORY_LIMIT) next.integrity.gaps.shift();
+    next.integrity.gapsTotal += 1;
+  }
 
   if (derived.action === 'unload') {
     const requested = /** @type {string[]} */ (pair.call.input.toolIds);
@@ -467,8 +480,13 @@ export function evaluateCall(state, ctx) {
  * @param {number} now
  */
 export function invalidateTool(state, toolId, reason, now) {
+  const sel = state.selected.get(toolId);
+  const adv = state.advertised.get(toolId);
+  // 从未在本会话 selected / advertised 过的工具：没有可作废的东西，不得凭空写一条
+  // `invalidated` 诊断记录（它只增不减，永不被清除，长会话里会被无关撤权事件喂大）。
+  // 已有记录时按最新原因更新 —— 那条记录本身就证明它曾出现过。
+  if (!sel && !adv && !state.invalidated.has(toolId)) return state;
   const next = cloneState(state);
-  const sel = next.selected.get(toolId);
   next.selected.delete(toolId);
   next.advertised.delete(toolId);
   next.invalidated.set(toolId, { reason, at: now, revision: sel ? sel.revision : null });

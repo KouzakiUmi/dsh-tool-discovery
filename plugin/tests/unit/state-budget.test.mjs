@@ -80,3 +80,71 @@ test('SB5 真装配：projectState 的投影能被同一个函数裁进上限（
   assert.equal(fitted.selected.length, payload.selected.length, '真实投影的 selected 同样不得被裁')
   assert.ok(sizeOf(fitted) <= maxBytes)
 })
+
+// ---------------------------------------------------------------------------
+// 复杂度：二分定位必须与逐条递减**逐字等价**（旧实现是 O(N²)：每个候选都整份 stringify）
+// ---------------------------------------------------------------------------
+
+/** 旧实现（从 invalidated.length-1 逐条递减）：作为"裁剪语义不变"的对照实现。 */
+function referenceFit (payload, maxBytes) {
+  const sizeOfValue = (value) => Buffer.byteLength(JSON.stringify(value), 'utf8')
+  if (maxBytes === null) return payload
+  if (sizeOfValue(payload) <= maxBytes) return payload
+  const invalidated = Array.isArray(payload.invalidated) ? payload.invalidated : []
+  for (let keep = invalidated.length - 1; keep >= 0; keep -= 1) {
+    const candidate = { ...payload, invalidated: invalidated.slice(0, keep), invalidatedTruncated: true }
+    if (sizeOfValue(candidate) <= maxBytes) return candidate
+  }
+  return null
+}
+
+test('SB6 二分定位与逐条递减的旧语义逐字一致（含装不下与空诊断段）', () => {
+  for (const count of [0, 1, 2, 5, 17, 40]) {
+    const payload = payloadWith(count)
+    const full = sizeOf(payload)
+    for (const maxBytes of [8, 64, Math.floor(full * 0.3), Math.floor(full * 0.5), Math.floor(full * 0.9), full - 1, full, full + 50]) {
+      assert.deepEqual(
+        fitStateWithinBudget(payload, maxBytes),
+        referenceFit(payload, maxBytes),
+        `count=${count} maxBytes=${maxBytes} 的裁剪结果必须与旧实现一致`,
+      )
+    }
+    assert.deepEqual(fitStateWithinBudget(payload, null), referenceFit(payload, null), 'null 上限同样一致')
+  }
+  // 没有 invalidated 段的投影（形状异常/早期版本）也必须与旧实现同样给 null。
+  const shapeless = { mode: 'ready', selected: [], advertised: [], budgets: {} }
+  assert.equal(fitStateWithinBudget(shapeless, 8), referenceFit(shapeless, 8))
+  assert.equal(fitStateWithinBudget(shapeless, 8), null)
+})
+
+test('SB7 候选整份序列化次数随诊断段长度对数增长（不再是 O(N) 次）', () => {
+  // 每次 JSON.stringify(payload) 都会读一次 invalidated —— 用取值器数"试了几个候选"。
+  const base = payloadWith(64)
+  let reads = 0
+  const payload = { ...base }
+  Object.defineProperty(payload, 'invalidated', {
+    enumerable: true,
+    get () { reads += 1; return base.invalidated },
+  })
+  const full = Buffer.byteLength(JSON.stringify(payload), 'utf8')
+  reads = 0
+
+  const fitted = fitStateWithinBudget(payload, Math.floor(full * 0.5))
+  assert.notEqual(fitted, null)
+  assert.ok(fitted.invalidated.length < 64, '必须真的裁短')
+  // 旧实现会在 63 条上从 63 逐条试到命中（≈128 次读取）；二分只需对数量级。
+  assert.ok(reads <= 16, `试过的候选数必须是对数量级，实际读了 ${reads} 次`)
+})
+
+test('SB8 候选数很少时仍取**最大**可保留条数', () => {
+  const payload = payloadWith(6)
+  // 让 payload 本体超限，而"留 5 条 + 标记"刚好装下：上界是 N-1，必须恰保留 5 条。
+  const five = { ...payload, invalidated: payload.invalidated.slice(0, 5), invalidatedTruncated: true }
+  const fitted = fitStateWithinBudget(payload, sizeOf(five))
+  assert.equal(fitted.invalidated.length, 5, '必须取最大可保留条数，而不是少留一条')
+  assert.equal(fitted.invalidatedTruncated, true)
+  // 只放得下 1 条时恰好保留 1 条。
+  const one = { ...payload, invalidated: payload.invalidated.slice(0, 1), invalidatedTruncated: true }
+  const shorter = fitStateWithinBudget(payload, sizeOf(one))
+  assert.equal(shorter.invalidated.length, 1, '只能放下一条时就恰好保留一条')
+})

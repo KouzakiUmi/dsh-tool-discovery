@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { validateListRequest, validateSearchRequest, validateLoadRequest, okEnvelope, errorEnvelope } from '../../domain/protocol.mjs';
 import { DomainError } from '../../domain/errors.mjs';
 import { resolveBudgets } from '../../domain/budgets.mjs';
+import { domainText } from '../../domain/locale.mjs';
 
 const B = resolveBudgets({});
 // 显式配置上限的预算：用于"上限仍生效"的正例/负例
@@ -18,6 +19,33 @@ test('list:state 只允许 view', () => {
   assert.deepEqual(validateListRequest({ view: 'state' }, B), { view: 'state', limit: 20 });
   assert.throws(() => validateListRequest({ view: 'state', category: 'files' }, B), (e) => e.code === 'INVALID_ARGS');
   assert.throws(() => validateListRequest({ view: 'state', cursor: 'p_x' }, B), (e) => e.code === 'INVALID_ARGS');
+});
+
+test('list:state 的 category / cursor 报**专用**文案，不被 unknownField 抢先', () => {
+  // category / cursor 都是已知键：先跑 assertOnlyKeys 会把"这个视图不接受它"
+  // 误述成"未知字段"，两条专用文案因此永远不可达。
+  const text = domainText;
+  assert.throws(
+    () => validateListRequest({ view: 'state', category: 'files' }, B),
+    (e) => e.message === text.t(['detail', 'stateViewRejectsCategory']),
+    'category 必须报 stateViewRejectsCategory',
+  );
+  assert.throws(
+    () => validateListRequest({ view: 'state', cursor: 'p_x' }, B),
+    (e) => e.message === text.t(['detail', 'stateViewRejectsCursor']),
+    'cursor 必须报 stateViewRejectsCursor',
+  );
+  // 其它已知键 / 未知键的判定不变：limit 仍被 state 视图拒绝，未知键仍是 unknownField。
+  assert.throws(
+    () => validateListRequest({ view: 'state', limit: 3 }, B),
+    (e) => e.message === text.format(['unknownField'], { field: 'limit' }),
+  );
+  assert.throws(
+    () => validateListRequest({ view: 'state', foo: 1 }, B),
+    (e) => e.message === text.format(['unknownField'], { field: 'foo' }),
+  );
+  // 正控制：不带这两个字段时照常通过。
+  assert.deepEqual(validateListRequest({ view: 'state' }, B), { view: 'state', limit: 20 });
 });
 
 test('list:categories 只允许 view/cursor/limit', () => {

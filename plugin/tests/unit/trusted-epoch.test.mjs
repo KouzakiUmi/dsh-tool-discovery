@@ -837,3 +837,27 @@ test('TE-U19: 记录键隔离 —— 迟到 resolve 的旧写不覆盖 runtime�
     releaseAll();
   }
 });
+// ---------------------------------------------------------------------------
+// TE-U20: 纯读的 load() 不得自增 revision（并发读互相 supersede = 微任务活锁）
+//
+// 旧实现 `const rev = (revision += 1)` 让两个并发的 load 互相把对方判成
+// "被取代"（isCurrent 永假、各自立即重读），settleBaselineWith 的跟随循环
+// 据此形成占满微任务队列的死循环。修复后：load 只捕获 revision，不再推进它；
+// 过期判据不变 —— 只有 begin/adopt/failClosed 才推进 revision。
+// ---------------------------------------------------------------------------
+test('TE-U20: 并发的纯读 load() 不得互相 supersede，两个并发读都必须落成 trusted', async () => {
+  const storage = { records: new Map(), puts: [], closes: [], failOpen: false, failPut: false };
+  const record = storedRecord();
+  storage.records.set(recordKey(record), record);
+  const ledger = makeLedger(storage);
+
+  const [a, b] = await Promise.all([ledger.load(), ledger.load()]);
+
+  assert.equal(a.state, BASELINE_STATE.TRUSTED, `第一个并发读必须落成 trusted：${JSON.stringify(a)}`);
+  assert.equal(b.state, BASELINE_STATE.TRUSTED, `第二个并发读必须落成 trusted：${JSON.stringify(b)}`);
+  assert.deepEqual(ledger.names, ['core_read', 'core_write'], '并发读收敛后名单必须来自记录');
+  assert.deepEqual(ledger.identity, { epochId: INITIAL_EPOCH_ID, compactionEndSeq: NO_COMPACTION_SEQ },
+    '读操作不得改写当前身份');
+  assert.deepEqual(storage.puts, [], '纯读路径不得写盘');
+  assert.equal(ledger.revision, 0, '读不得推进 revision（它不再是 supersede 的来源）');
+});

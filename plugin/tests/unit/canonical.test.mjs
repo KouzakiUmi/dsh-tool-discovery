@@ -1,7 +1,7 @@
 // plugin/domain 基础原语测试
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canonicalJson, digestOf, utf8Bytes, deepEqualCanonical } from '../../domain/canonical.mjs';
+import { canonicalJson, digestOf, utf8Bytes, deepEqualCanonical, deepFreeze } from '../../domain/canonical.mjs';
 import { resolveBudgets, estimateTokens, createByteAccumulator, assertActiveBudget } from '../../domain/budgets.mjs';
 import { DomainError } from '../../domain/errors.mjs';
 import { DEFAULT_BUDGETS, OPTIONAL_LIMIT_KEYS } from '../../domain/constants.mjs';
@@ -113,4 +113,29 @@ test('字节累积器:上限关闭(null)时什么完整项都放得下,remaining
   // JSON 可表达：关闭时 remaining 必须是 null，不能是 Infinity
   assert.equal(acc.remaining, null);
   assert.equal(JSON.stringify({ remaining: acc.remaining }), '{"remaining":null}');
+});
+
+test('deepFreeze:冻结后的 Map 与 Set 都不得再被改写', () => {
+  // Object.freeze 对 Map/Set 只封住自有属性，内部槽仍可写 → 必须替换原型方法。
+  // 旧判据探测原型上的 'set' 描述符，而 `Set.prototype` 只有 add：所有 Set 直接逃逸。
+  const map = deepFreeze(new Map([['a', { n: 1 }]]));
+  const set = deepFreeze(new Set([{ n: 1 }]));
+  const member = [...set][0];
+
+  assert.throws(() => map.set('b', 2), TypeError, 'Map.set 必须抛');
+  assert.throws(() => map.delete('a'), TypeError, 'Map.delete 必须抛');
+  assert.throws(() => map.clear(), TypeError, 'Map.clear 必须抛');
+  assert.throws(() => set.add({ n: 2 }), TypeError, 'Set.add 必须抛');
+  assert.throws(() => set.delete(member), TypeError, 'Set.delete 必须抛');
+  assert.throws(() => set.clear(), TypeError, 'Set.clear 必须抛');
+
+  // 内容逐字未变（抛错发生在改动之前），元素仍被深冻结。
+  assert.deepEqual([...map.keys()], ['a']);
+  assert.deepEqual([...set], [member]);
+  assert.equal(Object.isFrozen(map.get('a')), true);
+  assert.equal(Object.isFrozen(member), true);
+
+  // 幂等：重复 deepFreeze 不抛（第二次直接命中 Object.isFrozen）。
+  assert.doesNotThrow(() => deepFreeze(set));
+  assert.doesNotThrow(() => deepFreeze(map));
 });

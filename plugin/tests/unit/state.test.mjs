@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { buildCatalog } from '../../domain/catalog.mjs';
 import {
   createState, reducePair, recordAdvertisement, evaluateCall, invalidateTool,
-  recomputeSelectionIdentity, parseReceiptShape, deriveInputPath,
+  recomputeSelectionIdentity, parseReceiptShape, deriveInputPath, GAP_HISTORY_LIMIT,
 } from '../../domain/state.mjs';
 import { makeEngine, SCOPE_A, SCOPE_B, SCOPE_FORK, nextOpId, pair, binding, sampleBindings } from './helpers.mjs';
 
@@ -513,4 +513,145 @@ test('binding 形状非法时 engine 直接拒绝构造(不静默修正)', async
     () => createDiscoveryEngine({ ...base, bindings: [], capabilityKind: 'ptc' }),
     (e) => e.code === 'INCOMPATIBLE_PRESENTATION',
   );
+});
+
+// ---- 折叠资格：已收口的操作不得再被折叠 ---------------------------------
+//
+// `pending.get()` 的 undefined 不能等同于"放行"：cancelOperation 取消、resetCacheEpoch
+// 跨压缩边界、以及别的会话登记的 operationId 都必须被拒。否则这些回执会直接折进
+// selected —— 模型拿到了从未对价过的执行授权。
+
+/** 构造一对 canonical tool_load 对。 */
+function loadPair(operationId, input, receipt, seq) {
+  return { seq, call: { operationId, tool: 'tool_load', input }, result: { isError: false, ok: true, payload: receipt } };
+}
+
+test('L07b 已取消操作的迟到 canonical 对不得折叠进 selected', async () => {
+  const { engine } = await makeEngine();
+  const op = nextOpId();
+  const res = await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: op });
+  assert.equal(res.response.ok, true);
+  assert.equal(engine.cancelOperation(op), true);
+
+  const out = engine.applyCanonicalPair(
+    loadPair(op, { names: ['glob'] }, res.response.data.receipt, 1),
+    SCOPE_A,
+  );
+  assert.equal(out.applied, false, '取消后回执不得再激活');
+  assert.equal(out.reason, 'operation-closed');
+  assert.equal(engine.getState(SCOPE_A).selected.size, 0);
+  // 正控制：登记在案的同一对（未取消）必须照常折叠，证明拒绝来自"已收口"而非对本身无效。
+  const op2 = nextOpId();
+  const res2 = await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: op2 });
+  const ok = engine.applyCanonicalPair(loadPair(op2, { names: ['glob'] }, res2.response.data.receipt, 2), SCOPE_A);
+  assert.equal(ok.applied, true, ok.reason);
+  assert.equal(engine.getState(SCOPE_A).selected.size, 1);
+});
+
+test('L07c 跨压缩边界的迟到回执不得折叠（resetCacheEpoch 不推进 lastAppliedSeq）', async () => {
+  const { engine } = await makeEngine();
+  const op = nextOpId();
+  const res = await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: op });
+  const epochBefore = engine.getState(SCOPE_A).epoch;
+  engine.resetCacheEpoch(SCOPE_A, 'compaction-end');
+  const st = engine.getState(SCOPE_A);
+  assert.equal(st.epoch, epochBefore + 1);
+  assert.equal(st.lastAppliedSeq, 0, 'reset 不推进 lastAppliedSeq —— 所以只有收口留痕能挡住它');
+
+  const out = engine.applyCanonicalPair(
+    loadPair(op, { names: ['glob'] }, res.response.data.receipt, 9),
+    SCOPE_A,
+  );
+  assert.equal(out.applied, false, '边界之前的回执不得折进新周期');
+  assert.equal(out.reason, 'operation-closed');
+  assert.equal(engine.getState(SCOPE_A).selected.size, 0);
+  // 正控制：边界之后重新登记的回执照常生效。
+  const op2 = nextOpId();
+  const res2 = await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: op2 });
+  const ok = engine.applyCanonicalPair(loadPair(op2, { names: ['glob'] }, res2.response.data.receipt, 10), SCOPE_A);
+  assert.equal(ok.applied, true, ok.reason);
+  assert.equal(engine.getState(SCOPE_A).selected.size, 1);
+});
+
+test('L07d 别的会话登记的 operationId 不得在本会话折叠', async () => {
+  const { engine } = await makeEngine();
+  const op = nextOpId();
+  const res = await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: op });
+  assert.equal(res.response.ok, true);
+
+  const pairForA = loadPair(op, { names: ['glob'] }, res.response.data.receipt, 1);
+  const out = engine.applyCanonicalPair(pairForA, SCOPE_B);
+  assert.equal(out.applied, false);
+  assert.equal(out.reason, 'operation-session-mismatch');
+  assert.equal(engine.getState(SCOPE_B).selected.size, 0, '不得跨会话激活');
+  assert.equal(engine.getPendingSize(), 1, 'A 的未决预留不得被别的会话吃掉');
+  // 正控制：同一对在它自己的会话里照常折叠。
+  const ok = engine.applyCanonicalPair(pairForA, SCOPE_A);
+  assert.equal(ok.applied, true, ok.reason);
+  assert.equal(engine.getState(SCOPE_A).selected.size, 1);
+  assert.equal(engine.getPendingSize(), 0);
+});
+
+test('L07e 已成功折叠过的重复投递仍走 stale-seq 语义（不得把它误判为"已收口"）', async () => {
+  const { engine } = await makeEngine();
+  const op = nextOpId();
+  const res = await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: op });
+  const p = loadPair(op, { names: ['glob'] }, res.response.data.receipt, 1);
+  assert.equal(engine.applyCanonicalPair(p, SCOPE_A).applied, true);
+  const dup = engine.applyCanonicalPair(p, SCOPE_A);
+  assert.equal(dup.applied, false);
+  assert.equal(dup.reason, 'stale-seq', '重复投递是重复而不是收口');
+  assert.equal(engine.getState(SCOPE_A).integrity.duplicatesIgnored, 1);
+  assert.equal(engine.getState(SCOPE_A).selected.size, 1);
+});
+
+// ---- integrity.gaps 的长度上界 ------------------------------------------
+
+test('integrity.gaps 有界：只保留最近若干条缺口，总量另计', () => {
+  let st = createState('s1');
+  const total = 30;
+  for (let i = 1; i <= total; i += 1) {
+    // 每条间隔 10 → 每次都构成缺口
+    st = reducePair(st, pair({
+      seq: i * 10, operationId: `op_${i}`, input: { names: ['glob'] },
+      payload: receiptFor('t_files_glob', 'name', `op_${i}`),
+    }), ctx()).state;
+  }
+  assert.equal(st.integrity.applied, total);
+  assert.equal(st.integrity.gapsTotal, total, '总量必须如实累计，不被裁剪掩盖');
+  assert.ok(st.integrity.gaps.length <= GAP_HISTORY_LIMIT, `缺口数组必须有界，实际 ${st.integrity.gaps.length}`);
+  assert.equal(st.integrity.gaps[st.integrity.gaps.length - 1], total * 10, '最近一条缺口必须保留');
+  assert.equal(st.integrity.gaps[0], (total - GAP_HISTORY_LIMIT + 1) * 10, '只丢最旧的，保留窗口连续');
+});
+
+test('integrity.gaps 在窗口内逐字保留旧语义（缺口仍如实记录，不静默丢弃）', () => {
+  const st = createState('s1');
+  const out = reducePair(st, pair({ seq: 10, operationId: 'op_1', input: { names: ['glob'] }, payload: receiptFor('t_files_glob') }), ctx());
+  assert.deepEqual(out.state.integrity.gaps, [10]);
+  assert.equal(out.state.integrity.gapsTotal, 1);
+});
+
+// ---- invalidateTool：只为"曾出现过"的工具留痕 ----------------------------
+
+test('invalidateTool 对从未 selected / advertised 的工具有不写诊断记录', () => {
+  const st0 = createState('s1');
+  const untouched = invalidateTool(st0, 't_files_glob', 'tool-removed', 5);
+  assert.equal(untouched, st0, '没有可作废的东西 → 原样返回（不克隆、不写记录）');
+  assert.equal(untouched.invalidated.size, 0, 'invalidated 只增不减，不得被无关撤权喂大');
+  assert.equal(st0.invalidated.size, 0);
+});
+
+test('invalidateTool 对已选中的工具留痕并清掉 selected/advertised，重复撤权保留首条记录', () => {
+  let st = createState('s1');
+  const e = entry('t_files_glob');
+  st = reducePair(st, pair({ seq: 1, operationId: 'op_1', input: { names: ['glob'] }, payload: receiptFor('t_files_glob') }), ctx()).state;
+  st = recordAdvertisement(st, { requestId: 'r1', toolId: 't_files_glob', name: 'glob', revision: e.revision, schemaDigest: e.schemaDigest, now: 5 });
+  st = invalidateTool(st, 't_files_glob', 'definition-changed', 7);
+  assert.equal(st.selected.size, 0);
+  assert.equal(st.advertised.size, 0);
+  assert.deepEqual(st.invalidated.get('t_files_glob'), { reason: 'definition-changed', at: 7, revision: e.revision });
+
+  const again = invalidateTool(st, 't_files_glob', 'tool-removed', 9);
+  assert.equal(again.invalidated.get('t_files_glob').reason, 'tool-removed', '已留痕的工具仍按最新原因更新');
+  assert.equal(again.invalidated.get('t_files_glob').revision, null, '第二次没有 selected 可引用 → revision null');
 });

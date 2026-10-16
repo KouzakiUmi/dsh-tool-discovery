@@ -1,7 +1,8 @@
 // 目录快照、分类、预算与不可变性测试
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCatalog, resolveByName, resolveByToolId, recomputeIdentity, hasNameConflict } from '../../domain/catalog.mjs';
+import { buildCatalog, buildEntry, resolveByName, resolveByToolId, recomputeIdentity, hasNameConflict } from '../../domain/catalog.mjs';
+import { canonicalJson, digestOf, sha256Hex, utf8Bytes } from '../../domain/canonical.mjs';
 import { classifyBinding, buildCategoryCards, nameSegments } from '../../domain/categories.mjs';
 import { DomainError } from '../../domain/errors.mjs';
 import { CATEGORY_CONFIG, sampleBindings, binding, fakeClock } from './helpers.mjs';
@@ -154,4 +155,29 @@ test('buildCatalog 使用传入的 now/generation', () => {
   const s = buildCatalog(sampleBindings(), { now: c.now(), generation: 'gX' });
   assert.equal(s.generation, 'gX');
   assert.equal(s.builtAt, 123);
+});
+
+test('buildEntry 的 schemaDigest 与 wireBytes 落在同一份 canonical 文本上', () => {
+  // 同一份 wire 只序列化一次：digest 与字节数必须同源，否则"冻结的 wire"与
+  // "它声明的身份"可能来自两次不同的序列化。这里用边界值把两者钉在一起。
+  const wires = [
+    { name: 'w1', description: '查找文件', parameters: {} },
+    { name: 'w2', description: '数值边界', parameters: { neg: -0, big: 1e21, huge: 12345678901234567890 } },
+    {
+      name: 'w3',
+      description: '嵌套',
+      parameters: { type: 'object', properties: { a: { type: 'array', items: { enum: [1, 2, 3] } } }, required: [] },
+    },
+    { name: 'w4', description: '含 undefined 键', parameters: {}, extra: undefined },
+  ];
+  for (const wire of wires) {
+    const entry = buildEntry({ ...binding({ name: wire.name, toolId: `t_${wire.name}` }), wire });
+    const json = canonicalJson(wire);
+    assert.deepEqual(entry.wire, JSON.parse(json), '冻结的 wire 是 canonical 文本的解析结果');
+    assert.equal(entry.schemaDigest, `sha256:${sha256Hex(json)}`);
+    assert.equal(entry.wireBytes, utf8Bytes(json));
+    // 另一条等价路径（对解析后的 wire 再序列化）必须给出同一个 digest —— canonical
+    // JSON 是不动点，这正是"只序列化一次"不会改变行为的前提。
+    assert.equal(entry.schemaDigest, digestOf(entry.wire));
+  }
 });

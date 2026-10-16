@@ -108,8 +108,35 @@ export function createDiscoveryEngine(config) {
   const locks = new Map();
   /** @type {Map<string, any>} operationId → pending */
   const pending = new Map();
+  /**
+   * operationId → 归属会话：**已收口**的操作（显式取消 / 压缩边界 / 会话销毁 / 回执不符）。
+   *
+   * 为什么需要它：pending 的删除就是"这个操作不再有对价"的唯一事实，但删除之后
+   * `pending.get()` 的 undefined 无法区分三种情形 —— 从未登记（冷恢复 / 别的引擎实例）、
+   * 已成功折叠、以及**已收口**。前两种必须继续走 reducePair（重复投递交给 stale-seq 语义），
+   * 后一种绝不能折叠成 selected。台账只记录"谁收口了"，不参与任何预算或授权核算。
+   * 上限 256 条：它只用于拒绝**迟到**回执，最近的若干条已覆盖真实重放窗口。
+   * @type {Map<string, string>}
+   */
+  const closedOperations = new Map();
+  const CLOSED_OPERATION_LIMIT = 256;
   let opCounter = 0;
   let disposed = false;
+
+  /**
+   * 记下"该操作已收口"。超过上限时按插入序淘汰最旧的一条。
+   * @param {string} operationId
+   * @param {string} sessionId
+   */
+  function closeOperation(operationId, sessionId) {
+    if (!isNonEmptyString(operationId)) return;
+    closedOperations.delete(operationId);
+    closedOperations.set(operationId, sessionId);
+    while (closedOperations.size > CLOSED_OPERATION_LIMIT) {
+      const oldest = closedOperations.keys().next().value;
+      closedOperations.delete(oldest);
+    }
+  }
 
   /**
    * @param {any} scope
@@ -169,6 +196,49 @@ export function createDiscoveryEngine(config) {
     return errorEnvelope(tool, operation, toDomainError(raw));
   }
 
+  /**
+   * 活跃 schema 占用面 = 已冻结披露 ∪ 仍解析得到且版本一致的 selected ∪ 本会话未决回执的预留。
+   *
+   * 预算门禁（handleLoadLocked）与 `view:'state'` 的 activeCount / activeSchemaBytes
+   * 必须走**同一份**核算：两套口径会让模型看到的数字小于实际计费值，于是它会以为
+   * 还能再加载，实际却被门禁拒掉。只有这里一份实现，不要另写统计。
+   * @param {any} st
+   * @param {string} sessionId
+   * @returns {{ active: Array<{wireBytes:number}>, reservedOnly: Set<string> }}
+   */
+  function activeFootprint(st, sessionId) {
+    /** @type {Set<string>} 本 scope 未决回执已预留的 toolId */
+    const reserved = new Set();
+    for (const op of pending.values()) {
+      if (op.sessionId !== sessionId || op.action !== 'load') continue;
+      for (const s of op.expectedReceipt?.selected ?? []) reserved.add(s.toolId);
+    }
+
+    // 尚未走到真实出站披露的 selected（还没冻结）按其选中时的 catalog 条目计字节，
+    // 否则"加载成功但本轮还没发出去"的窗口会被免费。
+    /** @type {Array<{wireBytes:number}>} */
+    const active = frozenWireList(st).map((f) => ({ wireBytes: f.bytes }));
+    for (const [toolId, selection] of st.selected) {
+      if (st.frozen.has(toolId)) continue;
+      const entry = resolveByToolId(catalog, toolId);
+      // `resolveByToolId` 找不到时返回 **null**：判据必须是 `!entry`，
+      // 写成 `entry === undefined` 会让 null 通过并在此处抛 TypeError。
+      if (!entry || entry.revision !== selection.revision) continue;
+      active.push({ wireBytes: entry.wireBytes });
+    }
+    // 已被未决回执预留、但尚未进入 selected/frozen 的工具：按预留时的当前定义计字节。
+    /** @type {Set<string>} 已预留，本次再请求同一工具时应视为幂等而非新增 */
+    const reservedOnly = new Set();
+    for (const toolId of reserved) {
+      if (st.frozen.has(toolId) || st.selected.has(toolId)) continue;
+      const entry = resolveByToolId(catalog, toolId);
+      if (!entry) continue;
+      active.push({ wireBytes: entry.wireBytes });
+      reservedOnly.add(toolId);
+    }
+    return { active, reservedOnly };
+  }
+
   return {
     // ---- 只读视图 -------------------------------------------------------
     getCatalog() {
@@ -196,10 +266,10 @@ export function createDiscoveryEngine(config) {
         const st = requireState(scope);
 
         if (req.view === 'state') {
-          const activeEntries = Array.from(st.selected.values())
-            .map((s) => resolveByToolId(catalog, s.toolId))
-            .filter(Boolean);
-          const payload = projectState(st, budgets, activeEntries);
+          // 与 tool_load 门禁同口径（冻结 ∪ 有效 selected ∪ 未决预留）：模型据此判断
+          // 还剩多少额度，少算了就等于谎报。
+          const { active } = activeFootprint(st, scope.sessionId);
+          const payload = projectState(st, budgets, active);
           // 状态投影同样受 `maxListResultBytes` 约束（02 §4）：配了上限却被静默绕过的响应等于假执行。
           // 超限时**先裁诊断段**（`invalidated`，返回值带 `invalidatedTruncated` 标记）—— 它的来源
           // 只增不减，长会话里会单独把整个视图顶穿，让"配了上限"变成永久报错；连诊断段裁空都装不下
@@ -443,6 +513,12 @@ export function createDiscoveryEngine(config) {
         const entry = resolveByToolId(catalog, rec.toolId);
         if (!entry) throw new DomainError('CANDIDATE_UNAVAILABLE');
         const expectedRevision = item.revision ?? rec.revision;
+        // 同一批次里两个候选解析到同一 toolId 却携带冲突 revision：这是**批次自身**的
+        // 矛盾，必须在这里报出来。若把 STALE_CANDIDATE 判在前面，第二条候选会先因为
+        // "与当前定义不符" 被拒，candidateRevisionConflict 永远不可达。
+        if (byToolId.has(entry.toolId) && byToolId.get(entry.toolId) !== expectedRevision) {
+          throw new DomainError('INVALID_ARGS', t(['detail', 'candidateRevisionConflict']));
+        }
         if (entry.revision !== expectedRevision) throw new DomainError('STALE_CANDIDATE');
         // D1:候选路径与 names 路径对称 —— 入口/框架保留项一律不可 load。
         if (entryNames.has(entry.name) || frameworkNames.has(entry.name)) {
@@ -450,9 +526,6 @@ export function createDiscoveryEngine(config) {
         }
         if (alwaysNames.has(entry.name) && !tolerantLoadProtected) {
           throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotLoadable']));
-        }
-        if (byToolId.has(entry.toolId) && byToolId.get(entry.toolId) !== expectedRevision) {
-          throw new DomainError('INVALID_ARGS', t(['detail', 'candidateRevisionConflict']));
         }
         if (byToolId.has(entry.toolId)) continue;
         byToolId.set(entry.toolId, expectedRevision);
@@ -484,38 +557,14 @@ export function createDiscoveryEngine(config) {
         schemaDigest: r.entry.schemaDigest,
       }));
 
-      // 预算占用面 = 已冻结披露 ∪ 已选未披露 ∪ **本 scope 未决 load 回执预留的新增**。
+      // 预算占用面 = 已冻结披露 ∪ 已选未披露 ∪ **本 scope 未决 load 回执预留的新增**
+      // （与 `view:'state'` 共用同一个 activeFootprint —— 见其注释）。
       // 少了最后一项时,同一会话里先后两次 handleLoad 在 canonical 折叠前都只看到旧的
       // selected,各自都判定"放得下",合计却突破显式设置的上限。默认 null 关闭时这无关
       // 紧要,但**显式设置必须真的生效**。
       // 预留沿用既有 pending(applyCanonicalPair 折叠、cancelOperation 取消、resetCacheEpoch
       // 清空三条既有路径自然收口),不新增 TTL 或存储。
-      /** @type {Set<string>} 本 scope 未决回执已预留的 toolId */
-      const reserved = new Set();
-      for (const op of pending.values()) {
-        if (op.sessionId !== scope.sessionId || op.action !== 'load') continue;
-        for (const s of op.expectedReceipt?.selected ?? []) reserved.add(s.toolId);
-      }
-
-      // 尚未走到真实出站披露的 selected(还没冻结)按其选中时的 catalog 条目计字节,
-      // 否则"加载成功但本轮还没发出去"的窗口会被免费。
-      const alreadyActive = frozenWireList(st).map((f) => ({ wireBytes: f.bytes }));
-      for (const [toolId, selection] of st.selected) {
-        if (st.frozen.has(toolId)) continue;
-        const entry = resolveByToolId(catalog, toolId);
-        if (entry === undefined || entry.revision !== selection.revision) continue;
-        alreadyActive.push({ wireBytes: entry.wireBytes });
-      }
-      // 已被未决回执预留、但尚未进入 selected/frozen 的工具:按预留时的当前定义计字节。
-      /** @type {Set<string>} 已预留,本次再请求同一工具时应视为幂等而非新增 */
-      const reservedOnly = new Set();
-      for (const toolId of reserved) {
-        if (st.frozen.has(toolId) || st.selected.has(toolId)) continue;
-        const entry = resolveByToolId(catalog, toolId);
-        if (entry === undefined) continue;
-        alreadyActive.push({ wireBytes: entry.wireBytes });
-        reservedOnly.add(toolId);
-      }
+      const { active: alreadyActive, reservedOnly } = activeFootprint(st, scope.sessionId);
 
       // 幂等:已以同版本选中、或已被本 scope 未决回执预留 → 不重复计费
       const fresh = resolved.filter((r) => {
@@ -538,12 +587,15 @@ export function createDiscoveryEngine(config) {
       if (eligibilityGeneration !== genAtStart) {
         throw new DomainError('SELECTION_CHANGED');
       }
+      /** @type {Map<string, any>} toolId → 复核通过的当前条目(回执直接取它,不再重解析) */
+      const rechecked = new Map();
       for (const snap of snapshot) {
         const cur = resolveByToolId(catalog, snap.toolId);
         if (!cur) throw new DomainError('SELECTION_CHANGED');
         if (cur.revision !== snap.revision || cur.schemaDigest !== snap.schemaDigest) {
           throw new DomainError('SELECTION_CHANGED');
         }
+        rechecked.set(snap.toolId, cur);
       }
 
       const selectionSource = /** @type {'candidate'|'name'} */ (req.candidates ? 'candidate' : 'name');
@@ -554,7 +606,7 @@ export function createDiscoveryEngine(config) {
         operation: 'load',
         selectionSource,
         selected: snapshot.map((s) => {
-          const e = /** @type {any} */ (resolveByToolId(catalog, s.toolId));
+          const e = /** @type {any} */ (rechecked.get(s.toolId));
           return {
             toolId: s.toolId,
             name: e.name,
@@ -582,12 +634,22 @@ export function createDiscoveryEngine(config) {
         expectedReceipt: receipt,
       };
       pending.set(ctx.operationId, op);
+      // 同一 operationId 重新登记（宿主重试）→ 旧的收口记录不再适用。
+      closedOperations.delete(ctx.operationId);
       return { response, operation: op };
     },
 
     // ---- canonical 折叠 --------------------------------------------------
     /**
      * 只在 adapter 确认 canonical tool/call → tool/result 对时调用。
+     *
+     * 折叠资格：该回执必须**仍登记在案**且属于本会话。pending 的既有收口路径
+     * （cancelOperation 显式取消、resetCacheEpoch 压缩边界、destroySession）
+     * 都会把操作移出 pending，并把"已收口"记进 closedOperations —— 否则
+     * `pending.get()` 的 undefined 会把「已被取消」和「跨压缩边界的迟到回执」
+     * 误当成「另一个引擎实例的冷回放」放行，让它们折叠进 selected。
+     * 已成功折叠过的**重复投递**不受影响：那条路没有收口记录，仍交给 reducePair
+     * 的 stale-seq 语义处理（seq 已进 lastAppliedSeq，不可能再改 selected）。
      * @param {any} pair
      * @param {any} scope
      */
@@ -599,11 +661,22 @@ export function createDiscoveryEngine(config) {
       } catch (e) {
         return { applied: false, reason: toDomainError(e).code };
       }
-      const op = pending.get(pair?.call?.operationId);
+      const operationId = pair?.call?.operationId;
+      const op = pending.get(operationId);
+      if (op && op.sessionId !== scope.sessionId) {
+        // pending 是引擎级 Map：别的会话登记的 operationId 不得在本会话折叠。
+        // 这里**不**删除它 —— 它仍属于登记它的那个会话。
+        return { applied: false, reason: 'operation-session-mismatch' };
+      }
+      if (!op && closedOperations.has(operationId)) {
+        // 收口是**操作级**事实（宿主 callId 唯一），不限于某个会话：
+        // 该操作的对价已被丢弃，任何会话的迟到回执都不得把它折叠成授权。
+        return { applied: false, reason: 'operation-closed' };
+      }
       if (op) {
         // 热态:回执必须与登记的期望回执逐字一致(renderer/pruner 改写 → 拒)
         if (!deepEqualCanonical(op.expectedReceipt, pair?.result?.payload)) {
-          pending.delete(pair.call.operationId);
+          closeOperation(pair.call.operationId, scope.sessionId);
           const next = reducePair(st, { ...pair, result: { ...pair.result, rewrittenBy: 'receipt-mismatch' } }, {
             now: () => clock.now(), catalog,
           });
@@ -633,6 +706,10 @@ export function createDiscoveryEngine(config) {
 
     /** 取消 / 失败 / post-policy 失败:丢弃 pending,selected 不动。 */
     cancelOperation(operationId) {
+      const op = pending.get(operationId);
+      if (!op) return false;
+      // 收口必须留痕：否则该操作的迟到回执会走"找不到 pending"这条冷回放路径折叠激活。
+      closeOperation(operationId, op.sessionId);
       return pending.delete(operationId);
     },
 
@@ -669,7 +746,10 @@ export function createDiscoveryEngine(config) {
       const next = resetCacheEpoch(st);
       sessions.set(scope.sessionId, next);
       for (const [operationId, op] of pending) {
-        if (op.sessionId === scope.sessionId) pending.delete(operationId);
+        if (op.sessionId !== scope.sessionId) continue;
+        // 边界之前的回执不再有对价：收口留痕，迟到的 canonical 对不得折进新周期。
+        closeOperation(operationId, op.sessionId);
+        pending.delete(operationId);
       }
       void reason;
       return { epoch: next.epoch };
@@ -729,8 +809,15 @@ export function createDiscoveryEngine(config) {
      * @param {string} reason
      */
     invalidate(toolId, reason) {
+      // 撤权 / 同名替换 / schema 变化改变的是**资格**本身（而不只是本次选择）：
+      // 与 refreshCatalog 的慢路径同口径，升资格代次并作废旧候选 ref —— 注释里的
+      // "升资格代次"必须真的发生，否则模型手里的候选 ref 会在撤权后继续指向旧定义。
+      eligibilityGeneration += 1;
+      refStore.dropForEligibility(eligibilityGeneration);
+      const now = clock.now();
       for (const [sid, st] of sessions) {
-        sessions.set(sid, invalidateTool(st, toolId, reason, clock.now()));
+        // 从未 selected / advertised 过该工具的会话不会因此被动改状态（见 state.invalidateTool）。
+        sessions.set(sid, invalidateTool(st, toolId, reason, now));
       }
     },
 
@@ -868,8 +955,15 @@ export function createDiscoveryEngine(config) {
       // 而收口只有 applyCanonicalPair / cancelOperation / resetCacheEpoch / dispose 四条路径。
       // 会话销毁是第五条 —— 漏掉它就把最后一次 load 的现场留到插件结束（实测可复现）。
       for (const [operationId, op] of pending) {
-        if (op?.sessionId === sessionId) pending.delete(operationId);
+        if (op?.sessionId !== sessionId) continue;
+        // 会话已销毁：它的迟到回执同样不得在重建的会话里折叠激活。
+        closeOperation(operationId, sessionId);
+        pending.delete(operationId);
       }
+      // 会话级 store 也要回收：ref / cursor 都按 sessionId 归属，sessionId 重建后
+      // 旧条目仍会解析成功（同一会话的残留数据）。
+      refStore.dropForSession(sessionId);
+      cursorStore.dropForSession(sessionId);
     },
 
     dispose() {
@@ -877,6 +971,7 @@ export function createDiscoveryEngine(config) {
       refStore.clear();
       cursorStore.clear();
       pending.clear();
+      closedOperations.clear();
       sessions.clear();
       locks.clear();
     },

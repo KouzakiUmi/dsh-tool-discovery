@@ -9,7 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { makeEngine, sampleBindings, binding, commitLoad, nextOpId, SCOPE_A } from './helpers.mjs';
+import { makeEngine, sampleBindings, binding, commitLoad, nextOpId, SCOPE_A, SCOPE_B } from './helpers.mjs';
 import { buildCatalog, identityFingerprintOf, orderedNamesFor } from '../../domain/catalog.mjs';
 import { digestOf } from '../../domain/canonical.mjs';
 
@@ -189,6 +189,27 @@ test('坏绑定不走上短路：refreshCatalog 仍抛 buildCatalog 的规范错
   );
 });
 
+test('刷新移除条目后，未决预留不得让 tool_load 抛内部错误（resolveByToolId 找不到时是 null）', async () => {
+  const { engine } = await makeEngine();
+  // 先登记一条未决 load：它的期望回执会在预算核算里被当作"已预留的 toolId"。
+  const first = await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: nextOpId() });
+  assert.equal(first.response.ok, true);
+
+  // 目录真实变化：glob 被移除。refreshCatalog 不清理 pending（收口只在下述四条路径）。
+  engine.refreshCatalog(sampleBindings().filter((b) => b.toolId !== 't_files_glob'));
+
+  // 预算核算必须跳过已解析不到的预留项：`resolveByToolId` 返回 **null**，
+  // 旧判据 `entry === undefined` 会放它过去并在此处解引用 null → 内部错误。
+  const res = await engine.handleLoad({ names: ['grep'] }, SCOPE_A, { operationId: nextOpId() });
+  assert.equal(res.response.error, undefined, `不得是内部错误：${JSON.stringify(res.response.error)}`);
+  assert.equal(res.response.ok, true);
+  assert.deepEqual(
+    res.response.data.receipt.selected.map((s) => s.name),
+    ['grep'],
+    '被移除工具不得混进回执',
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Defect 2：available:all 的顺序摘要
 // ---------------------------------------------------------------------------
@@ -299,4 +320,42 @@ test('dispose 后 guard 拒绝带得上面向模型的文案（不是 reason: un
     assert.equal(typeof out.reason, 'string', `locale=${locale} 的拒绝原因必须是字符串`);
     assert.ok(out.reason.length > 0, `locale=${locale} 的拒绝原因不得为空`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Defect 5：engine.invalidate 必须与注释一致（升资格代次 + 作废旧 ref）
+// ---------------------------------------------------------------------------
+
+test('engine.invalidate 升资格代次并作废旧候选 ref（与 refreshCatalog 慢路径同口径）', async () => {
+  const { engine } = await makeEngine();
+  const genBefore = engine.getEligibilityGeneration();
+  const search = engine.handleSearch({ category: 'files', query: 'glob' }, SCOPE_A);
+  const candidate = search.data.candidates[0];
+
+  engine.invalidate('t_files_grep', 'tool-removed');
+
+  assert.equal(engine.getEligibilityGeneration(), genBefore + 1, '撤权必须升资格代次');
+  const res = await engine.handleLoad(
+    { candidates: [{ ref: candidate.ref, revision: candidate.revision }] }, SCOPE_A, { operationId: nextOpId() },
+  );
+  assert.equal(res.response.error.code, 'CANDIDATE_UNAVAILABLE', '撤权后旧候选 ref 必须失效');
+});
+
+test('engine.invalidate 只为曾 selected / advertised 的工具留痕，不喂大 invalidated', async () => {
+  const { engine } = await makeEngine();
+  engine.getState(SCOPE_A); // 会话存在但从未选中任何工具
+  const loaded = await commitLoad(engine, SCOPE_B, { names: ['glob'] });
+  assert.equal(loaded.applied, true);
+  const globRevision = engine.getState(SCOPE_B).selected.get('t_files_glob').revision;
+
+  engine.invalidate('t_files_grep', 'tool-removed'); // 与两个会话都无关的工具
+  assert.equal(engine.getState(SCOPE_A).invalidated.size, 0, '空会话不得凭空写诊断记录');
+  assert.equal(engine.getState(SCOPE_B).invalidated.size, 0, '与已选工具无关的撤权不得写记录');
+
+  // 正控制：撤权目标恰是 B 选中过的工具 → 必须留痕、selected 立即失效。
+  engine.invalidate('t_files_glob', 'tool-removed');
+  const b = engine.getState(SCOPE_B);
+  assert.equal(b.selected.size, 0);
+  assert.equal(b.invalidated.get('t_files_glob').reason, 'tool-removed');
+  assert.equal(b.invalidated.get('t_files_glob').revision, globRevision, '留痕必须带上被作废的版本');
 });

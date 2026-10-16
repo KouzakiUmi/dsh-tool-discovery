@@ -60,6 +60,16 @@ export function createCursorStore(deps) {
     clear() {
       store.clear();
     },
+    /**
+     * 按会话回收（会话销毁 / HMR）：游标由 sessionId 归属，销毁后不得继续可用。
+     * 只在 `issue()` 里顺带清扫过期项是不够的 —— 列表始终单页时从不 issue。
+     * @param {string} sessionId
+     */
+    dropForSession(sessionId) {
+      for (const [cursor, rec] of store) {
+        if (rec.sessionId === sessionId) store.delete(cursor);
+      }
+    },
     size() {
       return store.size;
     },
@@ -211,6 +221,10 @@ export function navigationFootprint(cards) {
  * 度量口径与出站一致：外壳由 adapter 用 `JSON.stringify` 序列化，这里也用同一口径，
  * 避免 `canonicalJson`（对 `undefined`/NaN 抛错）与真实出站行为不一致。
  *
+ * 定位方式：`invalidated` 缩得越短结果一定越小（序列化对数组长度单调不增），因此先用
+ * keep=0 一次 O(1) 判定快速失败，再二分出**最大**可保留条数 —— 结果与逐条递减完全一致，
+ * 但把 O(N) 次整份序列化降到 O(log N)。
+ *
  * @param {{invalidated?: unknown[]}} payload
  * @param {number|null} maxBytes
  * @returns {object|null}
@@ -220,11 +234,20 @@ export function fitStateWithinBudget(payload, maxBytes) {
   if (maxBytes === null) return payload;
   if (sizeOf(payload) <= maxBytes) return payload;
   const invalidated = Array.isArray(payload.invalidated) ? payload.invalidated : [];
-  for (let keep = invalidated.length - 1; keep >= 0; keep -= 1) {
-    const candidate = { ...payload, invalidated: invalidated.slice(0, keep), invalidatedTruncated: true };
-    if (sizeOf(candidate) <= maxBytes) return candidate;
+  const candidateFor = (keep) => ({ ...payload, invalidated: invalidated.slice(0, keep), invalidatedTruncated: true });
+  // 空数组时连 keep=0 的候选都不必试：它必然比 payload 更长，而 payload 已超限。
+  if (invalidated.length === 0) return null;
+  if (sizeOf(candidateFor(0)) > maxBytes) return null;
+  let lo = 0;
+  let hi = invalidated.length - 1;
+  const largest = candidateFor(hi);
+  if (sizeOf(largest) <= maxBytes) return largest;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (sizeOf(candidateFor(mid)) <= maxBytes) lo = mid;
+    else hi = mid - 1;
   }
-  return null;
+  return candidateFor(lo);
 }
 
 const LIST_VIEW_SET = new Set(['available', 'loaded', 'categories', 'state']);

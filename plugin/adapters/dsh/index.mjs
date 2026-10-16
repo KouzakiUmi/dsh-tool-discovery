@@ -153,20 +153,6 @@ function readLocaleFile(path) {
   return readFileSync(path, 'utf8');
 }
 
-/**
- * 读 `respectAlwaysVisible`（兼容 volatile 引用与非 volatile 布尔）。
- *
- * 返回**函数**而不是值：守卫对象是长生命周期闭包，配置在运行中被改时不该读到过期快照。
- * 默认 `false` = 现状（核心工具自动常驻且免披露放行）。
- */
-function respectAlwaysVisibleReader(config) {
-  return () => {
-    const raw = config?.respectAlwaysVisible;
-    const value = raw !== null && typeof raw === 'object' && typeof raw.get === 'function' ? raw.get() : raw;
-    return value === true;
-  };
-}
-
 function requirePlainObject(value, what) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new DomainError('INCOMPATIBLE_COMPOSITION', `${what} 必须是对象。`);
@@ -447,6 +433,20 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       return presetToolNamesOf(ctx.tools, ctx.get('agentPresets'), agentScope);
     };
 
+    /**
+     * 读 `respectAlwaysVisible`（兼容 volatile 引用与非 volatile 布尔）。
+     *
+     * 与 getInitialToolsEnabled / ptcEnabled 同一读法：validateConfig 的返回值已把
+     * 该字段拍平为布尔，volatile 引用只活在 fiber 的活配置上 —— 只读拍平值的话
+     * 设置面板的运行中变更永远不生效。默认 `false` = 现状（核心工具自动常驻且
+     * 免披露放行）。guard 与 lifecycle 共用这一个读取器。
+     */
+    const getRespectAlwaysVisible = () => {
+      const raw = ctx.fiber?.config?.respectAlwaysVisible ?? config.respectAlwaysVisible;
+      const value = raw !== null && typeof raw === 'object' && typeof raw.get === 'function' ? raw.get() : raw;
+      return value === true;
+    };
+
     /** 把当前目录写进 Config 的 meta 并让设置面板重读。 */
     // 注意发布目标是 **apply.Config**（已构建的 Config 树），不是 schemastery 模块
     // 本身 —— 后者没有 dict.alwaysVisible。
@@ -514,6 +514,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
         log,
         getAlwaysVisible,
         getInitialToolsEnabled,
+        getRespectAlwaysVisible,
         getPresetTools,
         onRuntimeCreated,
         trustedEpoch: trustedEpoch,
@@ -596,7 +597,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
         ctx,
         lifecycle,
         frameworkRetained: config.frameworkRetained,
-        respectAlwaysVisible: respectAlwaysVisibleReader(config),
+        respectAlwaysVisible: getRespectAlwaysVisible,
         locale,
         log,
         ptcEnabled,

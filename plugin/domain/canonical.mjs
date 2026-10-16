@@ -126,11 +126,16 @@ const FROZEN_MARK = Symbol('domain.frozenContainer');
  */
 function preventMapMutation(container) {
   if (/** @type {any} */ (container)[FROZEN_MARK]) return;
+  // 只有原生 Map / Set 靠原型方法改写内部槽。旧判据探测原型上的 'set' 描述符,
+  // 而 `Set.prototype` 只有 add —— 于是**所有** Set 都在这里直接 return,
+  // 冻结过的 Set 仍可 add/delete/clear。
+  if (!(container instanceof Map) && !(container instanceof Set)) return;
   const proto = Object.getPrototypeOf(container);
-  if (!proto || Object.getOwnPropertyDescriptor(proto, 'set') === undefined) return;
+  if (!proto) return;
   const guard = (method) => function guarded() {
     throw new TypeError('attempted to mutate a frozen domain snapshot');
   };
+  // Set 没有 set、Map 没有 add:两套方法都装上,命中哪个由实例自身的调用决定。
   const own = {
     set: guard('set'), delete: guard('delete'), clear: guard('clear'), add: guard('add'),
   };
