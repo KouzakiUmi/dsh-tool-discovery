@@ -280,8 +280,8 @@ The distribution channel is unchanged and is **not npm**: a green `main` run pac
 its identity. At the time of writing (2026-10-08) no release carried `0.2.0-functional.7`; if one
 does now, this entry does not need to change, because the release name and the manifest inside the
 tarball — not this text — say which version a build contains. The install/update wording lives in the
-[README](README.md#install-and-update) (English) /
-[README.zh.md](README.zh.md#安装与更新) (Chinese); this round ran none of those commands.
+[README.en.md](README.en.md#install-and-update) (English) /
+[README](README.md#安装与更新) (Chinese); this round ran none of those commands.
 
 ### Changed — optional feature settings
 

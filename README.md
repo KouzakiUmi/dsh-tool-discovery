@@ -1,18 +1,34 @@
 <div align="center">
-  <img src="assets/title.jpg" width="100%" alt="DSH Tool Discovery —— 首轮提供三个小入口与初始集合，其它工具的真实 schema 按需在下一轮披露（仓库横幅图）">
+  <img src="assets/banner.zh.svg" width="1000" alt="DSH Tool Discovery：三个小入口先行，真实 schema 仅按需到场。控制台风格示意图：工具目录中只有 glob 被加载，其余工具保持关闭">
 
   # DSH Tool Discovery
 
   **三个小入口与初始工具集合在前，其它工具的真实 schema 按需到场。**
 
-  [English](README.md) | 中文
+  中文 | [English](README.en.md)
 
   [![npm version](https://img.shields.io/npm/v/dsh-tool-discovery)](https://www.npmjs.com/package/dsh-tool-discovery)
   [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
   [![DSH](https://img.shields.io/badge/DSH-0.2.1--alpha.1%20%7C%200.2.1--alpha.2-informational)](plugin/docs/10-store-compatibility.md)
 
-  **安装只需一条命令** → [快速开始](#快速开始)
+  [快速开始](#快速开始) · [三个入口](#三个入口) · [配置](#配置) · [自行验证](#自行验证) · [设计文档](plugin/docs/README.md)
 </div>
+
+---
+
+## 功能预览
+
+### 首轮只带必要的东西
+
+首轮请求里只有三个固定入口、每类能力的简短摘要，以及默认初始集合的完整 schema。其它普通工具首轮不披露，不占上下文。
+
+### 选中之后，下一轮才出现
+
+`tool_load` 只记录选择、不执行工具；披露发生在下一轮，模型读到的定义与选择一致。
+
+### 已披露的不被悄悄改写
+
+同一缓存周期内，已披露的内容与顺序只增不改，宿主侧工具升级不会在会话中途改写模型已读过的定义。只有成功压缩才会重置周期。
 
 ---
 

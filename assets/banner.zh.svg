@@ -1,0 +1,179 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="520" viewBox="0 0 1280 520" font-family="'Inter','Segoe UI','Microsoft YaHei','PingFang SC','Noto Sans CJK SC',Arial,sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">DSH Tool Discovery</title>
+  <desc id="d">控制台风格横幅:三个入口(list、search、load)接入工具目录,其中一个工具被加载,其余保持关闭。示意图。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07090d"/>
+      <stop offset="0.6" stop-color="#0a0e15"/>
+      <stop offset="1" stop-color="#05070a"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="0.55" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#c084fc"/>
+    </linearGradient>
+    <linearGradient id="accentV" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#6366f1"/>
+    </linearGradient>
+    <linearGradient id="titleFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#a5b4c8"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.07"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.02"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.28"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.16"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#6366f1" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#6366f1" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#22d3ee" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#22d3ee" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="fadeRight" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="1"/>
+    </linearGradient>
+    <mask id="gridMask">
+      <rect width="1280" height="520" fill="url(#fadeRight)"/>
+    </mask>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#9fb3ff" stroke-opacity="0.07"/>
+    </pattern>
+    <pattern id="dots" width="8" height="8" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="0.8" fill="#ffffff" fill-opacity="0.05"/>
+    </pattern>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#000" flood-opacity="0.6"/>
+    </filter>
+  </defs>
+
+  <!-- Backdrop -->
+  <rect width="1280" height="520" fill="url(#bg)"/>
+  <rect width="1280" height="520" fill="url(#dots)"/>
+  <g mask="url(#gridMask)"><rect width="1280" height="520" fill="url(#grid)"/></g>
+  <circle cx="1010" cy="170" r="330" fill="url(#glowA)"/>
+  <circle cx="360" cy="520" r="280" fill="url(#glowB)"/>
+
+  <!-- Frame + corner brackets -->
+  <rect x="24.5" y="24.5" width="1231" height="471" rx="18" fill="none" stroke="url(#edge)"/>
+  <g stroke="#22d3ee" stroke-opacity="0.9" stroke-width="2" fill="none" stroke-linecap="round">
+    <path d="M24 56V42a18 18 0 0 1 18-18h14"/>
+    <path d="M1256 56V42a18 18 0 0 0-18-18h-14"/>
+    <path d="M24 464v14a18 18 0 0 0 18 18h14"/>
+    <path d="M1256 464v14a18 18 0 0 1-18 18h-14"/>
+  </g>
+
+  <!-- Status strip -->
+  <g font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace" font-size="12" letter-spacing="1.6" fill="#64748b">
+    <circle cx="64" cy="62" r="4" fill="#22d3ee"/>
+    <circle cx="64" cy="62" r="9" fill="#22d3ee" fill-opacity="0.18"/>
+    <text x="84" y="66">渐进式工具发现</text>
+    <text x="1216" y="66" text-anchor="end">协议 / 3 个入口</text>
+  </g>
+  <line x1="64" y1="84" x2="1216" y2="84" stroke="#ffffff" stroke-opacity="0.07"/>
+
+  <!-- Title block -->
+  <g transform="translate(64 0)">
+    <text x="0" y="190" font-size="76" font-weight="800" letter-spacing="-3" fill="url(#titleFill)">DSH</text>
+    <text x="0" y="262" font-size="76" font-weight="800" letter-spacing="-3" fill="url(#accent)">Tool Discovery</text>
+    <rect x="0" y="292" width="72" height="3" rx="1.5" fill="url(#accent)"/>
+    <text x="0" y="332" font-size="22" fill="#9aa8bd">三个小入口先行。</text>
+    <text x="0" y="362" font-size="22" fill="#dbe4f0">真实 schema 仅按需到场。</text>
+
+    <!-- entry chips -->
+    <g transform="translate(0 400)" font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace" font-size="14">
+      <g>
+        <rect width="118" height="36" rx="8" fill="url(#panel)" stroke="url(#edge)"/>
+        <circle cx="18" cy="18" r="3.5" fill="#22d3ee"/>
+        <text x="32" y="23" fill="#e2e8f0">tool_list</text>
+      </g>
+      <g transform="translate(130 0)">
+        <rect width="136" height="36" rx="8" fill="url(#panel)" stroke="url(#edge)"/>
+        <circle cx="18" cy="18" r="3.5" fill="#6366f1"/>
+        <text x="32" y="23" fill="#e2e8f0">tool_search</text>
+      </g>
+      <g transform="translate(278 0)">
+        <rect width="124" height="36" rx="8" fill="url(#panel)" stroke="url(#edge)"/>
+        <circle cx="18" cy="18" r="3.5" fill="#c084fc"/>
+        <text x="32" y="23" fill="#e2e8f0">tool_load</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- Console panel -->
+  <g transform="translate(720 122)" filter="url(#shadow)">
+    <rect width="496" height="348" rx="16" fill="#0b0f17" fill-opacity="0.92"/>
+    <rect width="496" height="348" rx="16" fill="url(#panel)"/>
+    <rect x="0.5" y="0.5" width="495" height="347" rx="15.5" fill="none" stroke="url(#edge)"/>
+
+    <!-- title bar -->
+    <g>
+      <circle cx="24" cy="24" r="5" fill="#ff5f57" fill-opacity="0.85"/>
+      <circle cx="42" cy="24" r="5" fill="#febc2e" fill-opacity="0.85"/>
+      <circle cx="60" cy="24" r="5" fill="#28c840" fill-opacity="0.85"/>
+      <text x="248" y="28" text-anchor="middle" font-size="12" letter-spacing="1.4" fill="#64748b" font-family="'Microsoft YaHei','PingFang SC',sans-serif">工具目录</text>
+    </g>
+    <line x1="0" y1="46" x2="496" y2="46" stroke="#ffffff" stroke-opacity="0.07"/>
+
+    <g font-family="'JetBrains Mono','Cascadia Code',Consolas,monospace" font-size="14">
+      <!-- query -->
+      <text x="24" y="82" fill="#22d3ee">&gt;</text>
+      <text x="44" y="82" fill="#e2e8f0">tool_search</text>
+      <text x="142" y="82" fill="#64748b">"按模式查找文件"</text>
+
+      <!-- results: closed rows -->
+      <g transform="translate(24 104)">
+        <rect width="448" height="40" rx="9" fill="#ffffff" fill-opacity="0.025" stroke="#ffffff" stroke-opacity="0.07"/>
+        <text x="16" y="25" fill="#64748b">grep</text>
+        <text x="432" y="25" text-anchor="end" font-size="12" letter-spacing="1" fill="#475569">未加载</text>
+      </g>
+
+      <!-- loaded row -->
+      <g transform="translate(24 152)">
+        <rect x="-4" y="-4" width="456" height="94" rx="13" fill="#6366f1" fill-opacity="0.16" filter="url(#soft)"/>
+        <rect width="448" height="86" rx="11" fill="#0d1322" stroke="url(#accent)" stroke-width="1.6"/>
+        <rect x="0" y="14" width="3" height="58" rx="1.5" fill="url(#accentV)"/>
+        <text x="20" y="31" font-size="17" font-weight="700" fill="#f8fafc">glob</text>
+        <rect x="352" y="14" width="80" height="22" rx="11" fill="#22d3ee" fill-opacity="0.14" stroke="#22d3ee" stroke-opacity="0.5"/>
+        <text x="392" y="29" text-anchor="middle" font-size="12" letter-spacing="1" font-weight="700" fill="#22d3ee">已加载</text>
+        <!-- schema preview -->
+        <g font-size="12">
+          <text x="20" y="54" fill="#64748b">schema</text>
+          <text x="76" y="54" fill="#c084fc">{ pattern</text>
+          <text x="152" y="54" fill="#64748b">:</text>
+          <text x="162" y="54" fill="#22d3ee">string</text>
+          <text x="208" y="54" fill="#c084fc">, path?</text>
+          <text x="262" y="54" fill="#64748b">}</text>
+          <text x="20" y="74" fill="#64748b">完整定义于下一轮披露</text>
+        </g>
+      </g>
+
+      <!-- closed rows -->
+      <g transform="translate(24 252)">
+        <rect width="448" height="40" rx="9" fill="#ffffff" fill-opacity="0.025" stroke="#ffffff" stroke-opacity="0.07"/>
+        <text x="16" y="25" fill="#64748b">read_file</text>
+        <text x="432" y="25" text-anchor="end" font-size="12" letter-spacing="1" fill="#475569">未加载</text>
+      </g>
+      <g transform="translate(24 300)" opacity="0.55">
+        <rect width="448" height="30" rx="9" fill="#ffffff" fill-opacity="0.02" stroke="#ffffff" stroke-opacity="0.05"/>
+        <text x="16" y="20" font-size="12" fill="#475569">+ 其余工具,未披露</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- connector from chips to console -->
+  <path d="M470 418C560 418 600 300 720 300" fill="none" stroke="url(#accent)" stroke-width="1.6" stroke-dasharray="3 6" stroke-linecap="round" stroke-opacity="0.8"/>
+  <circle cx="720" cy="300" r="4" fill="#22d3ee"/>
+  <circle cx="720" cy="300" r="10" fill="#22d3ee" fill-opacity="0.2"/>
+</svg>

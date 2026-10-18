@@ -1,18 +1,34 @@
 <div align="center">
-  <img src="assets/title.jpg" width="100%" alt="DSH Tool Discovery — three small control entries plus the initial set up front; other tools' real schemas are disclosed on demand in the next turn (repository banner)">
+  <img src="assets/banner.en.svg" width="1000" alt="DSH Tool Discovery: three small entries up front, real schemas only on demand. A console-style illustration of a registry where only glob is loaded and the other tools stay closed">
 
   # DSH Tool Discovery
 
   **Three small entries and the initial tool set up front; other tools' real schemas arrive on demand.**
 
-  English | [中文](README.zh.md)
+  [中文](README.md) | English
 
   [![npm version](https://img.shields.io/npm/v/dsh-tool-discovery)](https://www.npmjs.com/package/dsh-tool-discovery)
   [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
   [![DSH](https://img.shields.io/badge/DSH-0.2.1--alpha.1%20%7C%200.2.1--alpha.2-informational)](plugin/docs/10-store-compatibility.md)
 
-  **Install with one command** → [Quick start](#quick-start)
+  [Quick start](#quick-start) · [The three entries](#the-three-entries) · [Configuration](#configuration) · [Verify it yourself](#verify-it-yourself) · [Design documents](plugin/docs/README.md)
 </div>
+
+---
+
+## Feature preview
+
+### Only the essentials on the first turn
+
+The first request carries just the three fixed entries, a short summary per category, and the full schemas of the default initial set. Other ordinary tools stay undisclosed and take no context.
+
+### Picked tools appear on the next turn
+
+`tool_load` only records the selection and runs nothing; disclosure happens on the following turn, so the model reads definitions that match its choice.
+
+### Disclosed content is never rewritten quietly
+
+Within one cache epoch, disclosed content and order are append-only, so a host-side tool upgrade cannot rewrite a definition the model has already read mid-session. Only a successful compaction resets the epoch.
 
 ---
 

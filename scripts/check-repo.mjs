@@ -51,15 +51,15 @@ function checkIdentity (fail) {
 }
 
 function checkDocs (fail) {
-  // README.md and README.zh.md are a bilingual pair; divergence usually means a half-finished edit.
-  for (const file of ['README.md', 'README.zh.md']) {
+  // README.md and README.en.md are a bilingual pair; divergence usually means a half-finished edit.
+  for (const file of ['README.md', 'README.en.md']) {
     const text = read(file)
     for (const entry of ['tool_list', 'tool_search', 'tool_load']) {
       if (!text.includes(entry)) fail(`${file} does not mention ${entry}`)
     }
   }
 
-  const rootDocs = ['README.md', 'README.zh.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'SECURITY.md']
+  const rootDocs = ['README.md', 'README.en.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'SECURITY.md']
   const published = [...rootDocs.filter((f) => existsSync(join(ROOT, f))), 'plugin/README.md', ...markdownUnder('plugin/docs')]
 
   // Link shapes this project uses: `](path#anchor)`, `](<path with spaces>)`, `](<path> §9)`.
@@ -87,7 +87,7 @@ function checkDocs (fail) {
   // The project has measured neither token savings nor latency; a bare percentage next to these
   // words would overstate the evidence.
   const claim = /(sav(e|ing|ings)|reduc(e|ed|tion))[^.\n]{0,40}[0-9]+(\.[0-9]+)?%/i
-  const claimFiles = ['README.md', 'README.zh.md', 'plugin/README.md', ...markdownUnder('plugin/docs')]
+  const claimFiles = ['README.md', 'README.en.md', 'plugin/README.md', ...markdownUnder('plugin/docs')]
   for (const file of claimFiles) {
     read(file).split('\n').forEach((line, i) => {
       if (claim.test(line)) fail(`${file}:${i + 1}: unmeasured saving claim: ${line.trim()}`)
