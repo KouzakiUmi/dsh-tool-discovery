@@ -62,7 +62,7 @@ Did this change add, move, or un-ignore anything under `plugin/`, `docs/`, or th
 
 ## Docs
 
-- [ ] Root `README.md` and `README.zh.md` stay consistent with each other and with reality.
+- [ ] Root `README.md` (中文, default) and `README.en.md` stay consistent with each other and with reality.
 - [ ] No unmeasured claim is stated as fact (token savings, latency, quality scores, install or
       GUI state).
 - [ ] `CHANGELOG.md` updated, or the entry is not user-visible.

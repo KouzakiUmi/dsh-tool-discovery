@@ -265,7 +265,7 @@ jobs:
         run: |
           # Nothing outside `files` may ship. A stray .npmrc or workflow inside
           # the tarball would be handed to every installer.
-          tar -tzf dist/dsh-tool-discovery.tgz | grep -vE '^package/(package\.json|LICENSE|README(\.zh)?\.md|CHANGELOG\.md|cordis\.patch\.yml|plugin/(adapters|domain|client)/)' \
+          tar -tzf dist/dsh-tool-discovery.tgz | grep -vE '^package/(package\.json|LICENSE|README(\.en)?\.md|CHANGELOG\.md|cordis\.patch\.yml|plugin/(adapters|domain|client)/)' \
             && { echo '::error::unexpected files in payload'; exit 1; } \
             || echo 'ok: payload matches declared files'
 
