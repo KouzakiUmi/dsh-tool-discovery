@@ -80,16 +80,37 @@ export function estimatedTokenCount(text) {
 /**
  * 检查 UTF-8 字节硬限。`maxBytes` 为 null 时**不限制**（上限已关闭）。
  * 超限抛 BUDGET_EXCEEDED(调用方应先减项数)。
- * @param {string} text
+ * @param {string} value
  * @param {number|null} maxBytes
  * @param {string} what 仅用于 details
  */
-export function assertBytes(text, maxBytes, what) {
-  const bytes = utf8Bytes(text);
+export function assertBytes(value, maxBytes, what) {
+  const bytes = utf8Bytes(value);
   if (maxBytes !== null && bytes > maxBytes) {
     throw new DomainError('BUDGET_EXCEEDED', text.format(['detail', 'bytesOverBudget'], { what }), { bytes, maxBytes });
   }
   return bytes;
+}
+
+/**
+ * 在完整响应度量下选择最大的完整前缀，-1 表示连空响应都放不下。
+ * 全量时可能不带游标/截断标记，故先单独试全量，再二分其余单调增长的前缀。
+ * @param {number} count
+ * @param {number|null} maxBytes
+ * @param {(count:number)=>number} sizeAt
+ */
+export function fitPrefixLength(count, maxBytes, sizeAt) {
+  if (maxBytes === null || sizeAt(count) <= maxBytes) return count;
+  if (count === 0) return -1;
+  let lo = 1;
+  let hi = count - 1;
+  let best = sizeAt(0) <= maxBytes ? 0 : -1;
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (sizeAt(mid) <= maxBytes) { best = mid; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+  return best;
 }
 
 /**

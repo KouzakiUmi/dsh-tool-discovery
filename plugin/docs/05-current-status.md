@@ -1,6 +1,6 @@
 # 05 · 当前状态
 
-截至 **2026-10-14**（Asia/Hong_Kong；最后一次取证运行 2026-10-14）。本文件只记录**有证据的结论**，并把每项标为 **已验证 / 未验证 / 不支持**。协议判据见[02](<02-protocol-and-data-model.md>)，矩阵见[03](<03-implementation-and-acceptance.md>)，接口事实见[04](<04-runtime-evidence.md>)，可信周期细节见[08](<08-trusted-epoch-baselines.md>)。
+截至 **2026-10-19**（Asia/Hong_Kong；本次更新仅含未发布工作树的便携测试与静态证据，历史宿主验证仍按各自日期标注）。本文件只记录**有证据的结论**，并把每项标为 **已验证 / 未验证 / 不支持**。协议判据见[02](<02-protocol-and-data-model.md>)，矩阵见[03](<03-implementation-and-acceptance.md>)，接口事实见[04](<04-runtime-evidence.md>)，可信周期细节见[08](<08-trusted-epoch-baselines.md>)。
 
 > **维护方式**：本文件是**当前快照**，不是流水账。过程叙述（每一轮修了什么、谁复核、命令与日志）归 [`CHANGELOG.md`](../../CHANGELOG.md)、[08](<08-trusted-epoch-baselines.md>) 与私有证据 `plugin/reports/**` / `plugin/audits/**`；这里只留结论、数字与未覆盖项。旧版逐轮叙述可在 git 历史中取回。
 
@@ -9,6 +9,20 @@
 **版本坐标**：**本源码快照是 `0.4.2`**。npm 的实际发布版本与 provenance 以官方 registry 为准；GitHub 的 `v<version>` / `build-<sha>` Release 与其 tarball 清单是独立的构建证据，不能替代 npm 发布证明。本文件不把「已发布 / 未发布」写成长期结论。本仓库于 2026-10-06 重建，旧历史（`2a1f9c0`、`257ddc0` 等）已被重写移除，**不再可引用**。每个绿的 `main` 构建会自动产出 GitHub Release 资产（`build-<sha>`），语义版本发布由 `v<version>` 标签驱动。
 
 整理完成 ≠ 发布完成 ≠ 产品验收 ≠ npm 发布 ≠ 安装生效，五者互不替代。本文件的“已验证”一律指**工作区内的代码与测试证据**，不含任何安装或分发结论；它不是 [03 §11](<03-implementation-and-acceptance.md>) 发布门槛的产品验收，不是 npm 发布，也不是安装到 profile / GUI 生效。
+
+**当前未发布工作树验证（2026-10-19）**：便携单测 **503 pass / 0 fail**（Node 24.13.0，exit 0），
+明确排除仍需宿主解析的 client/settings 两份文件，不把该子集称为完整 `npm test`。
+新增[设计契约回归](<../tests/unit/design-invariants.test.mjs>) **18 项全过**，含 native/PTC 子调用结果的
+六种完成排列及混合失败、native 冻结恢复与不授信、同名换绑定、新技能与完整外壳字节限额。
+七组私有镜像回退负控制均在对应断言转红，产品源码未被负控制修改。
+`node scripts/check-repo.mjs` 与 domain/adapter 的 `node --check` 通过；数据集验证仍为 **20 PASS / 1 FAIL**
+（既有 H037/H044 类别误标，exit 1），不构成搜索评分。命令与日志见私有
+`plugin/reports/design-invariants-fix-20261019.md`。
+
+本次修复与契约见 [02 §14](<02-protocol-and-data-model.md#14-状态契约修订未发布工作树>)。
+**PTC SDK 冻结、稳定追加及跨重启语义仍未修复**；共享提交次序的回归通过不能替其补签。
+本轮未运行真实 Loader、宿主绑定两份单测、真实 provider、GUI/DOM 或性能验收；未安装、未重启，
+也无非作者安全边界签署。以下历史数字保留各自时点，不与本次便携结果混称。
 
 **核验范围声明**（2026-10-09，本工作区 Windows、Node 24，DSH Core `0.2.1-alpha.1` 在默认安装根）：
 

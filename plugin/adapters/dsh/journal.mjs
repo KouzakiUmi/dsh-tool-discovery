@@ -14,7 +14,7 @@
 //   5. fork own-only：只折叠本会话拥有的 canonical 对（seq >= inheritedEventCount，
 //      事实取公开 query.readSession 与 live Session 的 inheritedEventCount 交叉核验）；
 //      继承前缀不折叠、不观测、不进缓冲；边界缺失/畸形/冲突或 seq 流断口一律 fail closed。
-import { digestOf, deepEqualCanonical } from '../../domain/index.mjs';
+import { digestOf, deepEqualCanonical, parseReceiptShape, validateLoadRequest } from '../../domain/index.mjs';
 import { compactedEpochIdentity, initialEpochIdentity } from './trusted-epoch.mjs';
 import { wireOfSchema } from './registry.mjs';
 
@@ -117,8 +117,9 @@ export function foldPairs(events) {
       const shell = parseResultEnvelope(resultText(event));
       if (shell === null) continue;
       pairs.push({
-        // seq 取 canonical call 的 seq：与 sourceEventSeqs 绑定（domain 判据 2）
+        // call 位次只负责配对；最终提交位次独立保存，热态/冷态都按 result 顺序折叠。
         seq: callSeq,
+        resultSeq: event.seq,
         call: { operationId: `op_${call.callId}`, tool: 'tool_load', input: call.input },
         result: {
           isError: event.data?.message?.isError === true,
@@ -130,6 +131,49 @@ export function foldPairs(events) {
     }
   }
   return pairs;
+}
+
+/**
+ * 披露历史与当前执行资格分开恢复：只有先前成功、已配对的显式 load，且随后真实
+ * header 包含同 digest wire，才构成披露证据。当前目录已换版/移除不会抹掉该事实。
+ * 此函数不恢复 selected/advertised；普通 header、失败结果及继承/旧周期均不能借此授权。
+ */
+function disclosuresFromHistory(events, pairs) {
+  const completed = [...pairs].sort((a, b) => a.resultSeq - b.resultSeq);
+  const selected = new Map();
+  const seen = new Set();
+  const records = [];
+  let index = 0;
+  for (const event of events) {
+    while (index < completed.length && completed[index].resultSeq < event.seq) {
+      const pair = completed[index++];
+      if (pair.result.isError !== false || pair.result.ok !== true) continue;
+      const parsed = parseReceiptShape(pair.result.payload);
+      if (!parsed.ok || parsed.receipt.operation !== 'load'
+        || parsed.receipt.operationId !== pair.call.operationId) continue;
+      let req;
+      try { req = validateLoadRequest(pair.call.input); } catch { continue; }
+      const receipt = parsed.receipt;
+      if (receipt.selectionSource !== (req.names ? 'name' : 'candidate')) continue;
+      if (receipt.selected.length > (req.names ?? req.candidates).length) continue;
+      if (req.names && receipt.selected.some((s) => !req.names.includes(s.name))) continue;
+      for (const rec of receipt.selected) {
+        let versions = selected.get(rec.name);
+        if (!versions) { versions = new Map(); selected.set(rec.name, versions); }
+        versions.set(rec.schemaDigest, rec);
+      }
+    }
+    if (event.type !== 'request/header') continue;
+    for (const schema of event.data?.header?.tools ?? []) {
+      if (seen.has(schema.name)) continue;
+      const wire = wireOfSchema(schema);
+      const rec = selected.get(schema.name)?.get(digestOf(wire));
+      if (!rec) continue;
+      seen.add(schema.name);
+      records.push({ ...rec, wire });
+    }
+  }
+  return records;
 }
 
 /** 按 seq 合并快照与缓冲并去重（先到先得）。 */
@@ -724,6 +768,7 @@ export function createJournal(deps) {
       }
       const pair = {
         seq: callSeq,
+        resultSeq: event.seq,
         call: { operationId: `op_${call.callId}`, tool: 'tool_load', input: call.input },
         result: {
           isError: event.data?.message?.isError === true,
@@ -850,6 +895,13 @@ export function createJournal(deps) {
         }
       }
       const pairs = foldPairs(ownEvents).filter((p) => p.seq > lastSuccessCompactionEndSeq);
+      // 先恢复独立披露账本：即使当前定义导致历史 selection 被拒，旧 wire 仍须保留。
+      // PTC 的 SDK 快照不是 native header.tools，本轮不从 run_code 头推断其冻结内容。
+      if (deps.collapsedPresentation?.() !== true && typeof engine.restoreDisclosures === 'function') {
+        engine.restoreDisclosures(scope, disclosuresFromHistory(
+          ownEvents.filter((event) => event.seq > lastSuccessCompactionEndSeq), pairs,
+        ));
+      }
       const outcome = engine.restore(pairs, scope);
       // 只恢复 own 当前周期内的首见 wire；名单/执行资格绝不从 header 恢复。
       disclosedWire.clear();

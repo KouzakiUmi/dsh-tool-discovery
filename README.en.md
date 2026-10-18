@@ -30,6 +30,13 @@ The first request carries just the three fixed entries, a short summary per cate
 
 Within one cache epoch, disclosed content and order are append-only, so a host-side tool upgrade cannot rewrite a definition the model has already read mid-session. Only a successful compaction resets the epoch.
 
+**The freeze guarantee currently applies to native only.** A same-name schema conflicting with the
+frozen definition returns `COMPACTION_REQUIRED`; wait for successful compaction by the user or DSH
+before loading it again. Same-schema rebinding and skill upgrades remain loadable. Native recovery
+preserves previously disclosed definitions without restoring invalid execution authority. Optional
+PTC compatibility still re-renders the current SDK: **byte freezing, stable appending, and cross-restart
+SDK freezing are not guaranteed**. That gap remains open.
+
 ---
 
 ## Why you need it
@@ -326,6 +333,12 @@ empty one does not fit does the call fail with `BUDGET_EXCEEDED`.
 What stays bounded even with every cap disabled: the default page size (`defaultListLimit`, 20),
 the default candidate count (`defaultSearchLimit`, 5), pagination, and the TTLs. Disabling a hard
 cap does not make output unbounded — it only means there is no extra ceiling beyond those defaults.
+
+`maxListResultBytes` / `maxSearchResultBytes` measure the UTF-8 bytes of the **complete successful
+JSON envelope**, including arrays, cursors, truncation flags and `nextAction`. Empty pages and zero-hit
+searches must fit too. If even the minimum successful response cannot fit, the call returns
+`BUDGET_EXCEEDED` without cutting names, refs or error text. Error envelopes themselves and any
+additional host message wrapping are outside these caps.
 
 `initialSchemaTargetTokens` and `maxInitialBytes` are historical target values. Nothing in the
 current code path enforces them, so they are **not** a measured guarantee of a 2K initial budget.

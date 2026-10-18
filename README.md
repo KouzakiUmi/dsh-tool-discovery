@@ -30,6 +30,11 @@
 
 同一缓存周期内，已披露的内容与顺序只增不改，宿主侧工具升级不会在会话中途改写模型已读过的定义。只有成功压缩才会重置周期。
 
+**冻结承诺目前限于 native。** 同名新 schema 与冻结定义冲突时，`tool_load` 返回
+`COMPACTION_REQUIRED`，须等待用户或 DSH 成功压缩后再加载；相同 schema 的绑定重连或技能换版仍可加载。
+原生冷恢复保留本周期曾实际披露的旧定义，但不因此恢复失效权限。可选 PTC 兼容目前仍重渲染当前 SDK，
+**不保证逐字冻结或稳定追加，也不保证跨重启 SDK 冻结**；该缺口尚未修复。
+
 ---
 
 ## 为什么需要它
@@ -274,6 +279,10 @@ preset 保留是独立来源：`alwaysAllowPresetTools` 开启时，当前实际
 即使所有硬上限都关闭，以下仍然有界：默认页大小（`defaultListLimit`，20）、默认候选数
 （`defaultSearchLimit`，5）、分页本身，以及各项 TTL。关闭硬上限不会让输出变得无界，只是表示在
 这些默认值之上没有额外天花板。
+
+`maxListResultBytes` / `maxSearchResultBytes` 按**完整成功 JSON 外壳**的 UTF-8 字节计量，包含
+数组、游标、截断标记和 `nextAction`；空页及零命中也不能越界。连最小成功响应都放不下时返回
+`BUDGET_EXCEEDED`，不裁剪名称、ref 或错误信息。该上限不限制错误外壳本身，也不包含宿主另外添加的消息包装。
 
 `initialSchemaTargetTokens` 与 `maxInitialBytes` 是历史目标值，当前代码路径并未强制它们，因此
 **不是**"实测保证的初始 2K 预算"。

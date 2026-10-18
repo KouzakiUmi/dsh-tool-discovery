@@ -275,10 +275,11 @@ test('被字节上限挡掉的候选不再在 ref store 里留下引用（记账
   assert.ok(all.data.candidates.length >= 2, '本用例需要至少两个候选才能触发截断');
   const sizes = all.data.candidates.slice(0, 2).map((c) => Buffer.byteLength(JSON.stringify(c), 'utf8'));
 
-  // 两个预算各自卡一个方向,合起来才能钉住"记账用的占位 ref 与真 ref 等长":
-  //   ① = c0      → 恰好放得下一张(占位偏长会一张都放不下);
-  //   ② = c0+c1-8 → 差 8 字节放不下两张(占位偏短会把第二张也放进来)。
-  for (const [label, budget] of [['恰好一张', sizes[0]], ['差 8 字节放不下两张', sizes[0] + sizes[1] - 8]]) {
+  // 上限现在度量完整成功外壳，不只度量卡片；两个精确边界仍钉住 ref 等长与零泄漏。
+  const responseSize = (count) => Buffer.byteLength(JSON.stringify({ ...all,
+    data: { ...all.data, candidates: all.data.candidates.slice(0, count), truncated: true } }), 'utf8');
+  // ① 恰好一张的完整响应；② 距离两张的完整响应还差 8 字节。
+  for (const [label, budget] of [['恰好一张', responseSize(1)], ['差 8 字节放不下两张', responseSize(2) - 8]]) {
     const random = countingRandom();
     const { engine } = await makeEngine({ engineConfig: { random, budgets: { maxSearchResultBytes: budget } } });
     const before = random.mints();

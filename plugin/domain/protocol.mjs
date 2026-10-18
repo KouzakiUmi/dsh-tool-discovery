@@ -56,7 +56,9 @@ function requireObjectRoot(raw) {
  * @param {number|null} max
  */
 function normalizeLimit(value, def, max) {
-  if (value === undefined) return def;
+  // 默认值同样受显式上限约束：配置 maxListLimit=1 却因省略 limit 返回 20，
+  // 等于让显式上限被默认策略静默绕过。显式请求仍按 max 校验并拒绝越界值。
+  if (value === undefined) return max === null ? def : Math.min(def, max);
   if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
     throw new DomainError('INVALID_ARGS', t(['detail', 'limitNotPositive']));
   }
@@ -127,6 +129,18 @@ export function validateSearchRequest(raw, budgets = DEFAULT_BUDGETS) {
 }
 
 /**
+ * 候选 `revision` 的“未给出”归一：键缺失、null、'' 三者同义（按 ref 绑定版本推导）。
+ *
+ * 必须由协议校验与 canonical 回执折叠共用同一实现：两边各写一套时，空值会在
+ * 请求侧被当作“未给出”、在折叠侧被当作“断言版本”，于是回执 ok 但工具静默未激活。
+ * @param {unknown} revision
+ * @returns {string|undefined}
+ */
+export function normalizeCandidateRevision(revision) {
+  return revision === undefined || revision === null || revision === '' ? undefined : revision;
+}
+
+/**
  * 校验 tool_load 请求。candidates 与 names 必须且只能提供一项。
  * 候选的 `revision` 可选:缺省由 ref 绑定的版本推导(engine 侧 `item.revision ?? rec.revision`),
  * 故 ref 才是版本权威——工具在 ref 签发后变化仍会 STALE_CANDIDATE,不会被静默升级。
@@ -175,9 +189,7 @@ export function validateLoadRequest(raw, budgets = DEFAULT_BUDGETS) {
       // 可选字段的"未给出"有三种写法:键缺失、null、''。模型对可选字段最常见的就是
       // 后两种,而它们表达的仍是同一个意思——按 ref 绑定的版本推导。真正类型不对
       // (数字/对象/数组/布尔)才是参数错误,不能靠"必须是字符串"把它们混为一谈。
-      const revision = item.revision === undefined || item.revision === null || item.revision === ''
-        ? undefined
-        : item.revision;
+      const revision = normalizeCandidateRevision(item.revision);
       if (revision !== undefined && !isNonEmptyString(revision)) {
         throw new DomainError('INVALID_ARGS', t(['detail', 'candidateNeedsRefRevision']));
       }

@@ -382,7 +382,10 @@ export function search(index, args) {
       reasons.add(MATCH_REASONS.SKILL_TOKEN);
     }
 
-    if (score > 0) scores.set(idx, { score, reasons });
+    // 类别只辅助排序，不能单独证明某个工具能完成任务。
+    // 否则类别摘要里的 create/创建会把“创建音乐”召回成所有办公工具。
+    const toolEvidence = [...reasons].some((reason) => reason !== MATCH_REASONS.CATEGORY_TOKEN);
+    if (score > 0 && toolEvidence) scores.set(idx, { score, reasons });
   }
 
   const hits = Array.from(scores.entries()).map(([idx, s]) => ({
