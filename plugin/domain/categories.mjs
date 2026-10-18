@@ -65,6 +65,7 @@ const NAME_SEGMENT_RULES = Object.freeze([
  */
 export function nameSegments(name) {
   return String(name)
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .toLowerCase()
     .split(/[^a-z0-9]+/u)

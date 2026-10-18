@@ -6,9 +6,10 @@
 
 /** 大小写不敏感的子串筛选。空查询返回全部（保持原序）。 */
 export function filterRows (rows, query) {
+  const list = Array.isArray(rows) ? rows : [];
   const needle = typeof query === 'string' ? query.trim().toLowerCase() : '';
-  if (needle === '') return rows;
-  return rows.filter((row) => row.name.toLowerCase().includes(needle));
+  if (needle === '') return list;
+  return list.filter((row) => typeof row?.name === 'string' && row.name.toLowerCase().includes(needle));
 }
 
 /** 勾选/取消一个名字。返回新数组（配置是 volatile 引用，宿主按值比较）。 */

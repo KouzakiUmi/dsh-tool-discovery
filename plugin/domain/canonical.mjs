@@ -74,6 +74,10 @@ function write(value, out, path) {
     return;
   }
   if (t === 'object') {
+    const proto = Object.getPrototypeOf(value);
+    if ((proto !== Object.prototype && proto !== null) || Object.prototype.toString.call(value) !== '[object Object]') {
+      throw new Error(`canonicalJson: non-plain object at ${path.join('.')}`);
+    }
     const keys = Object.keys(/** @type {object} */ (value)).sort();
     out.push('{');
     let first = true;

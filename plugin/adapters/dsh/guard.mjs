@@ -40,13 +40,28 @@ export function createGuard(deps) {
     if (mode !== 'native') {
       if (ptcEnabled() !== true) return undefined;
       if (exec.name === 'run_code' || entryNames.has(exec.name)) return undefined;
+      if (frameworkRetained.has(exec.name)) {
+        log('guard:framework-admitted', { sessionId: agent.session.id, name: exec.name });
+        return undefined;
+      }
       const runtime = lifecycle.runtimeFor(agent.session, agent);
       const baseline = runtime.ledger?.state;
       if (runtime.requireTrustedEpoch !== false && baseline !== undefined && baseline !== BASELINE_STATE.TRUSTED) {
         const reason = runtime.ledger?.reason ?? 'TRUSTED_EPOCH_PENDING';
+        log('guard:baseline-not-trusted', {
+          sessionId: agent.session.id, name: exec.name, state: baseline, reason,
+        });
         return `tool "${exec.name}" is not admitted: STATE_NOT_READY (${reason})`;
       }
       if (runtime.alwaysNameSet?.has(exec.name) === true) return undefined;
+      // 与 native 分支同源：未开启 respectAlwaysVisible 且初始注入未关闭时，
+      // 宿主当前 scope 实际装载的官方核心工具同样自证放行并补入常驻集合。
+      if (respectAlwaysVisible() !== true && runtime.initialToolsEnabled !== false
+        && CORE_TOOL_NAMES.includes(exec.name) && ctx.tools.get(exec.name, agent) !== undefined) {
+        if (runtime.alwaysNameSet) runtime.alwaysNameSet.add(exec.name);
+        log('guard:core-self-admitted', { sessionId: agent.session.id, name: exec.name });
+        return undefined;
+      }
       // 与 native 分支同一道闸（有 listener 在我们的投影之后重加了未披露工具 →
       // 整会话 fail closed）：位置与 native 语义对齐 —— alwaysNameSet 早退之后、
       // evaluateCall 之前。漏掉它，bypass 会话在 PTC 模式下仍可凭已曝光工具执行。

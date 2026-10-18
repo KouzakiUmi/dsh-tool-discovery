@@ -47,8 +47,11 @@ function baseTokens(text) {
     for (const cp of cps) out.push(cp);
     for (let i = 0; i + 1 < cps.length; i++) out.push(cps[i] + cps[i + 1]);
   }
-  // 再抽出拉丁/数字 token(含驼峰边界)
-  const latinInput = input.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
+  // 再抽出拉丁/数字 token(含连续大写缩写与驼峰边界)
+  const latinInput = input
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase();
   for (const m of latinInput.matchAll(LATIN_TOKEN)) out.push(m[0]);
   return out;
 }
@@ -113,7 +116,7 @@ export function synonymConcepts(text) {
   const raw = String(text ?? '');
   const lowered = raw.toLowerCase();
   // 拉丁侧:驼峰先拆开,再抽出 [a-z0-9] 词,用空格连接并首尾补空格,供词边界匹配
-  const latin = ` ${(raw.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().match(LATIN_TOKEN) ?? []).join(' ')} `;
+  const latin = ` ${(raw.replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2').replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().match(LATIN_TOKEN) ?? []).join(' ')} `;
   for (const m of SYNONYM_MATCHERS) {
     if (concepts.has(m.concept)) continue;
     if (m.cjk ? lowered.includes(m.needle) : m.re.test(latin)) concepts.add(m.concept);
@@ -141,9 +144,20 @@ function queryTermGroups(query) {
   const owner = new Map();
   for (const token of baseTokens(query)) {
     if (QUERY_STOPWORDS.has(token)) continue;
-    const seen = owner.get(token);
+    const forms = stemForms(token);
+    // 兼顾原词先到（"file files"）与屈折形先到（"files file"）：先查 token 自身，
+    // 未命中再查其词干形是否已有归属组，使分组结果对词序完全对称。
+    let seen = owner.get(token);
+    if (seen === undefined) {
+      for (const form of forms) {
+        seen = owner.get(form);
+        if (seen !== undefined) break;
+      }
+    }
     if (seen !== undefined) {
-      for (const form of stemForms(token)) {
+      seen.add(token);
+      owner.set(token, seen);
+      for (const form of forms) {
         seen.add(form);
         owner.set(form, seen);
       }
@@ -151,7 +165,7 @@ function queryTermGroups(query) {
     }
     const group = new Set([token]);
     owner.set(token, group);
-    for (const form of stemForms(token)) {
+    for (const form of forms) {
       group.add(form);
       owner.set(form, group);
     }

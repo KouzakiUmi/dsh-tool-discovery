@@ -35,7 +35,7 @@ non-positive number, or a non-null non-integer on an optional limit all fail as
 Turning a cap on blocks work and costs turns: exceeding it rejects the *new* items (never evicts
 disclosed ones), forces the model to split loads, and can force a premature context compaction.
 Limits are not optimisation — the recommendation is to leave them off. See the configuration
-section in the root [README](<../README.md>) / [README.zh.md](<../README.zh.md>) for the
+section in the root [README](<../README.md>) (中文) / [README.en.md](<../README.en.md>) for the
 user-facing version.
 
 What remains bounded with every cap disabled: `defaultListLimit` (20), `defaultSearchLimit` (5),

@@ -181,3 +181,28 @@ test('buildEntry 的 schemaDigest 与 wireBytes 落在同一份 canonical 文本
     assert.equal(entry.schemaDigest, digestOf(entry.wire));
   }
 });
+
+test('nameSegments 与 classifyBinding 正确拆分连续大写缩写(HTTPRequest / MCPServer)', () => {
+  assert.deepEqual(nameSegments('HTTPRequest'), ['http', 'request']);
+  assert.deepEqual(nameSegments('MCPServer'), ['mcp', 'server']);
+  assert.deepEqual(classifyBinding(binding({ name: 'HTTPRequest', toolId: 't_http' })), ['web']);
+  assert.deepEqual(classifyBinding(binding({ name: 'MCPServer', toolId: 't_mcp' })), ['integrations']);
+});
+
+test('canonicalJson 拒绝非普通对象(Date / RegExp / Map / Set / 自定义类实例)', () => {
+  class Custom {}
+  for (const invalid of [new Date(0), /re/, new Map(), new Set(), new Custom()]) {
+    assert.throws(
+      () => canonicalJson({ nested: invalid }),
+      /canonicalJson: non-plain object/,
+    );
+  }
+  assert.doesNotThrow(() => canonicalJson(Object.assign(Object.create(null), { a: 1 })));
+});
+
+test('buildCatalog identityFingerprint 覆盖 shadowOf 变化', () => {
+  const a = snap([binding({ name: 'alpha', toolId: 't_a', shadowOf: null })]);
+  const b = snap([binding({ name: 'alpha', toolId: 't_a', shadowOf: 't_origin' })]);
+  assert.notEqual(a.identityFingerprint, b.identityFingerprint, 'shadowOf 变化必须改变目录 identityFingerprint');
+});
+

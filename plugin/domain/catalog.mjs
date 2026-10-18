@@ -157,6 +157,7 @@ function identityDigest(rec) {
     name: rec.name,
     description: rec.description,
     wire: rec.wire,
+    shadowOf: rec.shadowOf ?? null,
     bindingGeneration: rec.bindingGeneration ?? null,
     skillRevision: rec.skillRevision,
     // 与 buildEntry 派生 searchDocumentId / orderDigestByView 时用的完全同一份值。
@@ -183,6 +184,7 @@ export function identityFingerprintOf(rawBindings) {
     name: b.name,
     description: b.description,
     wire: b.wire,
+    shadowOf: b.shadowOf,
     bindingGeneration: b.bindingGeneration,
     skillRevision: b.skill ? b.skill.skillRevision : 'none',
     // 与 buildEntry 同一个口径:category 与 skill 都是派生态。
@@ -270,6 +272,7 @@ export function buildCatalog(rawBindings, opts) {
       name: e.name,
       description: e.summary,
       wire: e.wire,
+      shadowOf: e.shadowOf,
       bindingGeneration: e.bindingGeneration,
       skillRevision: e.skillRevision,
       categories: e.categories,

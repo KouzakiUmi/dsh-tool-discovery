@@ -89,7 +89,9 @@ export function createDiscoveryEngine(config) {
   // `'auto'` 是**适配层**的哨兵（"跟随宿主界面语言"），到内核时应当已被解析成具体语言；
   // 直接用公开 API 构造 engine 的调用方若原样传进来，这里按"未指定"处理（→ 默认语言），
   // 而不是让 normalizeLocale 把一个哨兵值当成无法识别的语言名静默钉死。
-  const text = createText(config.locale === AUTO_LOCALE ? undefined : config.locale);
+  const explicitLocale = config.locale === undefined || config.locale === AUTO_LOCALE ? undefined : config.locale;
+  const text = explicitLocale === undefined ? domainText : createText(explicitLocale);
+  const t = (path) => text.t(path);
 
   const clock = config.clock;
   const refStore = createRefStore({ clock, random: config.random, ttlMs: budgets.candidateTtlMs });
@@ -144,7 +146,7 @@ export function createDiscoveryEngine(config) {
    */
   function requireState(scope) {
     if (!isPlainObject(scope) || !isNonEmptyString(scope.sessionId)) {
-      throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'missingSessionIdentity']));
+      throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'missingSessionIdentity']), undefined, explicitLocale);
     }
     let st = sessions.get(scope.sessionId);
     if (!st) {
@@ -158,7 +160,7 @@ export function createDiscoveryEngine(config) {
 
   function requireReady(scope) {
     const st = requireState(scope);
-    if (st.mode !== 'ready') throw new DomainError('STATE_NOT_READY');
+    if (st.mode !== 'ready') throw new DomainError('STATE_NOT_READY', undefined, undefined, explicitLocale);
     return st;
   }
 
@@ -193,7 +195,7 @@ export function createDiscoveryEngine(config) {
    */
   function failEnvelope(tool, operation, raw, scope) {
     void scope;
-    return errorEnvelope(tool, operation, toDomainError(raw));
+    return errorEnvelope(tool, operation, toDomainError(raw, explicitLocale));
   }
 
   /**
@@ -239,7 +241,7 @@ export function createDiscoveryEngine(config) {
     return { active, reservedOnly };
   }
 
-  return {
+  const api = {
     // ---- 只读视图 -------------------------------------------------------
     getCatalog() {
       return catalog;
@@ -282,6 +284,7 @@ export function createDiscoveryEngine(config) {
               'BUDGET_EXCEEDED',
               text.format(['detail', 'bytesOverBudget'], { what: `state view (${bytes} bytes > ${maxBytes})` }),
               { bytes, maxBytes },
+              explicitLocale,
             );
           }
           return okEnvelope('tool_list', 'list', fitted, text.t(['nextAction', 'stateViewNoHidden']));
@@ -427,7 +430,7 @@ export function createDiscoveryEngine(config) {
           candidates.push(card);
         }
         if (candidates.length === 0) {
-          throw new DomainError('BUDGET_EXCEEDED', t(['detail', 'candidateCardOverByteBudget']));
+          throw new DomainError('BUDGET_EXCEEDED', t(['detail', 'candidateCardOverByteBudget']), undefined, explicitLocale);
         }
         return okEnvelope('tool_search', 'search', {
           catalogGeneration: catalog.generation,
@@ -452,33 +455,33 @@ export function createDiscoveryEngine(config) {
         try {
           // 入队之后可能折叠回执、压缩、fail closed 或销毁会话：锁内才读取预算状态。
           if (disposed || locks.get(scope.sessionId) !== queuedLock) {
-            throw new DomainError('STATE_NOT_READY');
+            throw new DomainError('STATE_NOT_READY', undefined, undefined, explicitLocale);
           }
           const st = requireReady(scope);
-          if (st.epoch !== queuedEpoch) throw new DomainError('SELECTION_CHANGED');
-          return this.handleLoadLocked(req, st, scope, ctx, raw);
+          if (st.epoch !== queuedEpoch) throw new DomainError('SELECTION_CHANGED', undefined, undefined, explicitLocale);
+          return api.handleLoadLocked(req, st, scope, ctx, raw);
         } catch (e) {
-          return { response: errorEnvelope('tool_load', requestedAction, toDomainError(e)), operation: null };
+          return { response: errorEnvelope('tool_load', requestedAction, toDomainError(e, explicitLocale)), operation: null };
         }
       };
 
       /** @type {any} */
       let req;
       try {
-        if (disposed) throw new DomainError('STATE_NOT_READY');
+        if (disposed) throw new DomainError('STATE_NOT_READY', undefined, undefined, explicitLocale);
         requireReady(scope);
         req = validateLoadRequest(raw, budgets);
         // 模型不得自主 unload:缓存周期的清空点只有成功压缩(`/unloadtool` 暂缓)。
         // protocol 已拒,此处再兜一层,保证 engine 不存在第二条卸载路径。
         if (req.action !== 'load') {
-          throw new DomainError('INVALID_ARGS', t(['detail', 'modelUnloadDisabled']));
+          throw new DomainError('INVALID_ARGS', t(['detail', 'modelUnloadDisabled']), undefined, explicitLocale);
         }
       } catch (e) {
-        return { response: errorEnvelope('tool_load', requestedAction, toDomainError(e)), operation: null };
+        return { response: errorEnvelope('tool_load', requestedAction, toDomainError(e, explicitLocale)), operation: null };
       }
       if (!isPlainObject(ctx) || !isNonEmptyString(ctx.operationId)) {
         return {
-          response: errorEnvelope('tool_load', requestedAction, new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'operationIdRequired']))),
+          response: errorEnvelope('tool_load', requestedAction, new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'operationIdRequired']), undefined, explicitLocale)),
           operation: null,
         };
       }
@@ -498,7 +501,7 @@ export function createDiscoveryEngine(config) {
      */
     handleLoadLocked(req, st, scope, ctx, raw) {
       if (req.action !== 'load') {
-        throw new DomainError('INVALID_ARGS', t(['detail', 'modelUnloadDisabled']));
+        throw new DomainError('INVALID_ARGS', t(['detail', 'modelUnloadDisabled']), undefined, explicitLocale);
       }
 
       /** @type {Array<{entry:any, source:'candidate'|'name'}>} */
@@ -511,21 +514,21 @@ export function createDiscoveryEngine(config) {
       for (const item of /** @type {any[]} */ (req.candidates ?? [])) {
         const rec = refStore.resolve(item.ref, scope.sessionId, eligibilityGeneration, clock.now());
         const entry = resolveByToolId(catalog, rec.toolId);
-        if (!entry) throw new DomainError('CANDIDATE_UNAVAILABLE');
+        if (!entry) throw new DomainError('CANDIDATE_UNAVAILABLE', undefined, undefined, explicitLocale);
         const expectedRevision = item.revision ?? rec.revision;
         // 同一批次里两个候选解析到同一 toolId 却携带冲突 revision：这是**批次自身**的
         // 矛盾，必须在这里报出来。若把 STALE_CANDIDATE 判在前面，第二条候选会先因为
         // "与当前定义不符" 被拒，candidateRevisionConflict 永远不可达。
         if (byToolId.has(entry.toolId) && byToolId.get(entry.toolId) !== expectedRevision) {
-          throw new DomainError('INVALID_ARGS', t(['detail', 'candidateRevisionConflict']));
+          throw new DomainError('INVALID_ARGS', t(['detail', 'candidateRevisionConflict']), undefined, explicitLocale);
         }
-        if (entry.revision !== expectedRevision) throw new DomainError('STALE_CANDIDATE');
+        if (entry.revision !== expectedRevision) throw new DomainError('STALE_CANDIDATE', undefined, undefined, explicitLocale);
         // D1:候选路径与 names 路径对称 —— 入口/框架保留项一律不可 load。
         if (entryNames.has(entry.name) || frameworkNames.has(entry.name)) {
-          throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotLoadable']));
+          throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotLoadable']), undefined, explicitLocale);
         }
         if (alwaysNames.has(entry.name) && !tolerantLoadProtected) {
-          throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotLoadable']));
+          throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotLoadable']), undefined, explicitLocale);
         }
         if (byToolId.has(entry.toolId)) continue;
         byToolId.set(entry.toolId, expectedRevision);
@@ -535,19 +538,19 @@ export function createDiscoveryEngine(config) {
       for (const name of /** @type {string[]} */ (req.names ?? [])) {
         namesPath.push(name);
         if (entryNames.has(name) || frameworkNames.has(name)) {
-          throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotLoadable']));
+          throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotLoadable']), undefined, explicitLocale);
         }
         if (alwaysNames.has(name) && !tolerantLoadProtected) {
-          throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotLoadable']));
+          throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotLoadable']), undefined, explicitLocale);
         }
         const entry = resolveByName(catalog, name);
-        if (!entry) throw new DomainError('TOOL_UNAVAILABLE');
+        if (!entry) throw new DomainError('TOOL_UNAVAILABLE', undefined, undefined, explicitLocale);
         if (byToolId.has(entry.toolId)) continue;
         byToolId.set(entry.toolId, entry.revision);
         resolved.push({ entry, source: 'name' });
       }
 
-      if (resolved.length === 0) throw new DomainError('INVALID_ARGS', t(['detail', 'nothingToLoad']));
+      if (resolved.length === 0) throw new DomainError('INVALID_ARGS', t(['detail', 'nothingToLoad']), undefined, explicitLocale);
 
       // 锁定本次验证快照(含资格代次)
       const genAtStart = eligibilityGeneration;
@@ -573,27 +576,22 @@ export function createDiscoveryEngine(config) {
         return !reservedOnly.has(r.entry.toolId);
       });
       assertActiveBudget(fresh.map((r) => r.entry), alreadyActive, budgets);
-      // 优化 token: 仅为本会话尚未选中的新增工具交付 skills 载荷;
-      // 已选同版本工具已在既有交互中提供过使用指南,避免在历史上下文重复灌入相同文本。
-      const skills = resolved
-        .filter((r) => {
-          const sel = st.selected.get(r.entry.toolId);
-          return !sel || sel.revision !== r.entry.revision;
-        })
-        .map((r) => projectSkill(r.entry));
+      // 优化 token: 仅为本会话尚未选中、且尚未在途预留的新增工具交付 skills 载荷;
+      // 已选或已预留同版本工具已在既有交互中提供过使用指南,避免在历史上下文重复灌入相同文本。
+      const skills = fresh.map((r) => projectSkill(r.entry));
       assertSkillBudget(skills, budgets.maxSkillBytesPerLoad);
 
       // 提交前 recheck:资格代次 + 每项 revision 重算。变化则整批失败,绝不偷偷改选。
       if (eligibilityGeneration !== genAtStart) {
-        throw new DomainError('SELECTION_CHANGED');
+        throw new DomainError('SELECTION_CHANGED', undefined, undefined, explicitLocale);
       }
       /** @type {Map<string, any>} toolId → 复核通过的当前条目(回执直接取它,不再重解析) */
       const rechecked = new Map();
       for (const snap of snapshot) {
         const cur = resolveByToolId(catalog, snap.toolId);
-        if (!cur) throw new DomainError('SELECTION_CHANGED');
+        if (!cur) throw new DomainError('SELECTION_CHANGED', undefined, undefined, explicitLocale);
         if (cur.revision !== snap.revision || cur.schemaDigest !== snap.schemaDigest) {
-          throw new DomainError('SELECTION_CHANGED');
+          throw new DomainError('SELECTION_CHANGED', undefined, undefined, explicitLocale);
         }
         rechecked.set(snap.toolId, cur);
       }
@@ -659,7 +657,7 @@ export function createDiscoveryEngine(config) {
       try {
         st = requireState(scope);
       } catch (e) {
-        return { applied: false, reason: toDomainError(e).code };
+        return { applied: false, reason: toDomainError(e, explicitLocale).code };
       }
       const operationId = pair?.call?.operationId;
       const op = pending.get(operationId);
@@ -795,7 +793,7 @@ export function createDiscoveryEngine(config) {
         toolId: call.toolId,
         requestId: call.requestId,
         now: clock.now(),
-        locale: config.locale,
+        locale: call.locale ?? explicitLocale,
         registeredInScope: call.registeredInScope ?? null,
         pendingLoad: call.pendingLoad === true,
         isEntryOrFramework,
@@ -880,7 +878,7 @@ export function createDiscoveryEngine(config) {
       try {
         st = requireState(scope);
       } catch (e) {
-        return { mode: 'incompatible', applied: 0, rejected: 0, error: toDomainError(e).code };
+        return { mode: 'incompatible', applied: 0, rejected: 0, error: toDomainError(e, explicitLocale).code };
       }
       if (!Array.isArray(pairs)) {
         sessions.set(scope.sessionId, setSessionMode(st, 'incompatible'));
@@ -979,4 +977,5 @@ export function createDiscoveryEngine(config) {
     // 供测试 / adapter 观察
     getPendingSize: () => pending.size,
   };
+  return api;
 }

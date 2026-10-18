@@ -594,19 +594,18 @@ test('LS-U11 retryBaseline：restoring=false 时 whenReady 不跟踪重试 promi
   // 现状记录：whenReady 在 restoring=false 时立即按当前 mode 返回，不跟踪重试 promise。
   const readyDuringRetry = await lc.whenReady(id);
   assert.equal(readyDuringRetry.mode, 'incompatible', '现状：whenReady 不跟踪 retryBaseline 的 promise');
-  // 但 awaitEpochRecord 的现状语义是**保守**的：`retryBaseline` 不会把账本放回 PENDING，
-  // 于是重试在途期间账本仍是上一次的 BLOCKED(UNAVAILABLE)，pre-step 继续 0 request。
-  // 这不是 F3 的缺陷（它不授权、只保守），本轮**只记录不改动**，免得无谓扩展。
+  // awaitEpochRecord 跟踪在途重试：重试期间不得按上一次陈旧的 BLOCKED 归因抢先判定，
+  // 必须等重试落定后按**当下**账本状态判定（仍然不授权）。
   let barrier = 'pending';
   void lc.awaitEpochRecord(id).then(() => { barrier = 'resolved'; }, (e) => { barrier = `rejected:${e?.message ?? e}`; });
   await drain();
-  assert.match(String(barrier), /STORAGE_UNAVAILABLE/,
-    '现状（保守）：重试在途期间 awaitEpochRecord 仍按上一次的 BLOCKED 归因 0 request，不授权');
+  assert.equal(barrier, 'pending', '重试在途期间 awaitEpochRecord 必须等重试，不得沿用旧的 BLOCKED 归因');
   assert.equal(runtime.restoring, false, '重试在途期间 restoring 仍为 false（现状，本轮未改）');
 
   gate.resolve();
   await retry;
   await drain();
+  assert.match(String(barrier), /STORAGE_MISSING|MISSING/, '重试落定后按读出的 MISSING 归因 0 request，不授权');
   const after = lc.baselineOf(id);
   // legacy 会话：重试读到的仍是缺失，而"缺失"不构成补建资格 → 保持 MISSING，不得授权。
   assert.equal(after.state, BASELINE_STATE.BLOCKED, 'legacy 会话重试后仍不得被补建授权');

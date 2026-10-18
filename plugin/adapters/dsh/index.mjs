@@ -25,7 +25,7 @@ import { createLifecycle } from './lifecycle.mjs';
 import { createProjection } from './projection.mjs';
 import { createPtcDisclosure } from './ptc-sdk.mjs';
 import { createRegistryAdapter } from './registry.mjs';
-import { buildConfig, publishToolChoices, resolveAlwaysVisible } from './config.mjs';
+import { buildConfig, INITIAL_TOOL_CHOICES, publishToolChoices, resolveAlwaysVisible } from './config.mjs';
 import { globalToolInventory, presetToolNamesOf } from './tool-inventory.mjs';
 import { createTrustedEpochHolder, createTrustedEpochStore, TRUSTED_EPOCH_REASONS } from './trusted-epoch.mjs';
 
@@ -450,12 +450,21 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
     /** 把当前目录写进 Config 的 meta 并让设置面板重读。 */
     // 注意发布目标是 **apply.Config**（已构建的 Config 树），不是 schemastery 模块
     // 本身 —— 后者没有 dict.alwaysVisible。
+    let lastPublishedChoicesKey = null;
     const refreshToolChoices = () => {
       if (apply.Config === undefined) return false;
       // 设置项是应用级配置：读全部登记层（包括预先加载的 preset），
       // 不读当前会话的资格/selected/frozen 表，也不要求创建任何会话。
       const inventory = globalToolInventory(ctx.tools);
+      const nextKey = `${inventory.complete === true ? '1' : '0'}:${inventory.names.join('\u0000')}`;
+      // 新会话建立时也会触发 onRuntimeCreated → refreshToolChoices；全局工具目录未变时
+      // 跳过重复写 meta 与 settings.invalidate()（避免每次建会话都重跑整棵 schema.toJSON）。
+      if (nextKey === lastPublishedChoicesKey
+        && Array.isArray(apply.Config?.dict?.alwaysVisible?.meta?.[INITIAL_TOOL_CHOICES])) {
+        return false;
+      }
       if (!publishToolChoices(apply.Config, inventory.names, { complete: inventory.complete })) return false;
+      lastPublishedChoicesKey = nextKey;
       // describe() 每次都重跑 schema.toJSON() 并比对 raw（dsh-settings:421-435），
       // meta 一变 revision 就自增并 emit settings/document-updated；invalidate()
       // 只是把这次重算排进微任务。
@@ -538,7 +547,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       // 服务缺席 / open 失败都不是"降级继续"，而是会话级的确定终态
       // STORAGE_UNAVAILABLE（0 request，见 trusted-epoch.mjs）。
       // 兼容模式不打开、读取或写入可信周期存储；不是把易失状态伪装成 durable 授权。
-      if (config.requireTrustedEpoch) ctx.inject(['storageDomain'], (storageCtx) => {
+      if (config.requireTrustedEpoch) own(ctx.inject(['storageDomain'], (storageCtx) => {
         if (!trustedEpochDepsAvailable) {
           log('trusted-epoch:deps-missing', {
             note: 'zod / @deepseek-ai/dsh-storage-domain 不可用；会话将落 STORAGE_UNAVAILABLE 并停止发请求。',
@@ -566,7 +575,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
             await store.close();
           };
         }, 'trusted-epoch store');
-      });
+      }));
 
       // resolve 必须在注册前可用，但 runtime 在首次 assemble 时建立
       const resolveRuntime = (exec) => {

@@ -452,8 +452,10 @@ export function evaluateCall(state, ctx) {
       visibility: ctx.registeredInScope === false ? /** @type {const} */ ('unknown-to-scope') : /** @type {const} */ ('hidden'),
     };
   }
-  const sel = selectedByName[0];
-  if (ctx.toolId && ctx.toolId !== sel.toolId) {
+  const sel = ctx.toolId
+    ? selectedByName.find((s) => s.toolId === ctx.toolId)
+    : (selectedByName.find((s) => !state.invalidated.has(s.toolId)) ?? selectedByName[0]);
+  if (!sel) {
     return { allowed: false, code: /** @type {const} */ ('TOOL_NOT_LOADED'), reason: UNIFORM_NOT_LOADED, visibility: /** @type {const} */ ('hidden') };
   }
   // 记录的定义已被作废(撤权/定义变化)→ 视为未加载

@@ -1,263 +1,218 @@
 <div align="center">
-  <img src="assets/title.jpg" width="100%" alt="DSH Tool Discovery — three small control entries plus the initial set up front; other tools' real schemas are disclosed on demand in the next turn (repository banner)">
+  <img src="assets/title.jpg" width="100%" alt="DSH Tool Discovery —— 首轮提供三个小入口与初始集合，其它工具的真实 schema 按需在下一轮披露（仓库横幅图）">
 
   # DSH Tool Discovery
 
-  **Three small entries and the initial tool set up front; other tools' real schemas arrive on demand.**
+  **三个小入口与初始工具集合在前，其它工具的真实 schema 按需到场。**
 
-  English | [中文](README.zh.md)
+  [English](README.md) | 中文
 
   [![npm version](https://img.shields.io/npm/v/dsh-tool-discovery)](https://www.npmjs.com/package/dsh-tool-discovery)
   [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
   [![DSH](https://img.shields.io/badge/DSH-0.2.1--alpha.1%20%7C%200.2.1--alpha.2-informational)](plugin/docs/10-store-compatibility.md)
 
-  **Install with one command** → [Quick start](#quick-start)
+  **安装只需一条命令** → [快速开始](#快速开始)
 </div>
 
 ---
 
-## Why you need it
+## 为什么需要它
 
-| Without it | With it |
+| 没有它 | 有了它 |
 |---|---|
-| Every registered tool's full JSON Schema is injected on the first request, whether the task needs it or not | The first request carries three small entries, a bounded category summary, and full schemas for the default initial set (DSH core tools and the current preset's retained tools); other tools' real native schemas appear in the **next** turn after explicit selection |
-| A host-side tool upgrade can silently rewrite a definition the model has already read mid-session | Disclosed wire is **append-only** within a cache epoch — the definition recorded at first disclosure is the one that keeps being sent |
-| Guessing which category holds which tool | `tool_search` returns top-K candidate cards (short purpose + ref/revision), `tool_list` pages complete names; neither changes the active set |
-| No answer to "what is active right now?" | `tool_load` receipts are versioned canonical records; the `view: "state"` projection lists `selected` / `advertised` / `invalidated` |
+| 每个已注册工具的完整 JSON Schema 都在首轮注入，无论任务是否用得上 | 首轮带三个小入口、有界类别摘要，以及默认初始集合的完整 schema（DSH 核心工具与当前 preset 保留的工具）；其它工具的真实原生 schema 在模型显式选定后的**下一轮**出现 |
+| 宿主侧工具升级可以在会话中途悄悄改写模型已经读过的定义 | 一个缓存周期内已披露的 wire **只增不改**——首披露时记录的定义就是它一直被发送的定义 |
+| 哪个类别里有什么工具，全靠猜 | `tool_search` 给 Top-K 候选卡（短用途 + ref/revision），`tool_list` 给分页的完整名称；两者都不改变激活集合 |
+| 「现在到底激活了哪些工具」没有答案 | `tool_load` 回执是版本化的 canonical 记录；`view: "state"` 投影列出 `selected` / `advertised` / `invalidated` |
 
-## The three entries
+## 三个入口
 
-This is a DSH plugin. On the first request the model sees the three entries below plus a short
-summary of each capability category, **plus the default initial set**: DSH's own core tools (the
-manual baseline) and the tools registered by the current agent's own preset, which is retained by
-default. Other ordinary tools are not disclosed up front.
+这是一个 DSH 插件。首轮请求里模型看到下面三个固定入口，外加每个能力类别的一段简短摘要，
+**以及默认初始集合**：DSH 自带的核心工具（手动基线）与当前 agent 自己 preset 登记的工具
+（默认保留）。其它普通工具首轮不披露。
 
-| Entry | Answers | Changes what is active? |
+| 入口 | 回答的问题 | 改变激活集合？ |
 |---|---|---|
-| `tool_list` | What tools are discoverable in this category? | No |
-| `tool_search` | Which tool suits this task? | No |
-| `tool_load` | I want these tools. | Yes |
+| `tool_list` | 这个类别里有哪些可发现的工具？ | 否 |
+| `tool_search` | 哪个工具适合当前任务？ | 否 |
+| `tool_load` | 我要用这些工具。 | 是 |
 
-`tool_load` never runs the target tool. It records the selection, and disclosure happens on the
-following turn. Reaching for a tool that has not been loaded is refused, and unloading is not a
-model action at all — `action: "unload"` is rejected, so between two successful compactions the
-disclosed set only grows.
+`tool_load` 不会执行目标工具，它只记录选择，披露发生在下一轮。调用未加载的工具会被拒绝；卸载根本
+不是模型的动作——`action: "unload"` 会被拒绝，因此两次成功压缩之间已披露集合只增不减。
 
-## Two invariants bound the whole design
+## 两条不变量框住整个设计
 
-- **Loaded order and content are append-only within a cache epoch.** A load never moves or rewrites
-  an already-disclosed entry — the wire recorded at first disclosure is what keeps being sent, so a
-  host-side tool upgrade cannot silently mutate a definition the model has already read.
-- **Only a successful compaction resets the epoch.** A manual `/compact` and DSH's automatic
-  compaction both qualify; a failed, cancelled, or summary-less compaction does not.
+- **同一缓存周期内，已披露内容与顺序只增不改。** 加载不会移动或改写已披露条目：首次披露时记录的
+  wire 会被持续原样发送，因此宿主侧工具升级不会静默改写模型已经读过的定义。
+- **只有成功压缩才会重置周期。** 手动 `/compact` 与 DSH 自动压缩都算；失败、取消或没有摘要的压缩
+  不算。
 
-Frozen wire is not execution permission. A disclosed tool still goes through the host's own
-approval, sandbox, and authorization checks on every call, exactly as if it had never been mediated
-by this plugin.
+冻结 wire 不等于执行权限。已披露的工具每次调用仍要经过宿主自身的审批、沙箱与授权检查，与它从未
+被本插件中介过完全一样。
 
-Progressive disclosure is about context, not speed: a request that carries only what the model is
-likely to use does not have to carry everything the host could have offered. The kernel holds no
-tools of its own and never bypasses the host.
+渐进式披露解决的是上下文，不是速度：只携带模型大概率会用到的内容，就不必携带宿主本可以提供的
+全部内容。内核自身不持有任何工具，也从不绕过宿主。
 
-## Quick start
+## 快速开始
 
 ```sh
-# DSH profile install — name the package, then the full tarball URL
+# DSH profile 安装 —— 先写包名，再给完整 tarball URL
 dsh plugin --profile <profile> add \
   dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz
 ```
 
-1. Install and enable the bundle, then reload or restart for the host side to pick it up
-   (refreshing the page alone does not guarantee a host upgrade).
-2. Open **Settings → Tool discovery** — the plugin's own page: optional feature switches, the
-   application-wide tool catalog (filter, checkboxes, **Restore DSH default**), and advanced
-   budget / language fields.
-3. Back in a session the three entries are live. Nothing else changes: every tool call keeps
-   going through DSH's own approval, sandbox, and permission chain.
+1. 安装并启用 bundle，按部署方式重载或重启（只刷新页面不保证 Host 升级）。
+2. 打开 **设置 → 工具发现**——插件自己的主页：可选功能开关、应用全局工具目录（按名称筛选、
+   勾选、**恢复 DSH 默认**），以及高级的预算 / 语言字段。
+3. 回到会话，三个入口即已生效。其余一切不变：每次工具调用仍走 DSH 自身的审批、沙箱与权限链。
 
-`<build-tag>` is a commit-derived release tag such as `build-80216ba3effa`. Full install/update
-rules — npm package for Node projects, tag pinning, CLI-vs-Core version caveats — are in
-[Install and update](#install-and-update). Configuration knobs are in
-[Configuration](#configuration).
+`<build-tag>` 是提交级 Release 标签，例如 `build-80216ba3effa`。完整的安装 / 更新规则（Node 项目的
+npm 包、标签钉住、CLI 与 Core 版本的区别）见[安装与更新](#安装与更新)；配置项见[配置](#配置)。
 
 ---
 
-# Technical documentation
+# 技术文档
 
-## Requirements
+## 环境要求
 
-- DSH Core **`>=0.2.1-alpha.1`** — the install-admission range on every `@deepseek-ai/dsh` and
-  `@deepseek-ai/dsh-*` peer. A newer host line is allowed to install instead of being refused
-  outright. This is not a compatibility claim: `dshReleases` still marks only `0.2.1-alpha.1` and
-  `0.2.1-alpha.2` as `compatible`; any other version remains untested and may fail at runtime if
-  its contracts change. The matrix and one-time Profile record are in
-  [STORE compatibility](plugin/docs/10-store-compatibility.md).
-- The native **`@deepseek-ai/schemastery`** peer is required for the config surface and the settings
-  page. Without it the discovery domain still runs normally, but there is no Config and the plugin
-  logs `ConfigUnavailable` instead of silently pretending a settings page exists.
-- **Native** tool display mode. Other display modes are refused at activation rather than
-  downgraded silently.
-- **One active agent per session.** Concurrent agents in a single session are not supported,
-  because a request cannot be attributed unambiguously.
-- Node `^22.19.0 || >=24.0.0`.
+- DSH Core **`>=0.2.1-alpha.1`**——这是所有 `@deepseek-ai/dsh` 与 `@deepseek-ai/dsh-*` peer 的
+  安装准入范围。宿主升到更新的发行版时仍允许安装，不会因版本钉死而被直接拒绝。这不是兼容声明：
+  `dshReleases` 仍只把 `0.2.1-alpha.1` 与 `0.2.1-alpha.2` 标为 `compatible`，其它版本仍未测试，
+  契约变化时仍可能在运行时失败。逐版本矩阵与一次性 Profile 记录见
+  [上架与兼容声明](plugin/docs/10-store-compatibility.md)。
+- 原生 **`@deepseek-ai/schemastery`** peer 是配置面与设置页的前提。缺少它时发现内核仍正常运行，
+  但没有 Config，插件会记录 `ConfigUnavailable`，而不是假装存在一个设置页。
+- **native** 工具展示模式。其它展示模式在激活期即被拒绝，不会静默降级。
+- **每会话单个活动 agent**。单会话内多 agent 并发不受支持——请求无法无歧义地归属。
+- Node `^22.19.0 || >=24.0.0`。
 
-## Permissions and external dependencies
+## 权限与外部依赖
 
-DSH STORE requires every plugin to disclose what it can reach before installation. This is the
-complete list for this plugin — nothing here is inferred from "we did not find it":
+DSH STORE 要求插件在安装前列清它能触及什么。以下是本插件的完整清单——不以「没搜到」代替事实：
 
-| Surface | Behaviour |
+| 面 | 行为 |
 |---|---|
-| Files (read) | At activation it reads the active profile's patch file to pick up the host's own `locale.preference`, and otherwise falls back to `$DSH_HOME/desktop-locale.json` (**keyed by profile name**). Any failure (missing file, bad JSON, unknown language) falls back to `en` with one log line. Setting the `locale` config field to `zh`/`en` **pins the language and skips both reads entirely**. |
-| Files (write) | No direct filesystem writes. Durable state goes through the host's `@deepseek-ai/dsh-storage-domain` service: one record per session holding an epoch identity plus the **tool-name list** permitted to stay resident. It contains no file contents, no message bodies, and no credentials. |
-| Session data | Reads this session's own events through the public `ctx.sessionQuery` service (one fold, then incremental) to restore what the session had already loaded. |
-| Network | None. The plugin issues no outbound request of any kind. |
-| Commands | None. No child process, shell, or dynamic code evaluation. |
-| Credentials | None. It does not read `process.env`, does not touch keychains or account state, and stores no secret. |
-| Logging | Diagnostics only (session id, state, reason). Tool arguments, file contents, and message bodies are never logged. |
+| 文件（读） | 激活时读当前 profile 的 patch 文件，取宿主自己的 `locale.preference`；没有再回落到 `$DSH_HOME/desktop-locale.json`（该文件**以 profile 名为键**）。任何失败（文件缺失、JSON 损坏、语言未知）都回落 `en` 并留一行日志。把配置项 `locale` 设为 `zh`/`en` 会**钉住语言并完全跳过这两次读取**。 |
+| 文件（写） | 不直接写文件系统。持久状态经宿主 `@deepseek-ai/dsh-storage-domain` 服务落盘：每个会话一条记录，内容是 epoch 身份加该会话允许常驻的**工具名名单**，不含文件内容、消息正文或凭据。 |
+| 会话数据 | 通过公开的 `ctx.sessionQuery` 只读回放**本会话**事件（一次折叠 + 增量），用于恢复会话已 load 过的集合。 |
+| 网络 | 无。插件不发起任何出站请求。 |
+| 命令 | 无。不使用子进程、shell 或动态代码求值。 |
+| 凭据 | 无。不读 `process.env`、不碰钥匙串或账号状态、不保存任何密钥。 |
+| 日志 | 仅诊断信息（会话 id、状态、原因）。工具参数、文件内容与消息正文永不入日志。 |
 
-**Runtime dependency: `zod`.** The host storage API (`@deepseek-ai/dsh-storage-domain`) accepts a zod
-schema, so the optional trusted-epoch feature declares `zod` as a real dependency. When it cannot be
-resolved the plugin does **not** fake an in-memory store: the session lands in a terminal
-`STORAGE_UNAVAILABLE` state and stops issuing requests. Everything else — the three entries, the
-catalog, the projection, the guards — works without it.
+**运行时依赖：`zod`。** 宿主存储 API（`@deepseek-ai/dsh-storage-domain`）接收 zod schema，因此可选的可信周期功能把 `zod` 声明为真实依赖。解析不到时插件**不**伪造内存存储：会话落入终态 `STORAGE_UNAVAILABLE` 并停止发请求。其余功能——三入口、目录、投影、门禁——不依赖它。
 
-**Host peers.** `@deepseek-ai/dsh` and `@deepseek-ai/dsh-tools` are required.
-`@deepseek-ai/dsh-storage-domain` (trusted epoch) and `@deepseek-ai/dsh-home-paths` (interface
-language path) are optional: when absent, the corresponding feature degrades honestly instead of
-being simulated.
+**宿主 peer。** `@deepseek-ai/dsh` 与 `@deepseek-ai/dsh-tools` 必需；`@deepseek-ai/dsh-storage-domain`（可信周期）与 `@deepseek-ai/dsh-home-paths`（界面语言路径）为可选：缺失时对应功能**诚实降级**，不做模拟。
 
-**Scope of the promise.** This plugin is built and verified for a **single user on a single
-profile** — the installation it is mounted into. It does **not** claim to hold a boundary across a
-shared, multi-user, remote, or multi-tenant deployment: session history and the trusted-epoch store
-are trusted *inputs*, and whoever can write them can influence what a session may execute. Treat it
-as a disclosure gate inside one profile, not as a wall between users. If you need that wall, put it
-in the host (per-user accounts, sandboxing, filesystem permissions), not here.
+**承诺范围。** 本插件面向**单用户、单 profile**（即它被挂载的那一份安装）构建与验证。它**不**承诺
+在共享、多用户、远程或多租户部署中充当边界：会话历史与可信周期存储是**受信任的输入**，能写它们的人
+就能影响某个会话可以执行什么。请把它当作单个 profile 内的披露门禁，而不是用户之间的墙。若你确实
+需要那堵墙，请把它放在宿主侧（分账号、沙箱、文件系统权限），而不是这里。
 
-## Install and update
+## 安装与更新
 
-The GitHub Release build asset remains available for DSH profile installs: a green `main` run packs
-the tree and publishes `dsh-tool-discovery.tgz` on a commit-derived `build-<sha>` release (a run
-whose commit is already superseded is skipped, so an older commit is never re-published as the
-newest release). That asset is a **build artifact, not an acceptance statement**; what a version
-covers and what it deliberately does not claim is recorded in
-[current status](plugin/docs/05-current-status.md).
+DSH profile 安装仍可使用 **GitHub Release 构建资产**：`main` 绿跑会把仓库打包，在提交级
+`build-<sha>` Release 上发布 `dsh-tool-discovery.tgz`（若已有更新的 `main` 提交，旧一次运行会直接跳过，
+不会把旧提交重新发布成最新资产）。该资产是**构建产物，不是验收声明**；某个版本覆盖什么、明确
+**不**宣称什么，见[当前状态](plugin/docs/05-current-status.md)。
 
-The package has been published to npm since version `0.2.1`. Future stable `v<version>` tags that
-match `package.json` run the npm publish job after the portable tests and repository checks pass.
-GitHub Actions authenticates to npm with OIDC and npm generates provenance; no npm write token is
-stored in GitHub. See [Publishing to npm](#publishing-to-npm) for the release steps.
+本包自 `0.2.1` 起已发布到 npm。之后推送与 `package.json` 版本匹配的稳定 `v<version>` 标签，通过便携测试和
+仓库检查后，npm 发布任务会自动运行。GitHub Actions 通过 OIDC 向 npm 验证身份，npm 同时生成 provenance；
+GitHub 不保存 npm 写入令牌。发布步骤见[发布到 npm](#发布到-npm)。
 
-Use the DSH CLI that belongs to the installation you run, and target the profile that will actually
-load the plugin. DSH NEXT Desktop ships its own CLI (it starts through
-`resources\app\lib\desktop-cli.js`) and manages plugins through its own entry point; a globally
-npm-installed `dsh` on `PATH` is a different launcher with a different profile, not this
-installation's tool. **The CLI version is not the Core version**: `dsh --version` reports the CLI,
-and no CLI number tells you which Core a profile resolves. Check the Core peer under
-[Requirements](#requirements) against that profile instead.
+请使用**你所运行的那套安装自带的 DSH CLI**，并指向真正会加载本插件的 profile。DSH NEXT 桌面端自带
+CLI（经 `resources\app\lib\desktop-cli.js` 启动），插件也由其自身入口管理；`PATH` 上全局 npm 安装的
+`dsh` 是另一套启动器、另一个 profile，不是这套安装的工具。**CLI 版本不等于 Core 版本**：
+`dsh --version` 报的是 CLI，任何 CLI 版本号都不能说明某个 profile 解析到哪个 Core；请用
+[环境要求](#环境要求) 里的 Core peer 对照该 profile。
 
 ```sh
-# first install — name the package, then the full tarball URL
+# 首次安装 —— 先写包名，再给完整 tarball URL
 dsh plugin --profile <profile> add \
   dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz
 
-# update an installed copy — the same name@URL form
+# 更新已安装副本 —— 同样是 name@URL 形式
 dsh plugin --profile <profile> update \
   dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz
 ```
 
-Because the tag carries the commit, a later build never replaces an older one, and two builds can
-legitimately share one manifest version — maintainers bump `version`, CI does not — so pin the tag
-whose commit you tested, always give the package name explicitly, and read the version from the
-release name (`v<version> · <sha>`) or from the manifest inside that tarball instead of assuming
-what `main` currently says.
+`<build-tag>` 是提交级 Release 标签，例如 `build-80216ba3effa`。标签里带着提交号，因此新构建不会
+覆盖旧构建；两次构建也可能共用同一个清单版本——`version` 由维护者 bump，CI 不改——所以请钉住你测过的
+那个标签对应的提交，始终显式写出包名，并以 Release 名（`v<version> · <sha>`）或该 tarball 内的清单
+为准判断它到底是哪个版本，而不是假设 `main` 与本文一致。
 
-For a Node project, install the public package from npm with `npm install dsh-tool-discovery`. The
-DSH profile installation commands above continue to use the DSH CLI and a GitHub Release asset.
+Node 项目可通过 `npm install dsh-tool-discovery` 从 npm 安装。本节上面的 DSH profile 安装命令仍由 DSH CLI
+从 GitHub Release 资产安装。
 
-## Configuration
+## 配置
 
-The plugin has no required configuration, and every field is a **flat root field** of the plugin's
-own config namespace — there is no `progressiveDiscovery` wrapper in the current native config
-surface:
+插件没有必需配置，所有字段都是插件自身配置命名空间里的**扁平根字段**——在当前的原生配置面上
+**没有** `progressiveDiscovery` 外层包装：
 
 ```jsonc
 {
-  // "alwaysVisible": ["read", "grep"],  // omit entirely to keep the DSH defaults
-  "initialToolsEnabled": true,  // optional manual initial injection; preserves the configured list
-  "alwaysAllowPresetTools": true, // retain tools declared by the current bound preset
-  "requireTrustedEpoch": false, // opt-in strict durable epoch verification
-  "requireTrustedEpochForSubagents": false, // also enforce on children only if strict is on
-  "frameworkRetained": [],  // trusted framework-mandated names the projection must keep
-  "categoryConfig": {},     // localised category cards
-  "tolerantLoadProtected": true, // tolerate loading an already-resident tool (idempotent)
-  "respectAlwaysVisible": false, // false (default): core tools are auto-enrolled; true: your list is the ceiling
-  "budgets": null,          // see below; null means no overrides
-  "locale": "auto"          // "auto" follows the desktop language; "zh"/"en" pins it and skips the file read
+  // "alwaysVisible": ["read", "grep"],  // 整项省略即保持 DSH 默认名单
+  "initialToolsEnabled": true,  // 可关闭手动初始注入，不删除已配置名单
+  "alwaysAllowPresetTools": true, // 保留当前实际绑定的 preset 所登记工具
+  "requireTrustedEpoch": false, // 高级严格校验，默认不阻断存量会话
+  "requireTrustedEpochForSubagents": false, // 仅主严格开关也开启时对子代理强制校验
+  "frameworkRetained": [],  // 投影必须保留的可信框架工具名
+  "categoryConfig": {},     // 本地化类别卡
+  "tolerantLoadProtected": true, // 容忍重复加载已在册的工具（幂等）
+  "respectAlwaysVisible": false, // false（默认）：核心工具自动常驻；true：你的名单就是上限
+  "budgets": null,          // 见下；null 表示不覆盖
+  "locale": "auto"          // "auto" 跟随桌面语言；写 "zh"/"en" 可钉住语言并跳过读文件
 }
 ```
 
-`alwaysVisible` **replaces the manual initial list**, rather than adding to its defaults. Omitting
-it keeps the DSH core-tool defaults. Preset retention is separate: when `alwaysAllowPresetTools`
-is on, the current bound preset's native-visible registered tools are unioned with this manual list.
-To start with only the three discovery entries, set `alwaysAllowPresetTools: false` and either
-`initialToolsEnabled: false`, or both `alwaysVisible: []` and `respectAlwaysVisible: true` (unless explicit framework retention also applies).
-The three entries cannot be removed. Names that are not native-visible in the current agent are
-not granted merely because the settings catalog contains them.
+`alwaysVisible` 是**替换手动初始名单**，而不是追加默认项；省略它即保持 DSH 核心工具默认值。
+preset 保留是独立来源：`alwaysAllowPresetTools` 开启时，当前实际绑定 preset 所登记且原生作用域允许
+的工具会与手动名单合并。若只需要三个发现入口，应设 `alwaysAllowPresetTools: false`，并设
+`initialToolsEnabled: false`，或同时设 `alwaysVisible: []` 与 `respectAlwaysVisible: true`（显式框架保留仍可能贡献工具）。三个入口不可删除。
+设置页全局目录中存在某工具，不意味着它会被授予所有会话。
 
-### Settings page: the Tool discovery home
+### 设置页：工具发现主页
 
-With the native `schemastery` peer present, the plugin contributes its own top-level settings page —
-**Settings → Tool discovery** (a `settings.section` contribution, the plugin's home in the GUI). It
-is laid out as an at-a-glance home rather than a bare form:
+在原生 `schemastery` peer 在场时，插件贡献自己的顶层设置页——**设置 → 工具发现**（一个
+`settings.section` 贡献，即本插件在 GUI 里的主页）。它按「一眼看懂的主页」组织，而不是一张裸表单：
 
-- **Status strip** — live counts from the same metadata the panel edits: fixed entries, catalog
-  tools, initial-list size, and how many names are *not registered* in the application catalog or
-  *unconfirmed*.
-- **Three entries reference cards** — `tool_list` / `tool_search` / `tool_load`: what each answers,
-  what it returns, and which one changes the active set, plus the two invariants above.
-- **Optional feature switches** and the **manual initial tool list** — an application-wide
-  registration catalog, including preloaded presets even before any session exists. The catalog
-  reads all current registration layers, not session eligibility, discovery/loading state, or
-  outbound headers. It supports a name filter, checkboxes and **Restore DSH default**; selection
-  writes only the root `alwaysVisible` field. Missing names are labelled **not registered in the
-  application catalog**, never as an execution failure. If the installed SDK cannot supply a
-  complete registry, absent names are **unconfirmed**. Global registration does not promise
-  execution permission in every session.
-- **Advanced** — interface language, JSON editors for `budgets` and `categoryConfig`, and
-  `frameworkRetained` shown read-only.
+- **状态条**——与面板所编辑的同一份元数据上的实时计数：常驻入口、目录工具、初始名单大小，
+  以及多少名字**未在应用全局目录登记**或**尚未确认**。
+- **三个入口参考卡**——`tool_list` / `tool_search` / `tool_load`：各自回答什么、返回什么、
+  哪个会改变激活集合，外加上述两条不变量。
+- **可选功能开关**与**手动初始工具名单**——**应用全局登记目录**。目录读取当前全部注册层，包括
+  无需创建会话就已预加载的 preset；不读取会话资格、发现/加载状态或历史请求头。支持按名称筛选、
+  勾选切换与**恢复 DSH 默认**，勾选只写根级 `alwaysVisible`。完整目录中缺少名字时标注为**未在
+  应用全局目录登记**，不断言调用失败；宿主 SDK 无法提供完整目录时，未列出的名字标注为**全局登记
+  状态尚未确认**。全局已登记不保证每个会话都具备执行权限。
+- **高级**——界面语言、`budgets` 与 `categoryConfig` 的 JSON 编辑器，`frameworkRetained` 只读展示。
 
-Every switch and field:
+每个开关与字段：
 
-- **Inject initial tools** (`initialToolsEnabled`, default `true`): disabling preserves the configured list but stops automatic initial injection; `tool_load` still works. This switch and the list apply in a **new session or after successful compaction**, not mid-epoch.
-- **Always allow tools specified by the preset** (`alwaysAllowPresetTools`, default `true`): retain only tools registered by the exact preset revision the current agent joined, intersected with its native-visible capabilities. Other presets and later agent-only tools do not become trusted. Independent of manual injection; uses the same new-session/successful-compaction boundary. It preserves the initial set, not arbitrary execution or native permission bypass.
-- **Require trusted epoch records** (`requireTrustedEpoch`, default `false`): default mode does not access the trusted epoch store or block sessions for missing records/storageDomain. Initial tools come from the configuration snapshot, never from outbound headers. Enabling reloads the plugin and requires durable records: an existing session without one needs a successful user `/compact`; storage failures also block. Disabling restores sessions missing records but does **not** offer strict mode's frozen-list guarantee across restarts.
-- **Also require trusted epochs for subagents** (`requireTrustedEpochForSubagents`, default `false`): only effective when `requireTrustedEpoch` is on. Live runtime-owned children otherwise use the configuration baseline without reading/writing epoch records or requiring `/compact`, including resumed legacy child sessions. Runtime ownership—not header/meta tags or durable fork lineage—identifies a child. A fork resumed as a top-level agent still follows the main strict switch. Changing this ordinary setting reloads the plugin, so disabling it recovers legacy children without a synthetic compaction. Enabling it explicitly may block old children; subagents cannot perform the user's `/compact` themselves.
-- **Interface language** (`locale`, default `auto`): `auto` reads the host's own `locale.preference` from the active profile patch, and otherwise falls back to the desktop language file — any failure (missing, bad JSON, unsupported language) falls back to `en` and is always logged, never silent. `zh`/`en` pins the model-visible copy language and **skips those reads entirely**. Not a volatile field: a change takes effect when the plugin reloads.
-- **Make the initial list an exact set** (`respectAlwaysVisible`, default `false`): **off with initial injection enabled**, DSH core tools that the current scope actually offers are auto-enrolled and can be called without a load — fewer round-trips, and a new upstream core tool keeps working without waiting for a plugin update. **On**, your `alwaysVisible` (plus preset retention) is the *ceiling*: a core tool you left out has to be loaded like any other tool. Refusing it is not a deadlock — an omitted core tool is simply **not in the protected baseline**, so one ordinary `tool_load` admits it on the next request (`tolerantLoadProtected` is about something else: re-loading a tool that is *already* resident stays idempotent). Two caveats: a session already running under strict mode keeps admitting what its durable record already lists until the next user `/compact`; and this is not a volatile field — changing it reloads the plugin.
-- Eligibility, protocol receipts, corrupt-history checks and execution guards remain enforced. The three discovery entries cannot be disabled.
+- **自动注入初始工具**（`initialToolsEnabled`，默认 `true`）：关闭不删除勾选名单，不自动注入这些工具，仍可用 `tool_load` 加载。开关和名单改动在**新会话或成功压缩后**采用，当前周期不改变。
+- **永远放行 preset 规定的工具**（`alwaysAllowPresetTools`，默认 `true`）：只读取当前 agent 实际绑定的 preset 修订自身登记、且该 agent 原生目录仍允许的工具。不根据会话 header 中的 preset 名或设置页全局目录授信；其它 preset、后装 agent-only 工具不会被自动放行。与手动注入独立，在新会话或成功压缩后采用；保留初始集合，不绕过原生权限和执行校验。
+- **强制可信周期校验**（`requireTrustedEpoch`，默认 `false`）：默认不读写可信周期存储、不因缺少记录或 storageDomain 阻断会话；常驻工具来自当前配置快照，历史出站头不授予资格。开启会重新加载插件，要求持久化周期记录；存量会话缺记录时需要成功执行用户 `/compact`，存储故障也会阻断。关闭后可恢复没有记录的会话，但**不提供严格模式的跨重启名单冻结保证**。
+- **对子代理强制可信周期校验**（`requireTrustedEpochForSubagents`，默认 `false`）：只有主严格开关也开启时才生效。默认情况下，宿主运行时拥有的子代理使用配置基线，不读写 epoch 记录，不因缺记录要求 `/compact`，包括已有历史的子会话恢复。身份依据实时父子所有权，不信 header/meta 自称或单纯的持久 fork 血缘；作为顶层恢复的 fork 会话仍受主严格开关约束。该普通设置会重载插件，关闭后可恢复旧子会话，无需伪造压缩。显式开启可能阻断旧子会话；子代理不能代替用户执行 `/compact`。
+- **界面语言**（`locale`，默认 `auto`）：`auto` 先读当前 profile patch 里宿主自己的 `locale.preference`，没有再回落到桌面语言文件；任何失败（文件缺失、JSON 损坏、语言不受支持）都回落 `en`，且回落**一定会留日志**、不静默。写 `zh`/`en` 会钉住模型可见文案的语言，并**完全跳过这两次读取**。非 volatile 字段：改动在插件重载后生效。
+- **让初始名单成为精确集合**（`respectAlwaysVisible`，默认 `false`）：**关闭**且初始注入开启时，当前 scope 真实提供的 DSH 核心工具会被自动并入常驻名单，且不经 load 即可调用——省一次往返，上游新增的核心工具也不必等插件更新。**打开**后，你的 `alwaysVisible`（加 preset 保留项）就是**上限**：没列出的核心工具必须像别的工具一样先 load。被拒不会死锁——被排除的核心工具**不在受保护的基线里**，一次普通 `tool_load` 就能在下一轮把它放行（`tolerantLoadProtected` 管的是另一件事：**已在名单里**的工具重复 load 保持幂等）。两点注意：已经在严格模式下跑的会话，仍会按它落盘的记录继续放行到下一次用户 `/compact`；本字段非 volatile，改动在插件重载后生效。
+- 工具资格、协议回执、历史损坏校验和执行门禁始终有效，不提供关闭这些保护的开关。三个发现入口始终保留。
 
-The page also exposes **idempotent baseline loading** (`tolerantLoadProtected`) and **exact initial
-list** (`respectAlwaysVisible`) switches. The advanced JSON editors list supported keys and reject
-malformed JSON, unknown keys, invalid limits and incomplete category copy before saving. Small
-budget limits may block tasks or add round-trips. `frameworkRetained` is displayed read-only, not
-editable here.
+主页还提供**容忍重复加载初始工具**（`tolerantLoadProtected`）、**精确初始名单**（`respectAlwaysVisible`）开关；高级配置中可选择语言，并编辑 `budgets` 与 `categoryConfig` JSON。JSON 编辑器显示支持的键，在保存前拒绝语法错误、未知键、非法限额和不完整的类别文案；较小预算可能增加往返或阻断任务。`frameworkRetained` 仅只读展示，不可由此页面修改。
 
-An omitted `alwaysVisible` displays the actual schema defaults. All mutation controls are disabled during loading, read-only state or an in-flight save to prevent concurrent overwrites. Restore-default is disabled without metadata and avoids unchanged writes. Rejected writes show an error, not a success notice. Non-volatile fields reload the plugin when saved; the page warns about this. This is the native config surface, with no legacy wrapper/UI compatibility promise. The standalone real-DOM probe uses a controlled persistence channel, not the active user's configuration, and does not imply online installation or deployment.
+省略 `alwaysVisible` 时展示宿主 schema 的实际默认名单。加载中、只读或保存进行中禁用所有修改控件，防止并发写覆盖；元数据缺失时不可恢复默认，名单已经默认时不重复写。保存失败会显示错误，不宣称生效。非 volatile 字段保存会重载插件，页面提供提示。该主页即原生配置面；不承诺旧包装配置或旧版设置 UI 的兼容性。独立浏览器 DOM 探针使用真实渲染器及受控保存通道，不代表在线配置持久化或当前 GUI 已部署新代码。
 
-### Budgets: hard caps are off by default
+### 预算：硬上限默认关闭
 
-By default this plugin **adds no extra risk thresholds**. Every hard cap — tool count, batch size,
-schema bytes, page size, result bytes, query length, skill bytes — is `null`, meaning *disabled*.
-Set a cap by giving it a positive integer; set it back to `null` to disable it. `null` is used
-rather than `Infinity` because `Infinity` cannot survive JSON.
+本插件**默认不额外增加风险阈值**。所有硬上限——工具数量、批次大小、schema 字节、页大小、
+结果字节、查询长度、技能字节——默认都是 `null`，即**关闭**。给它一个正整数即启用该项上限；
+填回 `null` 即关闭。这里用 `null` 而不是 `Infinity`，因为 `Infinity` 无法在 JSON 中存在。
 
 ```jsonc
 "budgets": {
-  "maxActiveTools": null,        // e.g. 12 to cap how many tools stay loaded
-  "maxActiveSchemaBytes": null,  // e.g. 49152 to cap the frozen schema bytes
-  "maxLoadBatch": null,          // e.g. 4 to cap tools per single load
-  "maxListLimit": null,          // e.g. 20 to cap the page size
+  "maxActiveTools": null,        // 例如 12：限制同时加载的工具数
+  "maxActiveSchemaBytes": null,  // 例如 49152：限制冻结的 schema 字节
+  "maxLoadBatch": null,          // 例如 4：限制单次 load 的工具数
+  "maxListLimit": null,          // 例如 20：限制页大小
   "maxSearchLimit": null,
   "maxListResultBytes": null,
   "maxSearchResultBytes": null,
@@ -266,182 +221,153 @@ rather than `Infinity` because `Infinity` cannot survive JSON.
 }
 ```
 
-`maxActiveTools` and `maxActiveSchemaBytes` count **only on-demand selections** — loaded, frozen, or
-pending disclosure. They do not count the initial `alwaysVisible` baseline, which is injected by the
-host and is not this plugin's budgeted surface.
+`maxActiveTools` 与 `maxActiveSchemaBytes` **只统计按需选择项**——已加载、已冻结或待披露的。它们
+不统计初始 `alwaysVisible` 基线，那是宿主注入的，不属于本插件的预算面。
 
-Turning a cap **on** is a real trade-off, not a free safety win:
+**打开上限是有代价的权衡，不是免费的安全加成：**
 
-- **It blocks work.** Exceeding a cap rejects the *new* items. Already-disclosed tools are never
-  evicted to make room — nothing is unloaded to fit, under any configuration.
-- **It costs turns.** The model has to split the same work into several smaller loads, adding model
-  round-trips, latency, and total cost.
-- **It can discourage the next load from fitting, and that pressure may prompt an early compaction.**
-  When the disclosed set outgrows a cap, the available responses are to raise the cap, turn it off,
-  or compact sooner — and compacting sooner than the workload warrants costs context
-  re-establishment. None of these is forced; whoever set the cap keeps full control of it.
-- **Limits are not optimisation.** A cap that makes a task fail or take longer has not made
-  anything cheaper. Default recommendation: leave them off, and set one only when you have a
-  concrete reason (a deployment that must bound prompt growth, for example).
+- **它会阻断任务。** 超出上限时被拒绝的是**新增项**。已披露的工具在任何配置下都不会被淘汰
+  来腾位置——不存在"为了塞进去而卸载"这种行为。
+- **它会增加轮次。** 模型必须把同一件事拆成更小的多次 load，代价是更多模型往返、更高延迟、
+  更高总成本。
+- **它可能给下一次 load 造成压力，并可能诱使用户提前压缩。** 当已披露集合超过上限时，可选的应对
+  包括**调高限额、关闭限额**，或压缩得更早一些——而过早的压缩需要重建上下文。这些都不是被迫的，
+  限额由设置者完全掌控。
+- **限额不等同于优化。** 一个让任务失败或变慢的上限，并没有让任何东西变得更便宜。默认建议保持
+  关闭；只有在有明确理由时（例如部署必须约束 prompt 增长）才设置。
 
-**A starting profile, if you do want to bound prompt growth.** This plugin exists to keep the tool
-block small; nothing is ever evicted to make room, so without a cap an eager model can keep loading
-tools until a compaction. If you would rather the plugin hold the line than rely on the model
-self-managing, start here and adjust from observed behaviour:
+**如果你确实想约束 prompt 增长，可以从这组值起步。** 本插件的存在意义就是把工具块压小；而任何
+配置下都不会卸载，所以不设上限时，一个积极的模型可以一直 load 到下次压缩。与其依赖模型自律，
+不如让插件守住这条线——下面的数值可以先照用，再按实际观察调整：
 
 ```jsonc
 "budgets": {
-  "maxActiveTools": 12,          // how many on-demand tools may stay resident at once
-  "maxActiveSchemaBytes": 49152, // 48 KiB of frozen schema for those tools
-  "maxLoadBatch": 4,             // tools per single load call
-  "maxQueryCodePoints": 512,     // reject absurdly long search queries
-  "maxListResultBytes": 4096     // bound name listings *and* the state projection
+  "maxActiveTools": 12,          // 同时在册的按需工具数
+  "maxActiveSchemaBytes": 49152, // 这些工具冻结 schema 的上限（48 KiB）
+  "maxLoadBatch": 4,             // 单次 load 的工具数
+  "maxQueryCodePoints": 512,     // 拒绝异常长的检索词
+  "maxListResultBytes": 4096     // 约束名称列表**与** state 投影
 }
 ```
 
-The first three are **guard rails**: they are the mechanism that actually delivers the plugin's
-promise, and because nothing is ever unloaded, turning them off means a long session only grows. The
-last two are **interaction bounds**: they protect the host from one pathological call rather than
-changing ordinary usage. `maxListResultBytes` now also covers `view: "state"`: when it would be
-exceeded, the diagnostic `invalidated` list is trimmed first (with an explicit
-`invalidatedTruncated` marker) — `selected` and `advertised` are never trimmed — and only if even an
-empty one does not fit does the call fail with `BUDGET_EXCEEDED`.
+前三项是**护栏**：它们才是这个卖点的执行机制，而既然不会卸载，关掉它们就等于长会话只增不减。
+后两项是**交互边界**：保护宿主免受单次异常调用，不改变日常使用。`maxListResultBytes` 现在还覆盖
+`view: "state"`——超限时先裁剪诊断性的 `invalidated` 列表（带显式 `invalidatedTruncated` 标记），
+`selected` 与 `advertised` 永不裁剪；连空列表都放不下时才以 `BUDGET_EXCEEDED` 明确失败。
 
-What stays bounded even with every cap disabled: the default page size (`defaultListLimit`, 20),
-the default candidate count (`defaultSearchLimit`, 5), pagination, and the TTLs. Disabling a hard
-cap does not make output unbounded — it only means there is no extra ceiling beyond those defaults.
+即使所有硬上限都关闭，以下仍然有界：默认页大小（`defaultListLimit`，20）、默认候选数
+（`defaultSearchLimit`，5）、分页本身，以及各项 TTL。关闭硬上限不会让输出变得无界，只是表示在
+这些默认值之上没有额外天花板。
 
-`initialSchemaTargetTokens` and `maxInitialBytes` are historical target values. Nothing in the
-current code path enforces them, so they are **not** a measured guarantee of a 2K initial budget.
+`initialSchemaTargetTokens` 与 `maxInitialBytes` 是历史目标值，当前代码路径并未强制它们，因此
+**不是**"实测保证的初始 2K 预算"。
 
-## Verify it yourself
+## 自行验证
 
-Run from the repository root:
+在仓库根目录执行：
 
 ```sh
-npm test                          # unit suite — trust the output of this command
-npm run test:composition          # composition gates (real DSH Loader) — trust the output
-npm run test:all                  # both, in order
-npm run check                     # package identity + docs consistency (needs only Node)
-npm run clean                     # remove regenerable test residue
+npm test                          # 单元测试 —— 以该命令的实际输出为准
+npm run test:composition          # 组合门禁（真实 DSH Loader）—— 以实际输出为准
+npm run test:all                  # 依次运行以上两者
+npm run check                     # 包身份 + 文档一致性检查（只需 Node）
+npm run clean                     # 清除可再生的测试残留
 ```
 
-Most of the unit suite needs nothing but Node. Two files —
-`plugin/tests/unit/client.test.mjs` and `plugin/tests/unit/settings.test.mjs` — are
-host-bound: they import React and `@deepseek-ai/schemastery` at module top level out of an
-installed DSH, resolved through `plugin/contracts/install-resolver.mjs`. Run the suite where
-such an installation is present; if it is not at the default location, point
-`DSH_INSTALL_ROOT` at it.
+单测大部分只需要 Node。其中两个文件依赖宿主：`plugin/tests/unit/client.test.mjs` 与
+`plugin/tests/unit/settings.test.mjs` 在模块顶层就通过 `plugin/contracts/install-resolver.mjs`
+从已安装的 DSH 里取 React 与 `@deepseek-ai/schemastery`。要在装有该 DSH 的机器上跑完整套件；
+安装不在默认位置时用 `DSH_INSTALL_ROOT` 指向它。
 
-CI's portable unit job therefore runs everything except exactly those two files, which it
-reports as skipped with the reason. That job is the portable subset, not the whole unit
-proof: the full suite, both host-bound files included, is what the local `npm test` run
-against a real DSH root exercises. Nothing here claims browser or DOM rendering coverage.
+因此 CI 的便携单测作业只跑除这两个文件以外的全部用例，并明确把这两个文件按宿主依赖跳过
+并给出原因。该作业是便携子集，不等于整份单测证明：含这两个宿主文件在内的完整套件，由本地
+在真实 DSH 安装根上执行的 `npm test` 覆盖。此处不声称任何浏览器或 DOM 渲染层面的覆盖。
 
-Counts move as suites are added, so they are deliberately not written down here. Treat the actual
-output of these two commands as the source of truth; a number printed in this file would drift.
+用例数会随测试增减而变化，因此这里**刻意不写死数字**。以这两条命令的实际输出为准；写在本文件
+里的数字必然过时。
 
-`test:composition` runs every `plugin/tests/composition/gate-*.test.mjs` file against a real Loader:
-adapter gates, lifecycle, recovery and fork, event-`seq`, cache epoch, settings, tool churn and the
-trusted-epoch suites. A new gate file is picked up by the glob; nothing else needs editing. See
-[07 — recovery and fork coverage](plugin/docs/07-lifecycle-recovery-coverage.md).
+`test:composition` 会在真实 Loader 上运行 `plugin/tests/composition/gate-*.test.mjs` 的全部文件：
+适配器门禁、生命周期、恢复与 fork、事件 `seq`、缓存周期、设置、工具增减，以及可信周期各套。新增
+门禁文件会被 glob 自动纳入，无需改其它地方。详见 [07 · 恢复与 fork 覆盖](plugin/docs/07-lifecycle-recovery-coverage.md)。
 
-The composition suites boot a real Cordis Loader against an installed DSH, so they need the host to
-be present. They resolve packages from that installation; if it is not at the default location,
-point `DSH_INSTALL_ROOT` at it. These commands install and restart nothing, and they do not touch
-your DSH profile; they do create temporary session files under `plugin/fixtures/tmp/` (ignored by
-Git) and remove them when each test process exits. Set `DSH_KEEP_TMP=1` to keep them for debugging;
-`npm run clean` removes any leftovers.
+组合测试会针对已安装的 DSH 启动真实 Cordis Loader，因此需要宿主在场。它们从该安装解析包；若
+安装不在默认位置，请用 `DSH_INSTALL_ROOT` 指向它。这些命令不安装、不重启，也不会改动你的
+DSH profile；但会在被 Git 忽略的 `plugin/fixtures/tmp/` 下创建临时会话文件，并在每个测试进程退出时
+清除。设置 `DSH_KEEP_TMP=1` 可保留现场用于排查；`npm run clean` 清除任何残留。
 
-The quality tooling is published, but the full suite needs the frozen scoring dataset, which is
-not published — so it does not complete on a public checkout. See
-[current status](plugin/docs/05-current-status.md) for what that dataset covers and where it
-stands.
+质量工装是公开的，但完整跑完需要冻结的评分数据集，而该数据集未公开，因此在公开检出上无法跑完。
+该数据集覆盖什么、当前处于什么状态，见[当前状态](plugin/docs/05-current-status.md)。
 
-## Get the source
+## 获取源码
 
-The source version on this branch is **`0.4.2`**. npm publication and provenance must be checked in
-[the registry](https://www.npmjs.com/package/dsh-tool-discovery); a GitHub build release alone does
-not establish npm availability. Which version a download carries is decided by its tarball manifest,
-not by assuming that `main`, the release name and this document always agree.
+本分支的源码版本为 **`0.4.2`**。npm 是否已发布及其 provenance 应以
+[registry](https://www.npmjs.com/package/dsh-tool-discovery) 为准，GitHub 构建版存在本身不证明 npm 已发布。
+某次下载究竟带哪个版本，以 tarball 内清单为准，不假设 `main`、Release 名与本文始终一致。
 
 ```sh
 git clone https://github.com/KouzakiUmi/dsh-tool-discovery
 cd dsh-tool-discovery
 ```
 
-It is plain JavaScript with no build step. The manifest declares a runtime `dependencies` entry,
-`zod` (`^4.4.3`) — the trusted-epoch record table is handed to the host's storage domain as a zod
-schema — and declares the host packages it needs as `peerDependencies`, provided by the DSH
-installation. Nothing is vendored, and there is no build step that could paper over a missing host
-package.
+纯 JavaScript，无构建步骤。清单里声明了一个运行时 `dependencies` 项 `zod`（`^4.4.3`）——可信周期
+记录表要以 zod schema 交给宿主的 storage domain——所需宿主包则声明为 `peerDependencies`，由 DSH
+安装提供。项目不做 vendored 副本，也不存在可以拿来掩盖宿主包缺失的构建步骤。
 
-## Publishing to npm
+## 发布到 npm
 
-The initial `0.2.1` publication was a one-time bootstrap because npm only lets a maintainer attach a
-Trusted Publisher after the package exists. The npm account's two-factor check was completed with
-Windows Hello. The Trusted Publisher is now registered for:
+npm 只允许在包已经存在后登记 Trusted Publisher。初始 `0.2.1` 发布已完成，npm 账号的双重验证使用了
+Windows Hello。当前 Trusted Publisher 配置如下：
 
-| Setting | Value |
+| 设置 | 值 |
 | --- | --- |
-| Provider | GitHub Actions |
-| Organization/user | `KouzakiUmi` |
-| Repository | `dsh-tool-discovery` |
-| Workflow filename | `ci.yml` |
-| Environment | None |
-| Allowed publishing | `npm publish`; `npm stage publish` (npm default) |
+| 提供方 | GitHub Actions |
+| 组织/用户 | `KouzakiUmi` |
+| 仓库 | `dsh-tool-discovery` |
+| 工作流文件名 | `ci.yml` |
+| 环境 | 无 |
+| 发布权限 | `npm publish`、`npm stage publish`（npm 默认） |
 
-npm also enables `npm stage publish` for new Trusted Publisher configurations. For each stable
-release, bump `package.json`, commit the change, create the matching `v<version>` tag, and push it.
-The `publish-npm` job waits for portable tests and repository checks, verifies the tag, then publishes
-with OIDC and provenance. A staged version stays unpublished until a maintainer reviews and approves
-it with two-factor authentication.
+每次发布稳定版本时，先更新并提交 `package.json`，再创建并推送同版本的 `v<version>` 标签。
+`publish-npm` 任务会等待便携测试和仓库检查通过，核对标签后通过 OIDC 发布并生成 provenance。
+暂存发布仍需维护者审核并通过双重验证后才会公开。
 
-The workflow requires Node 24 and npm 11.5.1 or newer. It does not use an `NPM_TOKEN` GitHub
-secret. Pre-release tags are not published by this job.
+工作流需要 Node 24 和 npm 11.5.1 或更高版本，不使用 GitHub 的 `NPM_TOKEN` secret。预发布标签不会触发 npm 发布。
 
-**Build and publication checks are not installation acceptance.** This release process does not
-install into, reload or restart a real profile. A release's payload, digest and provenance must be
-checked against that specific published artifact; they do not establish that a host GUI loaded it.
-Exact flags and spec forms come from the target CLI's own `plugin --help`. If an install fails,
-keep the manifest, lockfile and CLI output and report it rather than hand-editing a profile.
+**构建与发布核验不等于安装验收。** 本发布流程不向真实 profile 安装、重载或重启。
+每次发布的载荷、摘要与 provenance 都必须对照该次实际产物核验；这些证据不证明宿主 GUI 已加载它。
+确切的参数与 spec 形式以目标 CLI 自己的 `plugin --help` 为准。安装失败时请保留 manifest、
+lockfile 与 CLI 输出并如实报告，不要手改 profile。
 
-## Architecture and what it costs
+## 架构与其代价
 
-A stable wire plus append-only disclosure reduce the number of *unnecessary* prefix changes in the
-prompt, and known tool names can be batch-loaded so no extra research round is forced after a
-compaction. That is the design intent — **no measured saving in context or tokens is claimed**, and
-none should be read into it.
+稳定 wire + 只增不改的披露会减少 prompt 中**不必要的前缀变动**；已知工具名可以批量加载，压缩之后
+不会被强制再走一轮检索。这是设计意图——**不声称任何实测的上下文或 token 节省**，也不应从中读出
+这类承诺。
 
-The other side of the trade-off: an initial list made too small increases model round-trips and
-rediscovery work. Defaulting to DSH's core tools, while leaving the list editable, is a deliberate
-balance — not a promise of a 2K initial budget.
+另一面是权衡的另一侧：初始名单切得过小会增加模型往返与重新发现的开销。默认采用 DSH 核心工具、
+同时保留可编辑，是一个有意识的平衡——不是"初始 2K 预算"的承诺。
 
-## What this is not yet
+## 它还不是什么
 
-This is a working implementation, not a finished product.
+这是一个可运行的实现，不是成品。
 
-- It has not completed full product acceptance. `0.2.1`, `0.2.2`, and `0.3.0` are published to npm
-  (`0.3.0` from tag `v0.3.0` through the Trusted Publisher workflow, run 38074858965). **No real Profile was
-  installed into, reloaded, or restarted**: the install/start/uninstall/recovery evidence in
-  [STORE compatibility](plugin/docs/10-store-compatibility.md) was taken in a disposable `DSH_HOME`,
-  so nothing here should be read as an accepted online GUI or as full product acceptance.
-- **The settings UI is covered by unit and integration tests, not by rendered-DOM acceptance.** The
-  native config surface, the cache-epoch behaviour, the catalog metadata, and the client-side
-  helpers are all tested; the page has not been exercised in a real browser.
-- **No token saving is claimed.** The point of the design is to carry less in each request; the
-  actual reduction has not been measured, and neither has latency.
-- Retrieval quality — how often the right tool is found — has not been measured either.
-- Fork inheritance and cold recovery after a process restart are covered only in part. The
-  invariants and the known gaps are listed in
-  [current status](plugin/docs/05-current-status.md).
+- 尚未完成完整产品验收。`0.2.1`、`0.2.2`、`0.3.0` 已发布到 npm（`0.3.0` 自 tag `v0.3.0` 走 Trusted
+  Publisher 工作流发布，run 38074858965）。**没有向任何真实 profile 安装、重载或重启**：[上架与兼容声明](plugin/docs/10-store-compatibility.md)
+  里的安装 / 启动 / 卸载 / 恢复证据取自一次性的 `DSH_HOME`，因此这里任何内容都不应被读作"已验收的在线 GUI"
+  或"完整产品验收"。
+- **设置 UI 有单测与集成测试覆盖，但没有渲染 DOM 的验收。** 原生配置面、缓存周期行为、目录元数据
+  以及客户端辅助函数都已测试；主页本身未在真实浏览器中跑过。
+- **不声称任何 token 节省。** 设计的出发点是让每次请求携带更少内容；实际缩减幅度没有测量过，
+  延迟也没有。
+- 检索质量——能否稳定找到正确的工具——同样没有测量。
+- fork 继承与进程重启后的冷恢复只覆盖了一部分。不变量与已知缺口列在
+  [当前状态](plugin/docs/05-current-status.md)中。
 
-## Further reading
+## 延伸阅读
 
-- [Design documents](plugin/docs/README.md) — requirements, the frozen protocol, the acceptance
-  matrix, runtime evidence, and current status.
-- [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+- [设计文档](plugin/docs/README.md)——需求、冻结协议、验收矩阵、运行时证据与当前状态。
+- [贡献](CONTRIBUTING.md) · [安全](SECURITY.md)
 
-## License
+## 许可证
 
-MIT — see [LICENSE](LICENSE).
+MIT —— 见 [LICENSE](LICENSE)。

@@ -268,3 +268,24 @@ test('在人工虚构质量目录上仅验证协议性质(不发布质量分数)
   );
   assert.ok(CATEGORY_CONFIG.files);
 });
+
+test('tokenizer 与同义词识别连续大写缩写边界(HTTPRequest / MCPServer)', () => {
+  const tokens = tokenize('HTTPRequest MCPServer');
+  assert.ok(tokens.includes('http'));
+  assert.ok(tokens.includes('request'));
+  assert.ok(tokens.includes('mcp'));
+  assert.ok(tokens.includes('server'));
+  assert.ok(synonymConcepts('HTTPRequest').has('fetch-web'), 'HTTPRequest 拆分后应命中 http request -> fetch-web 同义词概念');
+  assert.ok(synonymConcepts('CLIExecute').has('run-command'), 'CLIExecute 拆分后应命中 cli/execute -> run-command 同义词概念');
+});
+
+test('queryTermGroups 与词序无关:"file files" 与 "files file" 得分完全一致', () => {
+  const i = capabilityIdx();
+  const a = search(i, { query: 'file files', category: 'all', limit: 8 });
+  const b = search(i, { query: 'files file', category: 'all', limit: 8 });
+  assert.deepEqual(
+    a.map((h) => ({ id: h.entry.toolId, score: h.score, reasons: h.reasons })),
+    b.map((h) => ({ id: h.entry.toolId, score: h.score, reasons: h.reasons })),
+  );
+});
+

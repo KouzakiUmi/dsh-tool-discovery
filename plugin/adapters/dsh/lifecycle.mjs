@@ -212,7 +212,8 @@ export function createLifecycle(deps) {
       // 顺序很重要：**先**等基线，**再**取当刻的在途写 —— 反过来会把一份陈旧的
       // {state:'pending'} 快照当成结果，从而放过随后才变成 blocked 的状态。
       const baseline = runtime.baselinePromise;
-      if (baseline !== undefined && baseline !== null && runtime.ledger.state === BASELINE_STATE.PENDING) {
+      if (baseline !== undefined && baseline !== null
+        && (runtime.ledger.state === BASELINE_STATE.PENDING || runtime.retryInFlight === true)) {
         await baseline.catch(() => {});
         assertActive();
       }
@@ -832,7 +833,7 @@ export function createLifecycle(deps) {
     retryBaseline(runtime) {
       if (!runtime.requireTrustedEpoch) return Promise.resolve(null);
       if (runtime.restoring) return Promise.resolve(null);
-      return resolveBootstrapBaseline(runtime, undefined).then((outcome) => {
+      const retry = resolveBootstrapBaseline(runtime, undefined).then((outcome) => {
         if (runtime.ledger.state !== BASELINE_STATE.TRUSTED) return outcome;
         runtime.engine.restore([], runtime.scope);
         log('lifecycle:baseline-recovered', {
@@ -857,6 +858,14 @@ export function createLifecycle(deps) {
         log(terminated ? 'lifecycle:baseline-retry-stopped' : 'lifecycle:baseline-retry-failed', detail);
         return null;
       });
+      runtime.baselinePromise = retry;
+      runtime.retryInFlight = true;
+      const clearInFlight = () => {
+        // 只清自己：更晚的重试已把 baselinePromise 换成它自己的 promise。
+        if (runtime.baselinePromise === retry) runtime.retryInFlight = false;
+      };
+      retry.then(clearInFlight, clearInFlight);
+      return retry;
     },
     /** 供调用方等待某会话恢复完成（宿主不会 await session/created 的返回值）。 */
     whenReady(sessionId) {

@@ -414,3 +414,105 @@ test('D2 refreshCatalog 后新绑定的框架项仍受保护(unload 路径已关
   assert.equal(res.response.ok, false);
   assert.equal(res.response.error.code, 'INVALID_ARGS', '新绑定的框架项不可被 load');
 });
+
+test('engine.handleLoad 支持解绑调用(不依赖 this 绑定)', async () => {
+  const { engine } = await makeEngine();
+  const unboundHandleLoad = engine.handleLoad;
+  const res = await unboundHandleLoad({ names: ['glob'] }, SCOPE_A, { operationId: nextOpId() });
+  assert.equal(res.response.ok, true);
+  assert.equal(res.response.data.receipt.selected[0].name, 'glob');
+});
+
+test('reservedOnly 不会重复下发技能载荷或重复计入 maxSkillBytesPerLoad', async () => {
+  const { engine } = await makeEngine();
+  // 第一次 handleLoad 尚未折叠入 selected,仅写入会话 reserved
+  const first = await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: nextOpId() });
+  assert.equal(first.response.ok, true);
+  assert.equal(first.response.data.skills.length, 1);
+  assert.equal(first.response.data.skills[0].toolId, 't_files_glob');
+  // 第二次在同一会话再次请求 [glob, grep]:glob 已在 reservedOnly,不应重复下发其 skill
+  const second = await engine.handleLoad({ names: ['glob', 'grep'] }, SCOPE_A, { operationId: nextOpId() });
+  assert.equal(second.response.ok, true);
+  assert.deepEqual(second.response.data.skills.map((s) => s.toolId), ['t_files_grep']);
+});
+
+test('evaluateCall 在同名多 shadow 绑定同时选中时按 ctx.toolId 精确匹配', async () => {
+  const bindings = [
+    ...sampleBindings(),
+    binding({ name: 'dup_tool', toolId: 't_dup_a', namespace: 'files', params: { required: ['a'] } }),
+    binding({ name: 'dup_tool', toolId: 't_dup_b', namespace: 'files', params: { required: ['b'] } }),
+  ];
+  const { engine } = await makeEngine({ bindings });
+  const r = engine.handleSearch({ category: 'files', query: 'dup_tool' }, SCOPE_A);
+  const candA = r.data.candidates.find((c) => c.toolId === 't_dup_a');
+  const candB = r.data.candidates.find((c) => c.toolId === 't_dup_b');
+  assert.ok(candA && candB);
+  await doLoad(engine, SCOPE_A, {
+    candidates: [
+      { ref: candA.ref, revision: candA.revision },
+      { ref: candB.ref, revision: candB.revision },
+    ],
+  }, 1);
+  const entryB = engine.getCatalog().entries.get('t_dup_b');
+  engine.recordAdvertisement(SCOPE_A, {
+    requestId: 'req_1',
+    toolId: 't_dup_b',
+    name: 'dup_tool',
+    revision: entryB.revision,
+    schemaDigest: entryB.schemaDigest,
+    wire: entryB.wire,
+  });
+  const allowB = engine.evaluateCall(SCOPE_A, { name: 'dup_tool', toolId: 't_dup_b', requestId: 'req_1' });
+  assert.equal(allowB.allowed, true);
+});
+
+test('createDiscoveryEngine 显式传入 config.locale 时不受全局 setDomainLocale 覆盖', async () => {
+  const { setDomainLocale } = await import('../../domain/locale.mjs');
+  setDomainLocale('zh');
+  try {
+    const { engine } = await makeEngine({ engineConfig: { locale: 'en' } });
+    const res = engine.handleList({ view: 'state' }, { actorId: 'x' });
+    assert.equal(res.ok, false);
+    assert.match(res.error.message, /session identity/i);
+  } finally {
+    setDomainLocale('en');
+  }
+});
+
+test('PTC 守卫分支放行 frameworkRetained 与动态 CORE_TOOL_NAMES', async () => {
+  const { createGuard } = await import('../../adapters/dsh/guard.mjs');
+  const { BASELINE_STATE } = await import('../../adapters/dsh/trusted-epoch.mjs');
+  const { engine } = await makeEngine();
+  let guardHandler;
+  const agent = { id: 'actor', session: { id: SCOPE_A.sessionId } };
+  const runtime = {
+    scope: SCOPE_A,
+    agentScope: agent,
+    engine,
+    alwaysNameSet: new Set(),
+    frameworkRetained: new Set(['final_answer']),
+    initialToolsEnabled: true,
+    ledger: { state: BASELINE_STATE.TRUSTED, reason: 'ok' },
+    compositionBypass: null,
+  };
+  const ctx = {
+    tools: {
+      modeFor: () => 'ptc',
+      get: (name) => (name === 'read' ? { name: 'read' } : undefined),
+      guard: (fn) => { guardHandler = fn; },
+    },
+  };
+  createGuard({
+    ctx,
+    lifecycle: { runtimeFor: () => runtime },
+    frameworkRetained: ['final_answer'],
+    ptcEnabled: () => true,
+    respectAlwaysVisible: () => false,
+    log: () => {},
+  });
+  // 1) frameworkRetained 在 PTC 模式下直接放行
+  assert.equal(await guardHandler({ name: 'final_answer', agent }), undefined);
+  // 2) 动态 CORE_TOOL_NAMES(read)在 respectAlwaysVisible=false 且宿主当前可见时放行
+  assert.equal(await guardHandler({ name: 'read', agent }), undefined);
+});
+

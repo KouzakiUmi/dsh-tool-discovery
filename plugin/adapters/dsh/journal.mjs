@@ -1030,6 +1030,9 @@ export function createJournal(deps) {
       // （lifecycle 的 whenReady reject 路径只 failClosed，engine 仍持有 pending），
       // 预留必须在这里显式还回去。
       abandonLiveCalls();
+      openCompactions.clear();
+      commandRuns.clear();
+      awaitingUserDone.clear();
       // 会话释放后不再有任何读者；留着它只会让迟到的重放复活授权。
       latestHeaderTools = null;
       latestHeaderSeq = undefined;

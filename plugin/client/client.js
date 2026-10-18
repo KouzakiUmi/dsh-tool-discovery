@@ -32,9 +32,10 @@ window.__ModuleLoader__.load({
     const FIXED_ENTRIES = ['tool_list', 'tool_search', 'tool_load'];
 
     function filterRows (rows, query) {
+      if (!Array.isArray(rows)) return [];
       const needle = typeof query === 'string' ? query.trim().toLowerCase() : '';
       if (needle === '') return rows;
-      return rows.filter((row) => row.name.toLowerCase().includes(needle));
+      return rows.filter((row) => typeof row?.name === 'string' && row.name.toLowerCase().includes(needle));
     }
 
     function toggleName (selected, name) {
@@ -588,12 +589,13 @@ window.__ModuleLoader__.load({
             ? h('p', { style: S.emptyBox }, t('empty'))
             : groups.map((group) => {
               const open = searching || collapsed[group.key] !== true;
+              const groupDisabled = disabled || searching;
               return h('section', { key: group.key, style: S.group },
                 h('button', {
                   type: 'button',
                   'aria-expanded': open ? 'true' : 'false',
-                  style: S.groupHead(disabled),
-                  disabled,
+                  style: S.groupHead(groupDisabled),
+                  disabled: groupDisabled,
                   onClick: () => setCollapsed((prev) => ({ ...prev, [group.key]: open })),
                 },
                   h('span', { 'aria-hidden': 'true', style: S.caret(open) }, '▸'),
