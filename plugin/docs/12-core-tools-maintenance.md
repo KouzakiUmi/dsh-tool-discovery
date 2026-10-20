@@ -5,7 +5,10 @@
 **DSH Core 升版必须核验并按差集更新 `CORE_TOOL_NAMES`**，同时更新其派生依据，不能仅更新 peer 范围。
 基线见 [core-tools.mjs](<../domain/core-tools.mjs>)；检查器见 [check-core-tools.mjs](<../../scripts/check-core-tools.mjs>)。
 宿主工具定义没有供本插件使用的来源契约；同名工具不等于来源已得到认证。
-不要读取宿主私有 `layers`，也不要把 preset 的 `tool-*` 注册 ID 当成工具名。
+跟版清单不能用未核验的 `layers` 结构认证来源，也不要把 preset 的 `tool-*` 注册 ID 当成工具名。
+这与现有 [tool-inventory.mjs](<../adapters/dsh/tool-inventory.mjs>) 为 UI/preset 读取登记层是不同用途：
+后者有局部/unknown 边界，不是已核验的完整 Core 工具清单，也不能证明任意未来版本接口稳定。
+核心同名自证只作用于维护表中的名称；上游新增一个不在表中的名字，不会自动成为可信核心身份。
 
 ## 2. 漂移日志（不改变授权）
 

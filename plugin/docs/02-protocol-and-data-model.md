@@ -1,6 +1,7 @@
 # 02 · 协议与数据模型（冻结）
 
-> 本文件是 PTD 的**冻结规范**。所有数值、错误码与语义以 [`domain/constants.mjs`](../domain/constants.mjs) 及其它 [`domain/*.mjs`](../domain/) 的实现为准；本文与实现不一致处已在 §12 逐条标注，**以代码为准**。背景见[需求与架构](<01-requirements-and-architecture.md>)，已验证范围见[当前状态](<05-current-status.md>)。
+> **历史冻结规范与历次 delta，不是当前行为的单一入口。** 本文保留早期设计及编号，以便追溯原验收和报告；旧默认硬上限、模型 unload、首轮集合和 native-only 等段落已被后续实现调整。请先读 [00 当前实现契约](<00-current-contract.md>)，无需自行拼接 §12–14 才判断现行语义。
+> 本文不回改历史数值与原始判据；当前源码版本为 `0.4.2`，验证状态另见 [05](<05-current-status.md>)。
 
 ## 1. 模型入口与职责
 

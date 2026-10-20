@@ -221,7 +221,15 @@ export function createDiscoveryEngine(config) {
     const reserved = new Set();
     for (const op of pending.values()) {
       if (op.sessionId !== sessionId || op.action !== 'load') continue;
-      for (const s of op.expectedReceipt?.selected ?? []) reserved.add(s.toolId);
+      const selections = op.expectedReceipt?.selected ?? [];
+      // 预留属于原子批次的确定版本，不只是 toolId。任一项定义已失效，整批回执
+      // 都无法按当前目录提交；不能把旧预留借给同 ID 的新 schema，也不为其余项占额。
+      // 仅排除已知定义失效的计费，不提前取消操作或改变候选 ref 的正式提交校验。
+      if (selections.some((s) => {
+        const current = resolveByToolId(catalog, s.toolId);
+        return !current || current.revision !== s.revision;
+      })) continue;
+      for (const s of selections) reserved.add(s.toolId);
     }
 
     // 尚未走到真实出站披露的 selected（还没冻结）按其选中时的 catalog 条目计字节，
@@ -229,9 +237,10 @@ export function createDiscoveryEngine(config) {
     /** @type {Array<{wireBytes:number}>} */
     const frozen = frozenWireList(st);
     const frozenNames = new Set(frozen.map((f) => f.name));
-    const active = frozen.map((f) => ({ wireBytes: f.bytes }));
+    // 初始名单独立于按需配额；容错 load 不能把免费基线变成收费选择。
+    const active = frozen.filter((f) => !alwaysNames.has(f.name)).map((f) => ({ wireBytes: f.bytes }));
     for (const [toolId, selection] of st.selected) {
-      if (st.frozen.has(toolId) || frozenNames.has(selection.name)) continue;
+      if (alwaysNames.has(selection.name) || st.frozen.has(toolId) || frozenNames.has(selection.name)) continue;
       const entry = resolveByToolId(catalog, toolId);
       // `resolveByToolId` 找不到时返回 **null**：判据必须是 `!entry`，
       // 写成 `entry === undefined` 会让 null 通过并在此处抛 TypeError。
@@ -244,7 +253,7 @@ export function createDiscoveryEngine(config) {
     for (const toolId of reserved) {
       if (st.frozen.has(toolId) || st.selected.has(toolId)) continue;
       const entry = resolveByToolId(catalog, toolId);
-      if (!entry || frozenNames.has(entry.name)) continue;
+      if (!entry || alwaysNames.has(entry.name) || frozenNames.has(entry.name)) continue;
       active.push({ wireBytes: entry.wireBytes });
       reservedOnly.add(toolId);
     }
@@ -581,19 +590,19 @@ export function createDiscoveryEngine(config) {
 
       // 幂等:已以同版本选中、或已被本 scope 未决回执预留 → 不重复计费
       const fresh = resolved.filter((r) => {
+        if (alwaysNames.has(r.entry.name)) return false;
         const sel = st.selected.get(r.entry.toolId);
         if (sel && sel.revision === r.entry.revision) return false;
         // 同名且 schema 相同的冻结 wire 已计费；绑定/技能换版不是新增 schema。
         if (frozenByName.has(r.entry.name)) return false;
         return !reservedOnly.has(r.entry.toolId);
       });
-      assertActiveBudget(fresh.map((r) => r.entry), alreadyActive, budgets);
-      // 技能交付与 schema 计费是两件事：冻结旧 wire 不证明新版本指南已经发过。
-      const skills = resolved.filter(({ entry }) => {
-        if (st.selected.get(entry.toolId)?.revision === entry.revision) return false;
-        return ![...pending.values()].some((op) => op.sessionId === scope.sessionId
-          && op.expectedReceipt?.selected?.some((s) => s.toolId === entry.toolId && s.revision === entry.revision));
-      }).map(({ entry }) => projectSkill(entry));
+      // 降低限额后保留的旧披露可能已超限：只拒绝新增占用，不阻断零新增重选。
+      if (fresh.length > 0) assertActiveBudget(fresh.map((r) => r.entry), alreadyActive, budgets);
+      // 技能交付只对已提交的同版本选择去重；pending 可能失败/取消，不能冒充成功交付。
+      // 同时避免为每项技能全量扫描 pending；schema 预留仍由上面的独立口径去重。
+      const skills = resolved.filter(({ entry }) => st.selected.get(entry.toolId)?.revision !== entry.revision)
+        .map(({ entry }) => projectSkill(entry));
       assertSkillBudget(skills, budgets.maxSkillBytesPerLoad);
 
       // 提交前 recheck:资格代次 + 每项 revision 重算。变化则整批失败,绝不偷偷改选。
@@ -844,6 +853,8 @@ export function createDiscoveryEngine(config) {
       // "升资格代次"必须真的发生，否则模型手里的候选 ref 会在撤权后继续指向旧定义。
       eligibilityGeneration += 1;
       refStore.dropForEligibility(eligibilityGeneration);
+      // 游标也全部绑定旧资格代次，既已不可用就立即回收，而不是等 TTL。
+      cursorStore.clear();
       const now = clock.now();
       for (const [sid, st] of sessions) {
         // 从未 selected / advertised 过该工具的会话不会因此被动改状态（见 state.invalidateTool）。
@@ -884,6 +895,8 @@ export function createDiscoveryEngine(config) {
       index = nextIndex;
       eligibilityGeneration += 1;
       refStore.dropForEligibility(eligibilityGeneration);
+      // 游标也全部绑定旧资格代次，既已不可用就立即回收，而不是等 TTL。
+      cursorStore.clear();
 
       for (const [sid, st] of sessions) {
         let cur = st;

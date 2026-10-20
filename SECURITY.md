@@ -2,74 +2,72 @@
 
 ## Reporting a vulnerability
 
-**Do not open a public issue, and do not open a public pull request, for a suspected
-vulnerability.**
+**Do not publish a suspected vulnerability in a public issue, pull request or technical write-up.**
 
-Use the repository's private reporting channel instead:
+The intended private reporting route is:
 
 > <https://github.com/KouzakiUmi/dsh-tool-discovery/security/advisories/new>
 
-If private vulnerability reporting is not yet enabled for this repository, the fallback is a
-direct message to the maintainer through their GitHub profile. Either way, open the report
-privately first and let the maintainers publish the advisory.
+Availability of private reporting is not verified by this document. If that route is unavailable,
+ask the maintainer for a private channel **without posting reproduction details or sensitive data publicly**.
+No verified monitored fallback mailbox is documented here; a GitHub profile link is not a confirmed private-message channel.
+This is a reporting-channel gap, not an assurance that a report sent elsewhere will be received.
 
-**Known gap, for the maintainer to close:** private vulnerability reporting has not been verified
-as enabled on this repository, and no monitored mailbox is configured. Until that is fixed, treat
-the GitHub profile DM as the working channel and confirm it with the reporter.
+Please include:
 
-Please include, as far as you can:
+- the actual DSH **Core** and relevant peer versions, not just the CLI or desktop shell version;
+- the plugin version and exact source commit or artifact digest;
+- presentation mode, relevant configuration and whether the case uses a baseline exception;
+- the tool sequence and sanitized inputs, expected behavior and observed behavior;
+- whether the evidence is static reasoning, a unit counterexample, Loader composition or actual execution.
 
-- the DSH core version the finding reproduces on (`0.2.1-alpha.1` and `0.2.1-alpha.2` are the
-  versions this code has been reviewed against — see
-  [STORE compatibility](plugin/docs/10-store-compatibility.md) for the per-version matrix),
-- the plugin commit,
-- the tool sequence and inputs,
-- what a caller should have been able to do, and what happened instead.
+See the [current contract](<plugin/docs/00-current-contract.md>) and
+[compatibility evidence](<plugin/docs/10-store-compatibility.md>) for the supported boundaries.
+Do not attach credentials, unredacted profile manifests or private session history to a public discussion.
 
-## What counts as a vulnerability here
+## Security surface
 
-This plugin sits between the model and the tool registry. Its security surface is specifically:
+The plugin reduces disclosure and adds execution refusals; it is not the host sandbox or an independent approval system.
+The three entries are **not** the only initially callable tools: configured initial tools, retained preset/framework tools,
+and the default core self-admission policy have distinct rules.
 
-- **Reaching a tool that was not loaded.** The three control entries are supposed to be the only
-  thing callable until a `tool_load` succeeds. A path from an un-loaded tool to a real
-  execution is the primary finding.
-- **Bypassing the guard.** The guard may only add rejections. Any input that makes it stop
-  rejecting, or that lets a shadowed or same-named definition win, is a finding.
-- **Forging or replaying a receipt.** Activation must require a canonical receipt that the engine
-  itself produced, and a user message shaped like a receipt must not activate anything.
-- **Failing open.** Where the journal or the session query cannot be read, the correct behaviour
-  is to fail closed. A path from an unreadable journal to "treated as a new session with restored
-  state" is a finding.
-- **Crossing a trust boundary.** Loading an entry tool or a framework-retained tool, bypassing the
-  frozen-trust set, or letting a category grant eligibility.
-- **Failing to roll back.** Any activation path that leaves an orphan listener, guard, or
-  registered definition after a failure part-way through.
+Relevant findings include:
 
-Note that a *nonexistent* tool name is refused with the same message as a hidden one. That is a
-deliberate product decision — the call surface does not distinguish existence — and is not a
-finding.
+- **Executing outside the permitted paths.** An ordinary on-demand tool reaches its body without a valid selection,
+  actual matching disclosure and current native eligibility, excluding explicitly documented baseline exceptions.
+- **Bypassing an existing rejection.** Native deny, approval or sandbox restrictions are bypassed, or a same-name/shadowed
+  definition gains authority from an unrelated scope.
+- **Forging activation.** User text, a search result, an orphan/rewritten receipt or a header alone becomes a selection;
+  call/result attribution or the final success predicate is skipped.
+- **Failing open.** Unverifiable history, failed query or a required but missing/invalid durable baseline is treated as a
+  new trusted session. Default opt-out of durable baselines is a documented configuration, not itself a bypass.
+- **Crossing disclosure/authority boundaries.** Frozen wire, a category, the global settings catalog, inherited fork history
+  or a stale candidate grants current execution rights.
+- **Lifecycle rollback defects.** Partial activation or disposal leaves a live listener, guard or registered definition
+  that can affect later requests beyond its owning activation.
 
-## What is not in scope
+Repeated idempotent loading of an already-active protected baseline item is allowed by the default
+`tolerantLoadProtected` policy; it is not by itself an escalation. Hidden and nonexistent names intentionally receive
+non-disclosing refusals. Neither behavior should be described as a new vulnerability without a boundary-crossing counterexample.
 
-- Performance, token consumption, or search quality. The token saving this design targets has not
-  been measured at all, and the scoring dataset is not publishable; a claim that it underperforms
-  is not a security report.
-- The published-but-unpublished boundary. If you believe something under `plugin/audits/`,
-  `plugin/reports/`, or the quality dataset should be public, that is a
-  [contribution](CONTRIBUTING.md#changing-the-public-boundary) question, not a vulnerability.
-- Defects in DSH itself. Report those to DSH. This repository only records which host seams it
-  depends on.
+## Trust assumptions and known limitations
 
-## Response
+Trusted local configuration and the host plugin registry are control-plane inputs. Durable epoch records are not signed
+or MAC-authenticated; someone who controls the trusted storage can forge that local state. The supported scope is a
+single-user, single-profile deployment, not an adversarial multi-tenant authorization service.
 
-The maintainers will acknowledge a report, and will state whether they accept it as a finding
-before working on a fix. Fixes go through the same flow as any other change — a
-direction-named branch, verification, and a pull request against `main` — see
-[CONTRIBUTING.md](CONTRIBUTING.md). The author of a fix to a security boundary does not approve
-it.
+Same-session multi-agent concurrency and atomic binding across uninterrupted hot definition replacement are not promised.
+Native frozen disclosure is not execution permission. Optional PTC still lacks SDK byte freezing, stable append and
+cross-restart freeze; this is a disclosed consistency gap, not evidence that its execution guard can be bypassed.
 
-## Disclosure
+Performance, token use and retrieval quality normally belong in functional reports. A request to publish intentionally
+private audit/scoring materials is a [public-boundary contribution](<CONTRIBUTING.md#changing-the-public-boundary>);
+**an accidental secret or private-data disclosure is still appropriate for private security reporting**.
+Host-core defects should also be reported to the host maintainers; this repository only owns its plugin behavior.
 
-There is no published SLA for this repository, and it has not been through a release. Reporters
-should expect triage, not a fixed response window. Please do not publish a technical write-up of
-an unfixed finding.
+## Review and disclosure
+
+There is no published response SLA. Source or package distribution does not imply a completed security or product audit.
+Maintainers triage a private report before arranging coordinated disclosure; do not publish an unfixed reproduction.
+Fixes follow [CONTRIBUTING](<CONTRIBUTING.md>): scoped branch, evidence, independent review and maintainer merge.
+Authors do not approve their own security boundaries. An earlier bounded check or green CI does not approve later changes.
