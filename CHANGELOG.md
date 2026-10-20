@@ -25,6 +25,10 @@ what is verified, what is unverified, and what this version refuses to support â
 
 ## [Unreleased]
 
+- Preserve observed native wire key order when deep-copying frozen definitions.
+- Fit list/search byte-limited responses incrementally, including full-envelope metadata,
+  without first materializing or serializing the entire candidate page.
+
 - Reject same-name schema changes that conflict with the native epoch's frozen definition as
   `COMPACTION_REQUIRED`, before reserving budget. Same-schema rebinding and skill updates remain allowed.
 - Recover native disclosure history separately from execution selections, using matched successful load

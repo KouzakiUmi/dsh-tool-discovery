@@ -6,6 +6,7 @@
 //
 // 纯函数约束:不读时钟、不读随机、不写文件、不发事件;所有外部事实由 ResolverContext 传入。
 import { canonicalJson, deepEqualCanonical, digestOf, utf8Bytes } from './canonical.mjs';
+import { DomainError } from './errors.mjs';
 import { normalizeCandidateRevision } from './protocol.mjs';
 import { recomputeIdentity } from './catalog.mjs';
 import { isNonEmptyString, isPlainObject } from './util.mjs';
@@ -352,13 +353,20 @@ export function reducePair(state, pair, ctx) {
 export function freezeTool(state, rec) {
   if (state.frozen.has(rec.toolId) || [...state.frozen.values()].some((f) => f.name === rec.name)) return state;
   const wireJson = canonicalJson(rec.wire);
+  const wire = JSON.parse(JSON.stringify(rec.wire));
+  // Getters/proxies or a hidden toJSON must not change the identity while we
+  // take the order-preserving snapshot. Reject before changing either ledger.
+  if (canonicalJson(wire) !== wireJson) {
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'Observed wire changed during JSON snapshot.');
+  }
   const next = cloneState(state);
   next.frozen.set(rec.toolId, {
     toolId: rec.toolId,
     name: rec.name,
     revision: rec.revision,
     schemaDigest: rec.schemaDigest,
-    wire: JSON.parse(wireJson),
+    // Preserve the observed JSON key order independently of canonical accounting.
+    wire,
     bytes: utf8Bytes(wireJson),
     order: next.frozenOrder,
     epoch: next.epoch,

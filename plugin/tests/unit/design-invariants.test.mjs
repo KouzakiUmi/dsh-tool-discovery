@@ -315,3 +315,15 @@ test('DI15 错误身份/输入、header 先于提交及无真实 header 均不�
     assert.equal(engine.getState(SCOPE_A).selected.size, 0, variant);
   }
 });
+
+
+test('DI16 live and restored native projections preserve the exact observed JSON bytes', async (t) => {
+  const h = await loadedHistory(t);
+  const expected = JSON.stringify(h.events[3].data.header.tools);
+  assert.equal(JSON.stringify(await project(h.engine, h.journal, sampleBindings())), expected);
+  const { engine } = await makeEngine({ newSessionMode: 'restoring' });
+  const journal = journalFor(engine, h.events);
+  t.after(() => { journal.dispose(); engine.dispose(); });
+  await journal.restore();
+  assert.equal(JSON.stringify(await project(engine, journal, sampleBindings())), expected);
+});

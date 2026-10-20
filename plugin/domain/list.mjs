@@ -105,11 +105,13 @@ function paginateItems(args) {
   // 与 createCursorStore 的 p_ + 16 字节 hex 同形；确认页大小后才真正铸游标。
   const placeholder = `p_${'0'.repeat(32)}`;
   const count = Math.min(limit, items.length - offset);
-  const pageAt = (n) => ({ pageItems: items.slice(offset, offset + n),
+  const pageAt = (n, pageItems = items.slice(offset, offset + n)) => ({ pageItems,
     nextCursor: n > 0 && offset + n < items.length ? placeholder : null,
     truncated: offset + n < items.length });
   const measure = args.measurePage ?? ((page) => Buffer.byteLength(JSON.stringify(page), 'utf8'));
-  const keep = fitPrefixLength(count, budgets.maxListResultBytes, (n) => measure(pageAt(n)));
+  const keep = fitPrefixLength(count, budgets.maxListResultBytes,
+    (n) => measure(pageAt(n, [])),
+    (i) => Buffer.byteLength(JSON.stringify(items[offset + i]), 'utf8'));
   if (keep < 0 || (count > 0 && keep === 0)) {
     throw new DomainError('BUDGET_EXCEEDED', t(emptyBudgetMessagePath), emptyBudgetDetails);
   }

@@ -409,9 +409,13 @@ export function createDiscoveryEngine(config) {
 
         // 多取一条只用于判断截断；返回数量仍不超过请求 limit。
         const hits = runSearch(index, { query: req.query, category, limit: req.limit + 1 });
-        const cards = hits.slice(0, req.limit).map((hit) => {
+        const count = Math.min(hits.length, req.limit);
+        const cards = [];
+        const cardAt = (i) => {
+          if (cards[i]) return cards[i];
+          const hit = hits[i];
           const sel = st.selected.get(hit.entry.toolId);
-          return {
+          return cards[i] = {
             toolId: hit.entry.toolId,
             ref: REF_PLACEHOLDER,
             revision: hit.entry.revision,
@@ -421,18 +425,18 @@ export function createDiscoveryEngine(config) {
             matchReasons: hit.reasons,
             loaded: alwaysNames.has(hit.entry.name) || Boolean(sel && sel.revision === hit.entry.revision),
           };
-        });
-        const envelopeFor = (candidates) => okEnvelope('tool_search', 'search', {
+        };
+        const envelopeFor = (candidates, length = candidates.length) => okEnvelope('tool_search', 'search', {
           catalogGeneration: catalog.generation, category, candidates,
-          truncated: candidates.length < hits.length,
+          truncated: length < hits.length,
         }, text.t(['nextAction', hits.length === 0 ? 'rewriteOrBrowse' : 'pickCandidateThenLoad']));
         // 包含外壳、数组分隔与 nextAction；空命中同样必须满足完整响应限额。
-        const keep = fitPrefixLength(cards.length, budgets.maxSearchResultBytes,
-          (n) => jsonBytes(envelopeFor(cards.slice(0, n))));
-        if (keep < 0 || (cards.length > 0 && keep === 0)) {
+        const keep = fitPrefixLength(count, budgets.maxSearchResultBytes,
+          (n) => jsonBytes(envelopeFor([], n)), (i) => jsonBytes(cardAt(i)));
+        if (keep < 0 || (count > 0 && keep === 0)) {
           throw new DomainError('BUDGET_EXCEEDED', t(['detail', 'candidateCardOverByteBudget']), undefined, explicitLocale);
         }
-        const candidates = cards.slice(0, keep);
+        const candidates = Array.from({ length: keep }, (_, i) => cardAt(i));
         // 预算判定结束后才铸 ref，等长占位符与真实值的计量完全一致。
         for (const card of candidates) {
           card.ref = refStore.issue(scope.sessionId, eligibilityGeneration, card.toolId, card.revision);
