@@ -1,6 +1,6 @@
 # 09 · 当前业务逻辑地图
 
-更新日期：2026-10-20。依据 `0.4.2` 源码及 `b12dfef` 的状态一致性修复。
+更新日期：2026-10-21。依据 manifest `0.4.3` 的构建源码，整合主线 `c1709d3` 与后续预算、名单、技能和游标修复。
 这是**源码导读**，不是一次新安全审查或产品验收；精确行为见 [00](<00-current-contract.md>)，实测状态见 [05](<05-current-status.md>)。
 旧微基准、历史问题清单与当时的处置保留在[刷新前版本](https://github.com/KouzakiUmi/dsh-tool-discovery/blob/b12dfef1815636c1518f741da870c1dd5427442f/plugin/docs/09-business-logic-map.md)，不再混作当前待办。
 

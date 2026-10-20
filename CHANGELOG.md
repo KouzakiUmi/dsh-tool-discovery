@@ -25,6 +25,9 @@ what is verified, what is unverified, and what this version refuses to support â
 
 ## [Unreleased]
 
+The entries below are post-v0.4.3 source changes. Green main builds publish `build-<sha>` assets
+independently; those assets do not imply a new npm release.
+
 - Bind pending-budget reservations to every version in their atomic receipt. If any definition was
   removed or revised, stop billing that whole uncommittable batch rather than reserving current bytes
   by tool ID. This prevents oversized replacement schemas borrowing an old reservation and avoids
@@ -54,6 +57,11 @@ what is verified, what is unverified, and what this version refuses to support â
   to `npm`, retire unverified account/bootstrap claims, and distinguish historical DOM probes from current GUI acceptance.
 - Clarify vulnerability-reporting availability and baseline exceptions; do not advertise an unverified
   GitHub-profile DM channel or describe the repository as never released.
+## [0.4.3] â€” 2026-10-20 â€” discovery state and disclosure fixes
+
+- Preserve observed native wire key order when deep-copying frozen definitions.
+- Fit list/search byte-limited responses incrementally, including full-envelope metadata,
+  without first materializing or serializing the entire candidate page.
 
 - Reject same-name schema changes that conflict with the native epoch's frozen definition as
   `COMPACTION_REQUIRED`, before reserving budget. Same-schema rebinding and skill updates remain allowed.

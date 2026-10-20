@@ -29,9 +29,16 @@ import { ENTRY_TOOL_NAMES, digestOf } from '../../domain/index.mjs';
 
 /** 宿主 schema 投影 → domain wire（有效 wire 字段：name/description/parameters）。 */
 export function wireOfSchema(schema) {
-  const wire = { name: schema.name };
-  if (typeof schema.description === 'string') wire.description = schema.description;
-  if (schema.parameters !== null && typeof schema.parameters === 'object') wire.parameters = schema.parameters;
+  // Preserve the observed field order; canonicalization is only for identity.
+  const wire = {};
+  for (const key of Object.keys(schema)) {
+    if (key === 'name'
+      || (key === 'description' && typeof schema[key] === 'string')
+      || (key === 'parameters' && schema[key] !== null && typeof schema[key] === 'object')) {
+      wire[key] = schema[key];
+    }
+  }
+  if (!Object.hasOwn(wire, 'name')) wire.name = schema.name;
   return wire;
 }
 

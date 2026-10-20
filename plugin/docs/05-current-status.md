@@ -1,6 +1,6 @@
 # 05 · 当前状态
 
-更新日期：**2026-10-20**（Asia/Hong_Kong）。对应源码 manifest `0.4.2`，包含提交 `b12dfef`。
+更新日期：**2026-10-21**（Asia/Hong_Kong）。对应源码 manifest `0.4.3`，整合已发布主线 `c1709d3` 与后续业务修复；本批仅作 GitHub 构建分发，不代表新 npm 正式版。
 现行行为见 [00 当前实现契约](<00-current-contract.md>)，验收判据见 [03](<03-implementation-and-acceptance.md>)。
 本文不登记未经重新核验的远端最新发布、STORE 收录或在线安装状态。
 
@@ -10,31 +10,31 @@
 旧文件中的“本轮”“当前宿主”“未发布”“待合并”仅在其取证时点成立，不自动滚动到今天。
 历史记录保留在 [04](<04-runtime-evidence.md>)、[06](<06-rewrite-changelog.md>)、[07](<07-lifecycle-recovery-coverage.md>)、[08](<08-trusted-epoch-baselines.md>)、[10](<10-store-compatibility.md>)、[11](<11-code-review-findings.md>) 与私有证据中。
 
+**版本坐标**：本源码 manifest 为 `0.4.3`，但后续 `build-<sha>` 与已发布的 npm `0.4.3` 是不同源码快照。npm 发布与 provenance 以 registry 为准；GitHub Release/tarball 不能替代 npm 发布证明。每个绿色 main 构建会产出 `build-<sha>` 资产，正式语义版本由 `v<version>` 标签驱动。本次不新增正式版本标签或 npm 发布。
+上游记录的 2026-10-06 重建前历史（`2a1f9c0`、`257ddc0` 等）已淘汰，不作为本批证据来源。
+
 ### 0.1 版本与兼容
 
-- 包版本：`0.4.2`；协议版本：`2`。不要把包版本当 Core 版本。
+- 包版本：`0.4.3`；协议版本：`2`。不要把包版本当 Core 版本。
 - manifest 的 Core peer 准入范围为 `>=0.2.1-alpha.1`；显式兼容声明仍只将 alpha.1、alpha.2 标为 `compatible`，`0.2.0-rc.2` 为 `unknown`。未列出的新版本不据此变成“已测”。
 - `schemastery` peer 仍是 `3.18.5-alpha.1`；不能把所有 peer 都描述成同一开放 Core 范围。
 - 当前文档核对没有重新读取宿主安装版本；[04](<04-runtime-evidence.md>) 的 alpha.1 现场与 [10](<10-store-compatibility.md>) 的 alpha.2 实验均是历史坐标。
+- 整合的 PR #18 后续修复保留有序 wire 独立副本、getter/toJSON 内容变化拒绝、逐项字节累计及末页节省判定。字节上限约束响应构造，不约束索引评分/排序的全部计算量。其历史 549 项结果见 0.3，不冒充本轮宿主验收。
 
 ### 0.2 本次运行证据
 
-2026-10-20 最新目录/在途交互复核，基于 `b12dfef` 并保留前两阶段的文档与业务修复。Node **v24.13.0**。本轮产品改动仅在 engine，另新增回归测试；不是新发布版本。
+2026-10-21 将已核业务批次 `fcdb348` 与已发布主线 `c1709d3` 整合。Node **v24.13.0**。保留上游有序 wire 副本、逐项字节有界构造和本批预算/名单/技能/回收修复；本次为 GitHub build，不新增 npm 正式版本。
 
 | 本次实际执行 | 退出码 | 结果与边界 |
 |---|---|---|
-| [catalog-workflow](<../tests/unit/catalog-workflow.test.mjs>) | 1 → 0 | 修复前 3 pass / 11 fail，修复后 **14/14**；覆盖版本预留、原子批次、独立 selected/frozen、合法 names 在途、既有候选校验和游标回收 |
-| 显式排除 `client.test.mjs`、`settings.test.mjs` 后运行全部 unit 文件 | 0 | **533 pass / 0 fail / 0 skip**；含前轮业务回归，两份宿主绑定文件仍是排除，不是通过 |
-| `node --check`（engine 与本轮新增测试） | 0 | 语法检查，不等于类型检查、Loader 或 GUI |
-| `node .probe/check-catalog-negative-controls-20261020.mjs`（私有） | 0 | 撤回版本校验、改为只校验逐项、撤回游标回收，分别仅 9/2/2 个对应断言转红；不修改原工作区，不是非作者审核 |
-| `node scripts/check-repo.mjs` | 0 | 20 份公开文档的路径/身份检查通过，链接数以最终输出为准 |
-| `node .probe/check-catalog-delivery-20261020.mjs`（私有） | 0 | 25 个本地锚点、双语配置一致且 validateConfig 接受；冻结正文和 55 行历史判据保留；前轮快照中本轮未涉及的 21 份文件 hash 不变 |
-| `git diff --check` | 0 | 空白检查通过，不是产品验收 |
+| 显式排除 `client.test.mjs`、`settings.test.mjs` 后运行全部 unit 文件 | 0 | **544 pass / 0 fail / 0 skip**；含上游 PR18 跟进与本批业务回归，两份宿主绑定文件仍是排除，不是通过 |
+| 本批 [business-workflow](<../tests/unit/business-workflow.test.mjs>) / [catalog-workflow](<../tests/unit/catalog-workflow.test.mjs>) | 0 | 分别 16/16 与 14/14，包含在上面的 544 项中，不重复累加 |
+| `node --check`（engine、budgets、list、state、registry） | 0 | 语法检查，不等于类型检查、Loader 或 GUI |
 
 修复前人工反例中，258 字节上限被同 ID 的 1213 字节新 schema 绕过，另一项小工具反被旧预留阻塞。现在按整笔回执的当前定义版本核算预留，不把旧 ID 预留借给新 schema；任一项移除/换版则整批不计费，但不提前取消操作，也不释放独立 selected/frozen。资格代次改变时，已无法使用的游标立即回收；无变化/校验失败仍保留有效游标。
 
 游标测试只在同步构造期观察原生 Map 分配并立即恢复全局，不替换业务方法；证明记录数回收，不是 RSS/TTFT 实测。前轮 VM client 测试也不是 React/DOM 渲染。生产 registry 仍为 `skill:null`。
-精确 portable 命令见[开发指南](<../README.md#portable-unit-subset>)；本轮日志为私有 `.probe/catalog-review-20261020-portable.log`，原始红灯与前轮报告没有覆盖。
+精确 portable 命令见[开发指南](<../README.md#portable-unit-subset>)；本次整合日志为私有 `.probe/publish-github-20261021-portable.log`。整合前 533 项、红转绿和负控制日志仍保留原文件，不冒充本次整合结果。
 
 **单列但未修**：候选在 ref 有效时已被 load 接纳，ref 过期后的成功回执可能被热态拒绝、却在冷恢复中被选中。人工反例已复现 0/1 的选择差异；本轮保留现有提交校验，不声称所有热冷历史均已一致。检索通用动词误召回与 PTC SDK 冻结也仍未闭合。
 `npm test` 全量、真实 Loader composition、质量评分、真实 provider、当前 GUI 与安装均**未在本轮执行**。
@@ -49,9 +49,11 @@
 | 2026-10-14，`0.4.1` | 456 unit / 147 composition，含 PTC 出站 fixture | 非真实 Node/Python worker 或生产 Profile 全路径验收 |
 | 2026-10-19，状态一致性修复 | 503 portable、新设计回归及七组私有负控制 | 非宿主全量、非 PTC SDK 冻结验收 |
 | 2026-10-20，先行文档刷新 | 当时源码未改，503 portable 与文档/配置静态核验 | 该阶段的 `.probe/docs-verification-20261020-*` 是旧快照，不能覆盖随后业务修复的结果 |
-| 2026-10-20，前轮四项业务修复 | 519 portable、16/16 业务回归、五组负控制 | 私有 `.probe/business-review-20261020-*` 是前轮快照；本轮新增目录交互检查没有重写它 |
+| 2026-10-20，前轮四项业务修复 | 519 portable、16/16 业务回归、五组负控制 | 私有 `.probe/business-review-20261020-*` 是前轮快照；后续整合没有重写它 |
+| 2026-10-20，目录/在途复核 | 533 portable、14/14 目录回归、三组负控制分别 9/2/2 转红 | 对应私有 `.probe/catalog-review-20261020-*`；不是整合上游后的数字 |
+| 2026-10-20，PR18 后续审核 | Node 26.8.1、固定 React 18.3.1 与 schemastery 3.18.5-alpha.1 的独立副本 549 pass / 0 fail；其中 client/settings 35 pass；11 项新增回归 | 官方依赖下的单测，不是桌面安装、真实 Loader 或性能验收。原先 5 项审核反例中 4 项失败，修正后通过 |
 
-以上历史的完整逐轮叙述可从[文档刷新前快照](https://github.com/KouzakiUmi/dsh-tool-discovery/blob/b12dfef1815636c1518f741da870c1dd5427442f/plugin/docs/05-current-status.md)取回；私有原始报告与审查镜像未被改写。
+以上历史的完整叙述可从[文档刷新前快照](https://github.com/KouzakiUmi/dsh-tool-discovery/blob/b12dfef1815636c1518f741da870c1dd5427442f/plugin/docs/05-current-status.md)及[PR18 后续主线记录](https://github.com/KouzakiUmi/dsh-tool-discovery/blob/c1709d3693ed89d4f6c7185cf27c4d86aa5ea910/plugin/docs/05-current-status.md)取回。后者也保留 503 项、18 项设计回归、七组负控制及私有质量 20/1 的原始说明；私有原始报告与审查镜像未被改写。
 
 ### 0.4 历史可选设置的有限独立复核
 

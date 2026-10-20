@@ -93,22 +93,23 @@ export function assertBytes(value, maxBytes, what) {
 }
 
 /**
- * 在完整响应度量下选择最大的完整前缀，-1 表示连空响应都放不下。
- * 全量时可能不带游标/截断标记，故先单独试全量，再二分其余单调增长的前缀。
+ * Fit complete items using cumulative serialized bytes and the empty envelope at
+ * each prefix. Stop once item bytes alone exceed the cap: even a final page
+ * without a cursor cannot fit then. This preserves terminal metadata savings
+ * without ever serializing the whole candidate page first.
  * @param {number} count
  * @param {number|null} maxBytes
- * @param {(count:number)=>number} sizeAt
+ * @param {(count:number)=>number} envelopeBytesAt Empty array, with metadata for count.
+ * @param {(index:number)=>number} itemBytesAt Serialized JSON bytes of one item.
  */
-export function fitPrefixLength(count, maxBytes, sizeAt) {
-  if (maxBytes === null || sizeAt(count) <= maxBytes) return count;
-  if (count === 0) return -1;
-  let lo = 1;
-  let hi = count - 1;
-  let best = sizeAt(0) <= maxBytes ? 0 : -1;
-  while (lo <= hi) {
-    const mid = Math.floor((lo + hi) / 2);
-    if (sizeAt(mid) <= maxBytes) { best = mid; lo = mid + 1; }
-    else hi = mid - 1;
+export function fitPrefixLength(count, maxBytes, envelopeBytesAt, itemBytesAt) {
+  if (maxBytes === null) return count;
+  let best = envelopeBytesAt(0) <= maxBytes ? 0 : -1;
+  let itemBytes = 0;
+  for (let n = 1; n <= count; n++) {
+    itemBytes += itemBytesAt(n - 1) + (n > 1 ? 1 : 0);
+    if (itemBytes > maxBytes) break;
+    if (envelopeBytesAt(n) + itemBytes <= maxBytes) best = n;
   }
   return best;
 }

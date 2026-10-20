@@ -1,6 +1,6 @@
 # DSH Tool Discovery · 文档导航
 
-更新日期：2026-10-20。源码基线：`package.json` 的 `0.4.2`，包含 `b12dfef` 的状态一致性修复。
+更新日期：2026-10-21。源码基线：manifest `0.4.3`，整合 `c1709d3` 与后续业务修复；GitHub 构建快照和既有 npm 正式版分别核验。
 这里记录**当前工作区实现**；不根据版本号推断 npm 最新版、STORE 收录、在线 Profile 或 GUI 已生效。
 
 ## 1. 先读什么
@@ -60,7 +60,7 @@
 2. **验证证据**：记录实际命令、退出码、版本、快照与未覆盖项。portable、host-bound、composition、真实 provider/DOM 是不同层。
 3. **分发与运行状态**：源码提交、GitHub 构建资产、npm、STORE、Profile 安装与在线 GUI 相互独立；需要各自的实际证据。
 
-协议版本仍是 `2`，包版本是 `0.4.2`。manifest 的 Core peer 准入范围不是逐版本兼容测试；CLI 和桌面壳版本也不替代 Core 版本。
+协议版本仍是 `2`，构建源码的包版本是 `0.4.3`；后续修复不因此自动属于 npm 的同号旧快照。manifest 的 Core peer 准入范围不是逐版本兼容测试；CLI 和桌面壳版本也不替代 Core 版本。
 
 ## 5. 验证前提与公开边界
 

@@ -1,6 +1,6 @@
 # 01 · 需求与架构
 
-更新日期：2026-10-20，依据当前 `0.4.2` 源码。精确合同见 [00](<00-current-contract.md>)，证据状态见 [05](<05-current-status.md>)。
+更新日期：2026-10-21，依据 manifest `0.4.3` 的构建源码（含已发布主线与后续修复）。精确合同见 [00](<00-current-contract.md>)，证据状态见 [05](<05-current-status.md>)。
 本文解释设计理由，不用早期 Core 取证或历史绿数代替当前宿主验收；[旧架构稿](https://github.com/KouzakiUmi/dsh-tool-discovery/blob/b12dfef1815636c1518f741da870c1dd5427442f/plugin/docs/01-requirements-and-architecture.md)可用于追溯设计演进。
 
 ## 1. 真正要解决的问题
