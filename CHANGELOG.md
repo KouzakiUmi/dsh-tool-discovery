@@ -25,6 +25,8 @@ what is verified, what is unverified, and what this version refuses to support �
 
 ## [Unreleased]
 
+## [0.4.3] — 2026-10-20 — discovery state and disclosure fixes
+
 - Preserve observed native wire key order when deep-copying frozen definitions.
 - Fit list/search byte-limited responses incrementally, including full-envelope metadata,
   without first materializing or serializing the entire candidate page.

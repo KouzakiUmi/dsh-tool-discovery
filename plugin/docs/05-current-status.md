@@ -6,7 +6,7 @@
 
 ## 0. 状态口径
 
-**版本坐标**：**本源码快照是 `0.4.2`**。npm 的实际发布版本与 provenance 以官方 registry 为准；GitHub 的 `v<version>` / `build-<sha>` Release 与其 tarball 清单是独立的构建证据，不能替代 npm 发布证明。本文件不把「已发布 / 未发布」写成长期结论。本仓库于 2026-10-06 重建，旧历史（`2a1f9c0`、`257ddc0` 等）已被重写移除，**不再可引用**。每个绿的 `main` 构建会自动产出 GitHub Release 资产（`build-<sha>`），语义版本发布由 `v<version>` 标签驱动。
+**版本坐标**：**本源码快照是 `0.4.3`**。npm 的实际发布版本与 provenance 以官方 registry 为准；GitHub 的 `v<version>` / `build-<sha>` Release 与其 tarball 清单是独立的构建证据，不能替代 npm 发布证明。本文件不把「已发布 / 未发布」写成长期结论。本仓库于 2026-10-06 重建，旧历史（`2a1f9c0`、`257ddc0` 等）已被重写移除，**不再可引用**。每个绿的 `main` 构建会自动产出 GitHub Release 资产（`build-<sha>`），语义版本发布由 `v<version>` 标签驱动。
 
 整理完成 ≠ 发布完成 ≠ 产品验收 ≠ npm 发布 ≠ 安装生效，五者互不替代。本文件的“已验证”一律指**工作区内的代码与测试证据**，不含任何安装或分发结论；它不是 [03 §11](<03-implementation-and-acceptance.md>) 发布门槛的产品验收，不是 npm 发布，也不是安装到 profile / GUI 生效。
 
