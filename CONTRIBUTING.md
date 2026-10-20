@@ -31,13 +31,18 @@ name the reason — do not quote a number from a previous run.
 From a clean checkout, with Node `^22.19.0 || >=24.0.0`:
 
 ```sh
-npm test                    # unit suite (Node only; two files are host-bound, see the README)
+npm test                    # all unit files; client/settings require resolvable host peers
 npm run test:composition    # real-Loader gates; needs an installed DSH Core
 npm run check               # package identity + docs consistency; needs only Node
 npm run check:quality       # exit 1 is expected on the known H037/H044 mislabelled samples
 ```
 
 Counts are not written down here on purpose; they drift. Quote the actual output you got.
+For a Node-only checkout, use the explicit [portable subset](<plugin/README.md#portable-unit-subset>).
+The two excluded host-bound files are not passing coverage. An ASAR archive alone is not a
+resolvable package tree for the current test resolver; do not modify the profile or install
+peers just to hide that gap. The private quality validator's historical expected failure is
+not permission to ignore a new failure or treat its output as a product-search score.
 
 The composition suites resolve host packages from the DSH installation through
 `plugin/contracts/install-resolver.mjs`, which anchors on the install's own `package.json`. Set
@@ -92,6 +97,18 @@ directory moves or a new one appears, check all three of:
 3. Does the newly public file need a content review? A file being ignored is not evidence that it
    was reviewed; run the scan (`api[_-]?key`, `secret`, `password`, `token`, `Bearer`, absolute
    `C:\` paths, `AppData`, `.dsh/`) and record what you found.
+
+## Documentation maintenance
+
+Use the [current contract](<plugin/docs/00-current-contract.md>) for implemented behavior and
+[current status](<plugin/docs/05-current-status.md>) for dated evidence. Keep the root README pair
+consistent with those and with the actual Config/manifest/workflow. Peer admission, historical host
+tests, source distribution and online installation are different facts.
+
+The frozen protocol and historical review documents retain their numbered paths and original
+criteria. Mark their scope and link to current behavior rather than silently rewriting old results.
+Keep F/S/L/G IDs stable; add an explicit current interpretation when the old matrix describes
+retired behavior. Documentation changes do not sign off a security boundary or a product release.
 
 ## Scope discipline
 

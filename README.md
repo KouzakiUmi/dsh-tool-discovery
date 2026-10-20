@@ -16,6 +16,8 @@
 
 ---
 
+> 本文对应 manifest `0.4.3` 的主线构建源码。后续修复以 `build-<sha>` 区分，不代表已包含在 npm `0.4.3` 正式版中。现行参数、状态与边界集中在[当前实现契约](plugin/docs/00-current-contract.md)，旧冻结稿与实验记录按其日期阅读。下列功能预览以 native 路径为主；PTC 默认旁路，显式兼容仍有 SDK 冻结缺口。
+
 ## 功能预览
 
 ### 首轮只带必要的东西
@@ -58,12 +60,12 @@
 | `tool_search` | 哪个工具适合当前任务？ | 否 |
 | `tool_load` | 我要用这些工具。 | 是 |
 
-`tool_load` 不会执行目标工具，它只记录选择，披露发生在下一轮。调用未加载的工具会被拒绝；卸载根本
+`tool_load` 不会执行目标工具，它只记录选择，披露发生在下一轮。初始/框架保留等例外之外，未按需加载的工具会被拒绝；卸载根本
 不是模型的动作——`action: "unload"` 会被拒绝，因此两次成功压缩之间已披露集合只增不减。
 
 ## 两条不变量框住整个设计
 
-- **同一缓存周期内，已披露内容与顺序只增不改。** 加载不会移动或改写已披露条目：首次披露时记录的
+- **健康 native 缓存周期内，已披露内容与顺序只增不改。** 加载不会移动或改写已披露条目：首次披露时记录的
   wire 会被持续原样发送，因此宿主侧工具升级不会静默改写模型已经读过的定义。
 - **只有成功压缩才会重置周期。** 手动 `/compact` 与 DSH 自动压缩都算；失败、取消或没有摘要的压缩
   不算。
@@ -77,9 +79,9 @@
 ## 快速开始
 
 ```sh
-# DSH profile 安装 —— 先写包名，再给完整 tarball URL
-dsh plugin --profile <profile> add \
-  dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz
+# CLI Web profile 安装示例；将 web 换成实际目标，先写包名再给完整 URL
+dsh plugin --profile web add \
+  "dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz"
 ```
 
 1. 安装并启用 bundle，按部署方式重载或重启（只刷新页面不保证 Host 升级）。
@@ -103,7 +105,7 @@ npm 包、标签钉住、CLI 与 Core 版本的区别）见[安装与更新](#�
   [上架与兼容声明](plugin/docs/10-store-compatibility.md)。
 - 原生 **`@deepseek-ai/schemastery`** peer 是配置面与设置页的前提。缺少它时发现内核仍正常运行，
   但没有 Config，插件会记录 `ConfigUnavailable`，而不是假装存在一个设置页。
-- **native** 工具展示模式。其它展示模式在激活期即被拒绝，不会静默降级。
+- **native** 是完整披露路径。非 native 会话不在插件激活期被一律拒绝：PTC 默认旁路，开启 `ptcCompatibility` 后进入下一轮 `run_code` SDK；不保证 native 式冻结，不把展示模式静默改成另一种。
 - **每会话单个活动 agent**。单会话内多 agent 并发不受支持——请求无法无歧义地归属。
 - Node `^22.19.0 || >=24.0.0`。
 
@@ -141,20 +143,19 @@ DSH profile 安装仍可使用 **GitHub Release 构建资产**：`main` 绿跑�
 仓库检查后，npm 发布任务会自动运行。GitHub Actions 通过 OIDC 向 npm 验证身份，npm 同时生成 provenance；
 GitHub 不保存 npm 写入令牌。发布步骤见[发布到 npm](#发布到-npm)。
 
-请使用**你所运行的那套安装自带的 DSH CLI**，并指向真正会加载本插件的 profile。DSH NEXT 桌面端自带
-CLI（经 `resources\app\lib\desktop-cli.js` 启动），插件也由其自身入口管理；`PATH` 上全局 npm 安装的
-`dsh` 是另一套启动器、另一个 profile，不是这套安装的工具。**CLI 版本不等于 Core 版本**：
-`dsh --version` 报的是 CLI，任何 CLI 版本号都不能说明某个 profile 解析到哪个 Core；请用
-[环境要求](#环境要求) 里的 Core peer 对照该 profile。
+上述与下面的命令是**公共 CLI 的 Web profile 示例**，`web` 不是对实际安装目标的推断。
+DSH NEXT Desktop 的 profile 由随包 Desktop CLI 管理；全局 npm 的公共 CLI 不能冒充该入口。
+桌面用户应先核验目标安装提供的 CLI、实际 profile 与 `plugin --help`，按目标版本要求退出/重开应用；不要复制文档中的内部 bootstrap 路径，也不要在受管 profile 裸跑 npm/pnpm 或手改锁文件。
+CLI/桌面壳版本不代替实际 Core 版本。官方参考：[CLI 插件管理](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/reference/README.md)、[Desktop 所有权](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/desktop/README.md)。公开 master 文档不是每个已安装版本都通过验证的证明。
 
 ```sh
 # 首次安装 —— 先写包名，再给完整 tarball URL
-dsh plugin --profile <profile> add \
-  dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz
+dsh plugin --profile web add \
+  "dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz"
 
 # 更新已安装副本 —— 同样是 name@URL 形式
-dsh plugin --profile <profile> update \
-  dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz
+dsh plugin --profile web update \
+  "dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz"
 ```
 
 `<build-tag>` 是提交级 Release 标签，例如 `build-80216ba3effa`。标签里带着提交号，因此新构建不会
@@ -175,6 +176,7 @@ Node 项目可通过 `npm install dsh-tool-discovery` 从 npm 安装。本节上
   // "alwaysVisible": ["read", "grep"],  // 整项省略即保持 DSH 默认名单
   "initialToolsEnabled": true,  // 可关闭手动初始注入，不删除已配置名单
   "alwaysAllowPresetTools": true, // 保留当前实际绑定的 preset 所登记工具
+  "ptcCompatibility": false, // 默认旁路 PTC；开启后发现进入下一轮 run_code SDK
   "requireTrustedEpoch": false, // 高级严格校验，默认不阻断存量会话
   "requireTrustedEpochForSubagents": false, // 仅主严格开关也开启时对子代理强制校验
   "frameworkRetained": [],  // 投影必须保留的可信框架工具名
@@ -210,12 +212,14 @@ preset 保留是独立来源：`alwaysAllowPresetTools` 开启时，当前实际
 
 每个开关与字段：
 
+- **PTC 兼容**（`ptcCompatibility`，默认 `false`）：关闭时保留宿主 PTC SDK，开启后发现入口与选定工具进入下一轮 `run_code` SDK，下一轮采用。SDK 仍会重新渲染，冻结、稳定追加和跨重启冻结尚未实现；这不是 native 冻结开关。
+
 - **自动注入初始工具**（`initialToolsEnabled`，默认 `true`）：关闭不删除勾选名单，不自动注入这些工具，仍可用 `tool_load` 加载。开关和名单改动在**新会话或成功压缩后**采用，当前周期不改变。
 - **永远放行 preset 规定的工具**（`alwaysAllowPresetTools`，默认 `true`）：只读取当前 agent 实际绑定的 preset 修订自身登记、且该 agent 原生目录仍允许的工具。不根据会话 header 中的 preset 名或设置页全局目录授信；其它 preset、后装 agent-only 工具不会被自动放行。与手动注入独立，在新会话或成功压缩后采用；保留初始集合，不绕过原生权限和执行校验。
 - **强制可信周期校验**（`requireTrustedEpoch`，默认 `false`）：默认不读写可信周期存储、不因缺少记录或 storageDomain 阻断会话；常驻工具来自当前配置快照，历史出站头不授予资格。开启会重新加载插件，要求持久化周期记录；存量会话缺记录时需要成功执行用户 `/compact`，存储故障也会阻断。关闭后可恢复没有记录的会话，但**不提供严格模式的跨重启名单冻结保证**。
 - **对子代理强制可信周期校验**（`requireTrustedEpochForSubagents`，默认 `false`）：只有主严格开关也开启时才生效。默认情况下，宿主运行时拥有的子代理使用配置基线，不读写 epoch 记录，不因缺记录要求 `/compact`，包括已有历史的子会话恢复。身份依据实时父子所有权，不信 header/meta 自称或单纯的持久 fork 血缘；作为顶层恢复的 fork 会话仍受主严格开关约束。该普通设置会重载插件，关闭后可恢复旧子会话，无需伪造压缩。显式开启可能阻断旧子会话；子代理不能代替用户执行 `/compact`。
 - **界面语言**（`locale`，默认 `auto`）：`auto` 先读当前 profile patch 里宿主自己的 `locale.preference`，没有再回落到桌面语言文件；任何失败（文件缺失、JSON 损坏、语言不受支持）都回落 `en`，且回落**一定会留日志**、不静默。写 `zh`/`en` 会钉住模型可见文案的语言，并**完全跳过这两次读取**。非 volatile 字段：改动在插件重载后生效。
-- **让初始名单成为精确集合**（`respectAlwaysVisible`，默认 `false`）：**关闭**且初始注入开启时，当前 scope 真实提供的 DSH 核心工具会被自动并入常驻名单，且不经 load 即可调用——省一次往返，上游新增的核心工具也不必等插件更新。**打开**后，你的 `alwaysVisible`（加 preset 保留项）就是**上限**：没列出的核心工具必须像别的工具一样先 load。被拒不会死锁——被排除的核心工具**不在受保护的基线里**，一次普通 `tool_load` 就能在下一轮把它放行（`tolerantLoadProtected` 管的是另一件事：**已在名单里**的工具重复 load 保持幂等）。两点注意：已经在严格模式下跑的会话，仍会按它落盘的记录继续放行到下一次用户 `/compact`；本字段非 volatile，改动在插件重载后生效。
+- **让初始名单成为精确集合**（`respectAlwaysVisible`，默认 `false`）：**关闭**且初始注入开启时，当前 scope 真实提供的 DSH 核心工具会被自动并入常驻名单，且不经 load 即可调用——省一次往返。这里只识别插件维护表中的核心名称；上游新增且未入表的名字仍需[跟版核验](plugin/docs/12-core-tools-maintenance.md)。**打开**后，你的 `alwaysVisible`（加 preset 保留项）就是**上限**：没列出的核心工具必须像别的工具一样先 load。被拒不会死锁——被排除的核心工具**不在受保护的基线里**，一次普通 `tool_load` 就能在下一轮把它放行（`tolerantLoadProtected` 管的是另一件事：**已在名单里**的工具重复 load 保持幂等）。两点注意：已经在严格模式下跑的会话，仍会按它落盘的记录继续放行到下一次用户 `/compact`；本字段非 volatile，改动在插件重载后生效。
 - 工具资格、协议回执、历史损坏校验和执行门禁始终有效，不提供关闭这些保护的开关。三个发现入口始终保留。
 
 主页还提供**容忍重复加载初始工具**（`tolerantLoadProtected`）、**精确初始名单**（`respectAlwaysVisible`）开关；高级配置中可选择语言，并编辑 `budgets` 与 `categoryConfig` JSON。JSON 编辑器显示支持的键，在保存前拒绝语法错误、未知键、非法限额和不完整的类别文案；较小预算可能增加往返或阻断任务。`frameworkRetained` 仅只读展示，不可由此页面修改。
@@ -223,6 +227,8 @@ preset 保留是独立来源：`alwaysAllowPresetTools` 开启时，当前实际
 省略 `alwaysVisible` 时展示宿主 schema 的实际默认名单。加载中、只读或保存进行中禁用所有修改控件，防止并发写覆盖；元数据缺失时不可恢复默认，名单已经默认时不重复写。保存失败会显示错误，不宣称生效。非 volatile 字段保存会重载插件，页面提供提示。该主页即原生配置面；不承诺旧包装配置或旧版设置 UI 的兼容性。独立浏览器 DOM 探针使用真实渲染器及受控保存通道，不代表在线配置持久化或当前 GUI 已部署新代码。
 
 ### 预算：硬上限默认关闭
+
+省略 `limit` 时默认 20/5 会被显式 `maxListLimit`/`maxSearchLimit` 收窄；显式超限仍拒绝。list 四个 view 与 search 的字节限额覆盖完整成功 JSON 外壳，空页也计量；错误与宿主额外包装不受该成功上限保证。state 只可带标记裁 `invalidated`，不裁 `selected`/`advertised`。详见[当前契约的预算说明](plugin/docs/00-current-contract.md#5-预算)。
 
 本插件**默认不额外增加风险阈值**。所有硬上限——工具数量、批次大小、schema 字节、页大小、
 结果字节、查询长度、技能字节——默认都是 `null`，即**关闭**。给它一个正整数即启用该项上限；
@@ -296,7 +302,6 @@ npm test                          # 单元测试 —— 以该命令的实际输
 npm run test:composition          # 组合门禁（真实 DSH Loader）—— 以实际输出为准
 npm run test:all                  # 依次运行以上两者
 npm run check                     # 包身份 + 文档一致性检查（只需 Node）
-npm run clean                     # 清除可再生的测试残留
 ```
 
 单测大部分只需要 Node。其中两个文件依赖宿主：`plugin/tests/unit/client.test.mjs` 与
@@ -305,11 +310,11 @@ npm run clean                     # 清除可再生的测试残留
 安装不在默认位置时用 `DSH_INSTALL_ROOT` 指向它。
 
 因此 CI 的便携单测作业只跑除这两个文件以外的全部用例，并明确把这两个文件按宿主依赖跳过
-并给出原因。该作业是便携子集，不等于整份单测证明：含这两个宿主文件在内的完整套件，由本地
-在真实 DSH 安装根上执行的 `npm test` 覆盖。此处不声称任何浏览器或 DOM 渲染层面的覆盖。
+并给出原因。该作业是便携子集，不等于完整 `npm test` 通过。精确排除命令见[开发指南](plugin/README.md#portable-unit-subset)。
+宿主测试解析器需要可正常解析包的安装根，仅存在 ASAR 并不自动满足；历史 DOM 探针也不由便携作业重跑。
 
 用例数会随测试增减而变化，因此这里**刻意不写死数字**。以这两条命令的实际输出为准；写在本文件
-里的数字必然过时。
+里的数字必然过时。`npm run clean` 是额外的删除操作，不是测试前必跑步骤，执行前请核对范围。
 
 `test:composition` 会在真实 Loader 上运行 `plugin/tests/composition/gate-*.test.mjs` 的全部文件：
 适配器门禁、生命周期、恢复与 fork、事件 `seq`、缓存周期、设置、工具增减，以及可信周期各套。新增
@@ -340,28 +345,22 @@ cd dsh-tool-discovery
 
 ## 发布到 npm
 
-npm 只允许在包已经存在后登记 Trusted Publisher。初始 `0.2.1` 发布已完成，npm 账号的双重验证使用了
-Windows Hello。当前 Trusted Publisher 配置如下：
+以下描述[仓库工作流](.github/workflows/ci.yml)的当前定义，不证明 registry 端授权或本次发布已经成功：
 
-| 设置 | 值 |
-| --- | --- |
-| 提供方 | GitHub Actions |
-| 组织/用户 | `KouzakiUmi` |
-| 仓库 | `dsh-tool-discovery` |
-| 工作流文件名 | `ci.yml` |
-| 环境 | 无 |
-| 发布权限 | `npm publish`、`npm stage publish`（npm 默认） |
+| 项 | 当前源码 |
+|---|---|
+| 触发 | 与 manifest 稳定版本完全匹配的 `v<version>` 标签；预发布标签不走此任务 |
+| 前置门禁 | portable unit 与仓库检查 |
+| GitHub environment | **`npm`**，不是“无 environment” |
+| 运行时 | Node 24；Trusted Publishing 的 npm 发布客户端最低要求见官方文档（11.5.1+） |
+| 发布身份 | job 授予 `id-token: write`，使用 OIDC；工作流不读取 `NPM_TOKEN` |
+| 发布命令 | `npm publish --provenance --access public` |
 
-每次发布稳定版本时，先更新并提交 `package.json`，再创建并推送同版本的 `v<version>` 标签。
-`publish-npm` 任务会等待便携测试和仓库检查通过，核对标签后通过 OIDC 发布并生成 provenance。
-暂存发布仍需维护者审核并通过双重验证后才会公开。
+维护者需另行核对 npm 端 Trusted Publisher 的仓库、工作流文件名 `ci.yml`、environment 和直接发布权限；保存配置本身不验证它能成功发布。
+源码版本、标签、载荷、provenance 与 registry 实际结果要逐项核对，不能靠历史账号操作或 CI 文件宣称已配置成功。
+官方依据：[npm Trusted Publishers](https://docs.npmjs.com/trusted-publishers)。
 
-工作流需要 Node 24 和 npm 11.5.1 或更高版本，不使用 GitHub 的 `NPM_TOKEN` secret。预发布标签不会触发 npm 发布。
-
-**构建与发布核验不等于安装验收。** 本发布流程不向真实 profile 安装、重载或重启。
-每次发布的载荷、摘要与 provenance 都必须对照该次实际产物核验；这些证据不证明宿主 GUI 已加载它。
-确切的参数与 spec 形式以目标 CLI 自己的 `plugin --help` 为准。安装失败时请保留 manifest、
-lockfile 与 CLI 输出并如实报告，不要手改 profile。
+GitHub 的 `build-<sha>` 构建资产是另一条流程，不是 npm 发布；二者都不会证明 Profile 已安装或 GUI 已生效。
 
 ## 架构与其代价
 
@@ -374,23 +373,15 @@ lockfile 与 CLI 输出并如实报告，不要手改 profile。
 
 ## 它还不是什么
 
-这是一个可运行的实现，不是成品。
-
-- 尚未完成完整产品验收。`0.2.1`、`0.2.2`、`0.3.0` 已发布到 npm（`0.3.0` 自 tag `v0.3.0` 走 Trusted
-  Publisher 工作流发布，run 38074858965）。**没有向任何真实 profile 安装、重载或重启**：[上架与兼容声明](plugin/docs/10-store-compatibility.md)
-  里的安装 / 启动 / 卸载 / 恢复证据取自一次性的 `DSH_HOME`，因此这里任何内容都不应被读作"已验收的在线 GUI"
-  或"完整产品验收"。
-- **设置 UI 有单测与集成测试覆盖，但没有渲染 DOM 的验收。** 原生配置面、缓存周期行为、目录元数据
-  以及客户端辅助函数都已测试；主页本身未在真实浏览器中跑过。
-- **不声称任何 token 节省。** 设计的出发点是让每次请求携带更少内容；实际缩减幅度没有测量过，
-  延迟也没有。
-- 检索质量——能否稳定找到正确的工具——同样没有测量。
-- fork 继承与进程重启后的冷恢复只覆盖了一部分。不变量与已知缺口列在
-  [当前状态](plugin/docs/05-current-status.md)中。
+- **源码实现不等于完整产品验收。** npm、GitHub 构建资产、STORE、Profile 安装和在线 GUI 是不同状态，应核对各自实际证据；历史一次性 Profile 操作见[兼容记录](plugin/docs/10-store-compatibility.md)。
+- **当前 GUI 未验收，不等于历史上从未测过 DOM。** 历史记录记载了旧版本的 React/Chromium 受控探针，本轮未复核或重跑；VM 单测、历史 DOM 记录与当前在线页面不是同一层证据，详见[当前状态](plugin/docs/05-current-status.md)。
+- **不声称实测 token 或延迟收益。** 工具披露减少是设计目标，任务往返和总耗时需要单独测量。
+- **检索指标未完成。** 类别词误命中已修，不代表 Recall@K、负例误命中率或模型选择率达标；纯类别查询可能需要改用浏览。
+- native 恢复、成功压缩和结果乱序已有分层回归；crash/fsync、完整 HMR 与目标新宿主全路径仍需验证。**PTC SDK 冻结缺口仍开放。**
 
 ## 延伸阅读
 
-- [设计文档](plugin/docs/README.md)——需求、冻结协议、验收矩阵、运行时证据与当前状态。
+- [设计文档](plugin/docs/README.md)——现行合同、需求与架构、历史冻结规范、验收矩阵与证据状态。
 - [贡献](CONTRIBUTING.md) · [安全](SECURITY.md)
 
 ## 许可证

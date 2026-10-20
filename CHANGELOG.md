@@ -7,7 +7,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## Reading this changelog
 
-The source baseline is published on `main` as its single initial-publish commit. This repository
+This repository's source history includes an initial publication and subsequent changes. It
 was rebuilt on 2026-10-06: the earlier history — including the `2a1f9c0` and `257ddc0` commits,
 which are quoted in older entries below — was rewritten away and **no longer resolves**. Entries
 below the functional-build entry are historical source-baseline records, not claims about current
@@ -25,6 +25,38 @@ what is verified, what is unverified, and what this version refuses to support �
 
 ## [Unreleased]
 
+The entries below are post-v0.4.3 source changes. Green main builds publish `build-<sha>` assets
+independently; those assets do not imply a new npm release.
+
+- Bind pending-budget reservations to every version in their atomic receipt. If any definition was
+  removed or revised, stop billing that whole uncommittable batch rather than reserving current bytes
+  by tool ID. This prevents oversized replacement schemas borrowing an old reservation and avoids
+  blocking an unrelated small load. Keep the pending operation for normal receipt/cancellation handling.
+- Immediately reclaim cursors when eligibility changes; unchanged or invalid refreshes keep usable cursors.
+- Record the unresolved candidate-TTL boundary: a load accepted before ref expiry can be rejected live
+  at final receipt but selected by cold replay. Candidate commit semantics are unchanged in this round.
+
+- Keep tolerated initial-baseline loads outside on-demand schema/tool quotas in pending, selected and
+  frozen state. Loading an already-present baseline item no longer consumes the slot intended for a new tool.
+- Allow zero-growth reloads and same-wire rebinding after a lower quota is adopted on recovery; genuinely
+  new footprint remains rejected and frozen schema conflicts still require successful compaction.
+- Make single-item unchecking remove every duplicate of the name, sharing the bulk membership operation
+  in both the pure model and the shipped client factory.
+- Do not omit skills based on another uncommitted load: an earlier failure/cancellation can otherwise leave
+  the later successful selection permanently without guidance. Keep committed-version deduplication,
+  schema-reservation deduplication and the actual skill-byte cap.
+- Clarify existing cross-category `tool_search(category:"all")` support and avoid recommending a redundant
+  load of selected candidates; direct use still requires the schema to be visible in the current request.
+  Search admission/ranking is unchanged; generic action-word false positives remain a known limitation.
+
+- Consolidate the current source contract into `plugin/docs/00-current-contract.md`, refresh the
+  architecture/business map and verification guide, and separate dated historical specifications,
+  review records and host evidence from current behavior without changing frozen acceptance IDs.
+- Synchronize both READMEs with native/PTC modes, initial-set exceptions, schema/skill/replay semantics,
+  complete-response limits and host-bound test prerequisites. Correct the documented npm environment
+  to `npm`, retire unverified account/bootstrap claims, and distinguish historical DOM probes from current GUI acceptance.
+- Clarify vulnerability-reporting availability and baseline exceptions; do not advertise an unverified
+  GitHub-profile DM channel or describe the repository as never released.
 ## [0.4.3] — 2026-10-20 — discovery state and disclosure fixes
 
 - Preserve observed native wire key order when deep-copying frozen definitions.

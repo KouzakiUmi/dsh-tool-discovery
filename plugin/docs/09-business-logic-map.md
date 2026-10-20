@@ -1,288 +1,109 @@
-# 09 · 业务逻辑地图与待办清单
+# 09 · 当前业务逻辑地图
 
-> **性质**：这是一份**派生的整理文档**，不是证据文档、也不代表任何验收结论。
-> 逐项"已验证 / 未验证"的权威口径仍以 [05 当前状态](<05-current-status.md>)、[03 验收矩阵](<03-implementation-and-acceptance.md>)
-> 与 [08 可信周期基线](<08-trusted-epoch-baselines.md>) 为准；本文与它们冲突时以它们为准。
->
-> **方法**：通读 `plugin/domain/**` 与 `plugin/adapters/dsh/**` 全部产品源码 + 设计文档 01/02，
-> 加上在 `.probe/` 下对活引擎跑的定向探针（检索排序、入口行为、分页与预算），
-> 以及一轮运行时稳定性与检索质量修复（已并入 `main`，PR #8 / #9）。
-> 涉及宿主动态行为的结论标注了静态推理的部分；本轮改动碰到 `domain/` 的 load/unload
-> 状态机，**按 CONTRIBUTING 的规矩不算作者自签**，需非作者复核。
->
-> 整理日期：2026-10-07 · 2026-10-08 更新（可选设置语义、PR #10 合并状态）·
-> 对应版本：**本源码快照为 `0.2.0-functional.7`，基于 `main`@`80216ba` 的 `0.2.0-functional.6`
-> （后者已发布构建资产 `build-80216ba3effa`）；`0.2.0-functional.7` 是否已发布，以对应
-> `build-<sha>` Release 是否存在、及其 tarball 内清单为准**
-
----
+更新日期：2026-10-21。依据 manifest `0.4.3` 的构建源码，整合主线 `c1709d3` 与后续预算、名单、技能和游标修复。
+这是**源码导读**，不是一次新安全审查或产品验收；精确行为见 [00](<00-current-contract.md>)，实测状态见 [05](<05-current-status.md>)。
+旧微基准、历史问题清单与当时的处置保留在[刷新前版本](https://github.com/KouzakiUmi/dsh-tool-discovery/blob/b12dfef1815636c1518f741da870c1dd5427442f/plugin/docs/09-business-logic-map.md)，不再混作当前待办。
 
 ## 1. 一句话业务
 
-模型每轮本来要背全部工具的 JSON Schema（实测 60K+ token）。本插件把普通工具**全部藏起来**，
-只留三个小入口让模型自己问："有什么能力 / 哪个能用 / 我要激活哪些"。
-激活的工具在**下一轮**才随原生 `tools` 数组出现，且只能靠原名称、原参数、原执行链调用。
-
-省下来的是**披露量**，代价是**多一到两次工具往返**。
-
----
+把“发现需要什么能力”与“向模型披露完整参数”分开。三个入口和初始工具集合先出现，其它工具经显式加载后下一轮披露，仍由宿主原执行链调用。
+减少披露是设计目标；是否节省 token 或总任务时延需要测量，不能从工具数量或域内微基准推断。
 
 ## 2. 分层与职责
 
-| 层 | 文件 | 只负责 |
+| 层 | 源码 | 职责 |
 |---|---|---|
-| 目录 | `domain/catalog.mjs` | 绑定 → 不可变快照；`schemaDigest` / `revision` / `searchDocumentId` 的唯一算法 |
-| 分类 | `domain/categories.mjs` | 结构规则（只看 name/namespace，不读外部描述）→ 12 个受控类别 |
-| 检索 | `domain/search.mjs` | 双语分词、受控同义词、字段覆盖率加权排序；**不凑 K** |
-| 列举 | `domain/list.mjs` | 四个 view + 绑定顺序摘要的 opaque 游标分页 |
-| 协议 | `domain/protocol.mjs` | 三个入口的严格入参校验 + 响应外壳（未知字段一律拒） |
-| 预算 | `domain/budgets.mjs` | 字节/项数核算；**只减完整项数或明确失败，不截断内容** |
-| 状态 | `domain/state.mjs` | 纯 reducer + 回执逐字核验 + guard 判据 |
-| 组合根 | `domain/engine.mjs` | list/search/load 事务、canonical 折叠、曝光登记、代次、恢复 |
-| 宿主适配 | `adapters/dsh/*` | 资格事实（registry）、投影（projection）、门禁（guard）、journal / lifecycle / trusted-epoch |
+| 目录/版本 | [catalog](<../domain/catalog.mjs>)、[categories](<../domain/categories.mjs>) | 当前绑定快照、类别、schemaDigest/revision；不赋予宿主权限 |
+| 搜索/列表 | [search](<../domain/search.mjs>)、[list](<../domain/list.mjs>) | 任务候选、完整名称、游标；不提交选择 |
+| 参数/预算 | [protocol](<../domain/protocol.mjs>)、[budgets](<../domain/budgets.mjs>) | 严格字段校验、完整成功外壳计量、事务配额 |
+| 状态/组合根 | [state](<../domain/state.mjs>)、[engine](<../domain/engine.mjs>) | canonical 归约、pending、版本冻结、选择/披露恢复 |
+| 资格 | [registry](<../adapters/dsh/registry.mjs>) | scope 原生可见性与绑定代次；生产技能仍为 null |
+| 生命周期 | [lifecycle](<../adapters/dsh/lifecycle.mjs>) | per-session runtime、就绪屏障、周期切换、卸载与旧等待失效 |
+| 日志 | [journal](<../adapters/dsh/journal.mjs>) | own-only 历史、call/result 配对、header 观测与重放 |
+| 展示/执行 | [projection](<../adapters/dsh/projection.mjs>)、[guard](<../adapters/dsh/guard.mjs>)、[PTC](<../adapters/dsh/ptc-sdk.mjs>) | native 披露/附加拒绝；可选 PTC SDK 投影与出站匹配 |
+| 基线策略 | [epoch-policy](<../adapters/dsh/epoch-policy.mjs>)、[trusted-epoch](<../adapters/dsh/trusted-epoch.mjs>) | 主/子可选 durable 记录，不从 header 生成授权名单 |
+| 设置 | [config](<../adapters/dsh/config.mjs>)、[inventory](<../adapters/dsh/tool-inventory.mjs>)、[client](<../client/client.js>) | 配置与全局登记辅助目录，和会话执行目录分开 |
 
-**铁律**：`domain/` 只依赖 `node:crypto` 与自身相对模块，不 import 任何宿主包；
-所有"当前可见性 / 展示模式 / 保留名单"都由 adapter 以可信 DTO 传入。
+宿主依赖与文件 I/O 留在 adapter；domain 不导入宿主包，也不读取真实 profile。
 
----
+## 3. 三入口如何闭环
 
-## 3. 三入口的协议面
-
-| 入口 | 入参 | 出参 | 不做什么 |
-|---|---|---|---|
-| `tool_list` | `view`(available/loaded/categories/state)、`category`、`cursor`、`limit` | 只有完整原生名称的分页 / 类别卡 / 会话状态 | 不带描述、不带 schema、不生成 ref、不自动加载 |
-| `tool_search` | `category`、`query`、`limit` | 少量候选卡（`toolId`+`ref`+`revision`+名称+≤96 码点摘要+受控 `matchReasons`） | 不返回参数 schema、不改激活集合、不凑 K |
-| `tool_load` | `candidates[{ref, revision?}]` **或** `names[]`（互斥） | 版本化回执 + 技能卡（下一轮生效） | **不执行目标工具**、不批准副作用 |
-
-失败语义统一是 `ok:false` + `error.code` 的 JSON 串**作为结果文本返回**，`execute` 不外抛
-（DSH 会把抛错渲染成非 JSON 文本，破坏外壳契约）。
-
-`candidates[].revision` **可选**：省略（键缺失 / `null` / `""` 三种写法都算）即取 ref 绑定的版本。
-`ref` 始终是版本权威 —— 工具在 ref 签发后变化仍被拒，不会被静默升级。
-
-模型**不得自主 unload**：两次成功压缩之间，已披露的 schema 只增不减；清空点只有一次成功的
-上下文压缩（`resetCacheEpoch`）。
-
----
-
-## 4. 会话状态机（整个插件的核心）
-
-`state.mjs` 维护四张表，彼此职责严格分离：
-
-| 表 | 含义 | 何时清空 |
-|---|---|---|
-| `selected` | **执行授权**：模型显式选定且身份重算通过的版本 | 撤权/定义变化立即作废；成功压缩清空 |
-| `advertised` | **已披露凭据**：这一轮出站请求真的把该 schema 投给模型了 | 换版本即作废；成功压缩清空 |
-| `frozen` | **披露缓存**：逐字 wire + 首次披露次序 | **只增不改**，成功压缩才清 |
-| `invalidated` | 作废原因，供状态视图解释 | 同 selected |
-
-外加 `epoch`（缓存周期号）、`lastAppliedSeq`、`integrity`（applied / duplicatesIgnored /
-outOfOrderIgnored / gaps / gapsTotal / rejected / coldCandidateRestores）。
-
-### 关键不变量
-
-1. **`frozen` 与 `selected` 分离**是缓存命中率的命门：`selected` 随时会因撤权作废，
-   而模型上下文里已经投出去的那份 schema 不能因此变形 —— 否则一次 prefix 就废了。
-2. **披露顺序只由首次披露次序决定**，绝不交给宿主字典序（先载 z 再载 a 必须得到 `[..., z, a]`）。
-3. **回执不自证**：从 canonical `tool/call` 重算输入路径、从当前绑定重算
-   `name/toolId/revision/schemaDigest/skillRevision` 五字段，任一不等则整批不提交。
-4. **执行放行 = mode ready ∧ 已选定 ∧ 已被当前请求披露且版本一致 ∧ registry 仍解析得到**。
-5. **投影只减工具，门禁只加拒绝**，两者都不能授予权限。
-6. **资格代次只在目录身份真的变了才升**（本轮新增）：无关工具热注册不得作废在途 ref / 游标。
-
----
-
-## 5. 一次请求的完整链路
-
-```
-模型请求
-  └─ system-prompt/assemble（await next() 之后）
-       ├─ 冷恢复未落定 → await whenReady（仍在恢复 = 不发请求，无超时兜底）
-       ├─ 仅 requireTrustedEpoch=true：可信基线 pending/blocked → 不发请求
-       └─ 投影：常驻基线（三入口 + 框架保留 + 常驻工具；默认含手动 DSH 基线与当前 preset 保留项）+ 披露段（frozen 按次序追加）
-  └─ 原生出站 tools = 投影结果 → provider
-  └─ canonical request/header 观测 → recordAdvertisement（唯一的 advertised 来源）
-  └─ 模型调用工具 → tools.guard（同步，只加拒绝）
-  └─ tool_load 结果写回 canonical tool/result → applyCanonicalPair → reducer → selected
+```text
+tool_list：浏览类别或名称 ────────┐
+tool_search：类别内任务候选 ────┤
+                                ▼
+tool_load：解析当前绑定 → 冻结冲突检查 → 配额预留 → 回执
+                                ▼
+canonical 最终成功结果：核验输入、归属与版本 → selected
+                                ▼
+下一轮实际披露观测：advertised / frozen
+                                ▼
+原生调用：guard 只增加拒绝 → 宿主原策略与派发
 ```
 
-**冷恢复的两个坑（已在代码注释里写死）**：宿主 assemble 先于异步恢复完成（所以要 await）；
-宿主的 pre-step 自动压缩发生在 assemble **之后**却仍返回旧 assembly（所以要留
-`refreshPendingProjection` 就地 splice 刷新）。
+任一 `ok:true` body、检索命中或 header 都不能独立完成整条链。加载取消、回执改写、后处理失败、版本变化等要么拒绝提交，要么收口该操作的 pending，不留下幽灵配额。
 
----
+## 4. 四类状态为何不能合并
 
-## 6. 恢复与可信周期（最复杂的一段）
+- **selected**：当前有效版本的显式选择，不是宿主副作用批准。
+- **advertised**：该版本实际披露的请求凭据；预览 assemble 不算。
+- **frozen**：首次披露的旧 wire/次序；撤权不能让已经送进模型的文本凭空被改写，但也不能继续赋予执行资格。
+- **invalidated**：失效诊断；state 视图可以带标记裁剪这一段，不能静默删除执行/披露事实。
 
-- **真相是日志**：本插件成功 load 的 canonical `tool/call → tool/result` 对就是可恢复 journal。
-  冷恢复必须**先订阅缓存新事件、再读 query 快照**，按 seq 折叠合并去重后才切 ready。
-- **恢复缓冲是按时长有界、不是按时长与大小**：读快照期间到达的事件必须留着，
-  一旦进入"没有读者"的状态（bootstrap 分支 / fail closed / dispose）必须**显式**关掉。
-- **fork 不继承能力状态**：只折叠 fork 自己拥有的段（`ownSeqStart` 边界）。
-- **compaction 不是授权**：`resetCacheEpoch` 清空 selected/advertised/frozen 与本会话未决预留。
-- **设置目录**：读取应用全部工具注册层，包括预加载 preset，不依赖会话 runtime 或加载/资格状态。完整目录未列出只证明未登记；不完整目录标待确认，不推断执行失败。
-- **默认模式**：`requireTrustedEpoch=false`，常驻名单来自配置快照，不读写可信周期存储；`initialToolsEnabled=false` 只关闭手动初始注入，`alwaysAllowPresetTools=true` 独立保留当前实际 preset 修订登记且原生可见的工具。合并名单和两个 volatile 开关在新会话/成功压缩边界采用，三个发现入口和资格校验不变。
-- **子代理模式**：依据 SDK 实时所有权识别子代理，默认 `requireTrustedEpochForSubagents=false`，即使主严格开关开启也不要求其补 epoch 记录或自行 `/compact`。显式开启子严格检查走普通 Loader 重载；可伪造的会话标签和持久 fork 血缘不获得豁免。
-- **可选 trusted-epoch 严格模式**：主会话 `requireTrustedEpoch=true`、或子代理两个严格开关都为 true 时，常驻名单必须由宿主 storage domain 里的 durable 记录背书，
-  冷恢复时不再用 request/header 内容反推。缺记录 = 明确报错并停止发请求，
-  旧会话只能经一次真实用户 `/compact` 迁移。
+同名不同 schema 不能在周期中普通重载：先返回 `COMPACTION_REQUIRED`，无预算预留。
+相同 schema 的重绑可重新选择，冻结槽位只计一次；新技能发送独立于 schema 配额去重。
 
----
+## 5. 一轮请求与成功压缩
 
-## 7. 问题清单与本轮处置
+1. 确认 agent/session 和当前展示模式，取得对应 runtime。
+2. 等恢复与需要的 durable 基线落定；pending 不用超时兜底发缩水请求。失败则按既有 fail-closed 状态处理。
+3. native 组装后投影：入口、可信保留项、初始集合、有效选择及冻结缓存；观察到的首见次序优先，新项追加。
+4. 若成功自动压缩发生在 assemble 后、实际发送前，刷新**尚未发送**的投影；已经发送的历史数组不被事后修改。
+5. canonical header 建立实际披露凭据，执行 guard 再查当前资格与版本。
 
-> 排序依据是"是否影响功能逻辑成立"，安全边界一律排最后。
-> **状态口径**：`已修` = 已并入 `main` 且有新增单测钉住；`未修` = 明确不做；
-> `待他人复核` = 涉及边界，按 CONTRIBUTING 不可由本轮作者签核。
+名单类 volatile 设置在新 runtime / 成功周期边界采用；`ptcCompatibility` 另按下一轮采用。
+两个可信周期开关及 `respectAlwaysVisible` 等非 volatile 设置走重挂载，不应统称为一种“严格模式”。
 
-### ✅ 已修（7 项，含 4 份新增单测）
+## 6. 恢复与次序
 
-**P0-1 · 新会话的恢复缓冲永不释放 → 会话期内存单调增长**
-`journal.mjs` 的 `buffering` 原先只在 `restore()` 成功或 `dispose()` 时置 false，
-而 `lifecycle.ensureRuntime` 的 bootstrap 分支（`session.seq === 0`，即**每个新会话**）
-从不调 `restore()` —— 于是每个 `session/event`（含带完整出站工具表的 `request/header`）
-都留进一个永远没人读的数组。现新增幂等的 `stopBuffering()`，在 bootstrap 分支、
-fail closed 与 dispose 三处显式关闭，并把文件头那句"读起来像有界"的注释改成实情。
-钉在 `tests/unit/journal-buffering.test.mjs`（6 例，做过 red→green 反证）。
+- 先订阅并缓存，再读 raw 历史、核验 own/inherited 边界与连续 seq，再合并去重。
+- `call.seq` 保持来源归属，`resultSeq` 排序提交；热态和 replay 用相同最终结果次序。
+- 执行选择按当前绑定与资格核验；旧 wire 的 native 披露恢复按当前周期实际历史证据单独进行。
+- 有 matched 成功回执且之后有同 digest 的实际 header，才可恢复按需披露；继承前缀、失败回执、孤立 header 不授予选择。
+- 新周期不继承旧周期 frozen；fork 不从父的继承前缀恢复父 selected。
+- 卸载使本次 activation 的等待失效，不 abort 宿主/用户自己的 signal；旧 runtime 不得在释放后重建。
 
-**P0-2 · 任何无关工具注册都会作废所有在途 ref 与游标**
-`refreshCatalog` 原本无条件升 `eligibilityGeneration` 并 `dropForEligibility`，
-而宿主对**任一 scope** 的 register/dispose/restrict 都广播 `tools/change`。
-现改为**按内容判定**：先算绑定集的身份指纹（顺序敏感，口径与 `buildEntry` 派生身份
-所用的字段完全一致），指纹相同就直接返回 —— 不重建目录、不重建索引、不作废 ref、不动会话。
-真变更走的仍是原来那条路（升代次 / 失效 / 取交集）。450 绑定实测**快路径 1.64 ms vs 重建 15.7 ms**。
-连带补上 `catalog.orderDigestByView` 缺失的 **`available:all`** 摘要 —— 否则
-`category:'all'` 的游标会一直绑定常量 `'empty'`，修完代次 churn 就立刻变成真洞。
-`engine.handleList` 的 available 视图改为复用 `orderedNamesFor`，使**翻页顺序与游标摘要同源**。
-钉在 `tests/unit/catalog-refresh.test.mjs`（13 例，逐字段 + 顺序 + 同口径 + 变异反证）。
+严格模式存的是基线名单，不是完整工具权限数据库；默认关闭时不伪造 trusted durable 记录。其历史合同和残余窗口见 [08](<08-trusted-epoch-baselines.md>)。
 
-**P1-3 · `cancelOperation` 没有任何生产调用点**
-现由 `journal.abandonLiveCalls()` 在**有证据的丢弃路径**上调用：fail closed 与 dispose
-（`settleCompactionEnd` 刻意不调 —— 下一行的 `resetCacheEpoch` 已经收了本会话的 pending，
-再调一次会让"谁负责关"变得不可读）。见下面"未修"那条关于中断轮的说明。
+## 7. 当前修复与明确取舍
 
-**P1-4 · 中文检索基本不可用**
-`documentTokens` 的 `categoryTokens` 原先只分词英文类别 id，而条目摘要是外部描述、
-实际多为英文 —— 中文查询唯一能搭的桥是那张受控同义词表，不在表里就是零命中
-（实测 `读取文件内容` → 0 条）。现把**每个受控类别在所有支持语言下的标题与摘要**
-并入该字段（索引按集合构建、与 locale 无关，中英检索共用一份）。
-实测中文目标查询 9/9 落到正确类别。
-另：`engine.handleSearch` 原本在字节预算判定**之前**就发 ref，被预算挡掉的候选仍占着 ref；
-现改为预算通过后再发（用等长占位符保持记账字节与真实 ref 逐字等价）。
-
-**P1-5 · 同义词证据压过直接名称证据**
-`read file contents` 原本让 `grep`（12.00）压过 `read_file`（12.00，靠名字序 tiebreak）。
-现规定：**文档名称零命中时，同义词得分减半**；名称已有命中的保持原满分，
-因此既修正了排序，又不移动任何既有排序。现测 `read_file=14.00` 领先 `grep=10.00`。
-
-**P2-6 · 「revision 可选」只落了一半**
-行为层（`protocol` / `engine` / `state`）早已实现，这轮把**周边**对齐：
-模型可见的 `tool_load` description、`protocol.mjs` 的 JSDoc 类型、
-`docs/01 §5.4` 与 `docs/02` 的接口与示例、`constants.mjs` 里两个叠在一起的 JSDoc 块。
-并把真实的线上边界修掉：`revision` 现在接受**键缺失 / `null` / `""`** 三种"未给"写法
-（模型对可选字段最常见的就是后两种），仍拒数字/对象/数组/布尔。
-关键是**丢弃该键**而不是把 `''` 透传下去 —— `engine` 用的是 `item.revision ?? rec.revision`，
-`??` 抓不到 `''`，透传会把每一次空串都变成 `STALE_CANDIDATE`。
-钉在 `tests/unit/load-revision-optional.test.mjs`（9 例，含 stale 反例）。
-
-**P3-9 里的两处小修**：`ENGINE_DISPOSED` 取错了表层级（该键在表里是顶层而非 `error` 下），
-dispose 后的拒绝文案原本是 `undefined`；`toDomainError` 原先回落英文而 `DomainError`
-构造器回落界面语言，同一次失败可能中英混排 —— 现统一为回落绑定语言。
-
-### 🛠 失败终态预算结算（2026-10-08，已由 PR #10 并入 `main`@`80216ba`）
-
-**订正旧推断**：目标宿主 `0.2.1-alpha.1` 在 body 后取消时仍会写错误 `tool/result`，
-然后才写 `turn/end`；post-policy block 同样会写错误 result。真实 Loader 的确定时机
-探针已确认这一顺序，**不是 GUI Esc 的自然复现，也不是真实 provider wire**。
-
-根因不在缺 result：`journal.onEvent` 找到 canonical source 对应的调用后删掉 `liveCalls`，
-但非 JSON / 非协议错误文本使 `parseResultEnvelope` 返回 null，绕过 `applyCanonicalPair`，
-body 创建的 `engine.pending` 仍留着。`selected` 为空也会在下一次 load 报 `BUDGET_EXCEEDED`。
-
-修复仅在已配对、不能解析协议外壳的终态分支 `cancelOperation(op_<callId>)`；不加
-`turn/end` 全量清理，不改变成功回执折叠或已有 selected / advertised / frozen。
-新增 [`terminal-load-result.test.mjs`](../tests/unit/terminal-load-result.test.mjs) 与
-[`gate-terminal-load-result.test.mjs`](../tests/composition/gate-terminal-load-result.test.mjs)
-覆盖失败释放、正常成功正控制、其它 pending、重复/迟到结果与真实宿主取消/策略拒绝。
-**修复已有红绿证据，GLM 非作者独立测试复核 PASS（限这两项修复）；不构成对等强度安全发布签署或产品验收。**该修复已由 PR #10 合并进 `main`（分支提交 `3e79537`，合并提交 `80216ba`），并随 `build-80216ba3effa` 资产发布——这是仓库流程结果，仍**不是**产品验收，也不表示任何 profile 已安装。
-
-### 🔍 新发现（尚未处置）
-
-- **`STALE_CANDIDATE` 基本不可达。** 定义在 ref 签发后变化时，升代次会先把 ref 作废，
-  于是结果是 `CANDIDATE_UNAVAILABLE` 而不是 `STALE_CANDIDATE`。两者都是拒绝、都不升级选择，
-  但错误码与 `recovery` 指引给模型的是不同信号。这不是本轮引入的，属既有语义。
-- **中文只能定位到"类"，定位不到"具体哪个工具"。** 工具名是原生英文、摘要是英文，
-  `读取文件内容` 会把 files 类几个工具打成同分再按名字序 tiebreak。
-  要修需要**每个工具的中文可描述**（catalog / adapter 层），不是检索层能单独解决的 ——
-  与下面"技能从未接线"是同一类缺口。
-- **`tool_list {}` 默认导航已由 PR #10 并入 `main`（`80216ba`）。** 无 `view` 且无 `category`
-  时返回 `categories`；有 `category` 时仍默认 `available`，保留既有调用兼容。显式
-  available/loaded 缺 category、null/空串、未知字段仍拒绝。回归见
-  [`list-default-navigation.test.mjs`](../tests/unit/list-default-navigation.test.mjs) 与上述组合门禁。
-- ~~**`SYNONYM_GROUPS` 有两个重复触发词**（`search engine`、`spreadsheet` 各自在同组内出现两次）。~~
-  **已处置（2026-10-07 晚）**：两处重复已删除（同一触发词 → 同一概念，删除不改变行为；当时基线 349 单测 + 108 组合全过，与今日 372/130 不是同一次运行）。
-
-### 🔐 待他人复核（不可由本轮作者签核）
-
-本轮改动碰到 `plugin/domain/` 的 load/unload 状态机与资格代次失效面
-（`refreshCatalog` 的内容判定直接决定旧 ref / 游标是否仍然有效），
-按 CONTRIBUTING「作者不签自己的安全边界」，这部分需要非作者复核。
-需要重点看的两处判断：
-1. 身份指纹的**字段口径**是否与"下游真正会读的东西"完全一致 ——
-   本轮已把**派生类别**与**技能正文**补进指纹（它们决定 `orderDigestByView` 与
-   `searchDocumentId`），并加了"预判侧从原始绑定跑 `classifyBinding`、快照侧从条目读
-   `categories`"的同口径断言。
-2. 快路径下**不做**会话失效是否总是安全 —— 当前仅在指纹逐字相同时早退。
-
-### ⚪ 未修（本轮不在范围内）
-
-- **六项产品能力里"工具技能加载"在生产中从未接线**：`registry.mjs` 无条件 `skill: null`，
-  于是每次 `tool_load` 的 `skills` 永远是 `[]`、`skillRevision` 永远是 `'none'`、
-  `skills.mjs` 整条链路是死代码 —— 但 `docs/01 §1.2` 把它列为六项能力之一。
-  要么接上（可信配置里按工具给使用指导），要么在能力清单里显式划出去。**这是产品决策，不是 bug 修复。**
-- **死导出清理**：`registry.toolIdFor()`（无人调用，且每次调用都重跑整个 `bindingsFor()`）、
-  `catalog.sameOrderDigest`、`protocol.toErrorEnvelope`、`NO_MATCH` 码元数据。
-  其中 `isListView` / `navigationFootprint` / `hasNameConflict` / `orderedNamesFor` 有单测在用，**不是**死代码。
-- ~~**`docs/01 §1.3` 说的"倒排索引"实际不存在**（全量线性扫描）。~~ **已跟上（2026-10-07 晚）**：
-  `docs/01 §1.3` 与 §5.2 的"倒排索引 / 倒排项"措辞已改为与实现一致（token 集合 + 有界线性扫描打分）。
-- **`engine.mjs` 两套 locale 取值通道**（模块级 `t()` 绑全局 `domainText`，
-  被 `const text = createText(config.locale)` 遮蔽）。生产里同源所以一致，
-  但谁只构造引擎不调 `setDomainLocale`，拒绝文案就会退回英文。属重构，不在本轮。
-
----
-
-## 8. 性能：域内热路径仍然不是瓶颈
-
-| 路径 | 实测 |
+| 项 | 当前落点 |
 |---|---|
-| `tool_list` available（全类别 400 工具） | 0.046 ms/次 |
-| `tool_list` categories | 0.003 ms/次 |
-| `tool_search`（有命中） | 0.119 ms/次 |
-| `refreshCatalog`（N=450） | 重建 15.7 ms → **内容未变的快路径 1.64 ms** |
+| 冻结 schema 升级 | 同名槽位检查，必须等成功压缩；不假返回无法兑现的加载成功 |
+| 冷恢复丢旧披露 | 披露与执行选择分别恢复；不因保留旧定义重新授权 |
+| 结果乱序 | 最终结果序提交，不依 call 顺序丢弃合法结果 |
+| 技能换版 | 相同 wire 不重复计 schema；只对已提交同版本选择省略技能，不让可失败的 pending 吞掉后续指南 |
+| 初始与重试额度 | 容错重载基线仍免费；降限额后的零新增重选可继续，真正新增仍受限 |
+| 目录与在途预留 | 整笔回执的版本均须匹配当前目录；任一项已换版/移除则整批不计额，不借旧 toolId 预留给新 schema |
+| 失效游标 | 资格代次改变立即回收；无变化或刷新失败仍保留有效游标 |
+| 候选提交边界 | 已接纳 load 的 ref 过期后，热态拒绝与冷恢复接受仍可不同；本轮不改变此规则，另列未闭合项 |
+| 类别词误命中 | 类别只参与排序，必须有工具级证据；纯类别查询可能需要改用浏览 |
+| 字节预算 | list 四视图/search 完整成功外壳，先确定可交付页再铸 ref/cursor |
+| 默认基线 | 核心同名自证可减少往返；开启 respectAlwaysVisible 才收窄这一例外 |
+| 技能服务 | 内核有合同，生产 registry 尚不提供技能，不把“可发送”写成“已接线” |
 
-真正值得动的从来不是**单次成本**，而是**调用频次与无界增长**：
+状态/披露回归见 [design-invariants](<../tests/unit/design-invariants.test.mjs>)，前轮四项业务闭环与双语引导见 [business-workflow](<../tests/unit/business-workflow.test.mjs>)，目录/在途/游标交互见 [catalog-workflow](<../tests/unit/catalog-workflow.test.mjs>)。通用动词误召回和候选迟到回执的热冷边界仍未闭合，没有靠新增默认门槛改变检索准入或排序。
 
-- `refreshCatalog` 原本每次 `tools/change` × 每个活动会话各来一遍 —— P0-2 修完后
-  内容没变就是 1.6 ms 的空转，不再作废 ref、不再 15.7 ms 重建。
-- `journal` 恢复缓冲按**时长**而非大小有界 —— P0-1 修完后不再无界增长。
-- `registry.mjs` 的 `generations` / `lastSeen` / `bindingState` **仍不清理**：
-  `retireAbsent` 只把值改写成"缺席"而不删键，进程期内 (scope × tool) 组合只增不减，
-  子代理频繁起落时会缓慢泄漏。未修。
-- `journal.recordAdvertisements` 每个 `request/header` 都要重建 `allowed`、
-  全量遍历 `state.selected` 并新建 `byName` Map —— 随目录规模线性增长。未修。
-- `index.mjs` 的 `refreshToolChoices()` 在**每个会话的首个请求**同步触发（`ensureRuntime`
-  → `onRuntimeCreated`），每次都要走全局视图 + 所有会话的完整目录，并让
-  `settings.invalidate()` 重新序列化整棵 Config schema 树。未修。
+## 8. 性能与覆盖边界
 
----
+宿主可能在投影之前仍收集、克隆完整 schema；出站工具减少不意味着宿主 CPU 自动从 O(N) 变成 O(已加载)。
+历史域内耗时只反映对应目录、机器和快照，不能替代 provider、TTFT 或任务完成时间测量。
+实际披露会随任务增长，并积累搜索/加载历史；默认不允许模型自主 unload，不能承诺上下文永远保持初始大小。
 
-## 9. 建议的下一步顺序
+PTC 当前按当前 SDK schemas 渲染，**不是 native frozen wire 的另一种序列化**。已有出站匹配保护不代表 SDK 冻结、追加顺序和跨重启语义完成。
 
-1. **非作者复核**本轮碰到的边界面（资格代次失效 + 指纹口径），这是发布前的硬门槛。
-2. **拿宿主事实**收掉"中断轮的 `tool_load`"那条 —— 需要 `turn/end` 与 `tool/result`
-   在中断路径上的先后关系说明。拿到之前不动。
-3. **产品决策**：技能是否接线、中文工具描述从哪来（同一条链路，一起想）。
-4. 清理轮：死导出、registry 三张表的清理（~~`tool_list` 缺省 view~~ 已由 PR #10 修复；
-   ~~`docs/01` 的"倒排"措辞~~ 已于 2026-10-07 晚改完）。
+## 9. 后续工作入口
 
-> 明确**不在**范围：任何进一步的安全边界加固。功能闭环之前不加新门禁。
+- 尚未闭合的产品、测量与宿主覆盖项只在 [05 §3](<05-current-status.md#3-未闭合的验证与产品边界>)集中维护，不再复制过时的逐轮问题清单。
+- 目标 Core 升级时执行[12 的取证/差集流程](<12-core-tools-maintenance.md>)，不能只放宽 peer。
+- 任何未来状态机/授权修改仍需非作者复核；历史有限签署不替后来改动补签。

@@ -14,11 +14,9 @@ export function filterRows (rows, query) {
 
 /** 勾选/取消一个名字。返回新数组（配置是 volatile 引用，宿主按值比较）。 */
 export function toggleName (selected, name) {
-  const list = Array.isArray(selected) ? [...selected] : [];
-  const at = list.indexOf(name);
-  if (at === -1) list.push(name);
-  else list.splice(at, 1);
-  return list;
+  const list = Array.isArray(selected) ? selected : [];
+  // 勾选表示集合成员关系：取消必须移除所有重复项，与批量操作共用同一实现。
+  return setMembership(list, [name], !list.includes(name));
 }
 
 /** 当前选择是否与 DSH 默认完全一致（无序比较、忽略重复）。 */

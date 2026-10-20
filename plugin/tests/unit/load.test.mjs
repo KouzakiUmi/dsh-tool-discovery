@@ -423,17 +423,27 @@ test('engine.handleLoad 支持解绑调用(不依赖 this 绑定)', async () => 
   assert.equal(res.response.data.receipt.selected[0].name, 'glob');
 });
 
-test('reservedOnly 不会重复下发技能载荷或重复计入 maxSkillBytesPerLoad', async () => {
-  const { engine } = await makeEngine();
-  // 第一次 handleLoad 尚未折叠入 selected,仅写入会话 reserved
+test('reservedOnly 只去重 schema 预留；未提交技能必须重发并完整计入本次字节上限', async () => {
+  const { engine } = await makeEngine({ engineConfig: { budgets: { maxActiveTools: 2 } } });
   const first = await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: nextOpId() });
   assert.equal(first.response.ok, true);
-  assert.equal(first.response.data.skills.length, 1);
-  assert.equal(first.response.data.skills[0].toolId, 't_files_glob');
-  // 第二次在同一会话再次请求 [glob, grep]:glob 已在 reservedOnly,不应重复下发其 skill
+  assert.deepEqual(first.response.data.skills.map((s) => s.toolId), ['t_files_glob']);
+  // 首次结果还可能失败：第二个响应不能依赖它交付指南，但 schema 预留仍只占两项。
   const second = await engine.handleLoad({ names: ['glob', 'grep'] }, SCOPE_A, { operationId: nextOpId() });
   assert.equal(second.response.ok, true);
-  assert.deepEqual(second.response.data.skills.map((s) => s.toolId), ['t_files_grep']);
+  assert.deepEqual(second.response.data.skills.map((s) => s.toolId), ['t_files_glob', 't_files_grep']);
+  assert.equal(engine.handleList({ view: 'state' }, SCOPE_A).data.budgets.activeCount, 2);
+
+  // 技能限额按各卡 UTF-8 字节之和，不含外层数组分隔符（与 list/search 外壳限额不同）。
+  const maxSkillBytesPerLoad = second.response.data.skills.reduce((sum, skill) =>
+    sum + Buffer.byteLength(JSON.stringify(skill), 'utf8'), 0) - 1;
+  const { engine: limited } = await makeEngine({ engineConfig: { budgets: { maxSkillBytesPerLoad } } });
+  const a = await limited.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: nextOpId() });
+  assert.equal(a.response.ok, true, '一份指南能放下');
+  const b = await limited.handleLoad({ names: ['glob', 'grep'] }, SCOPE_A, { operationId: nextOpId() });
+  assert.equal(b.response.ok, false, '两份技能卡总字节超限');
+  assert.equal(b.response.error.code, 'BUDGET_EXCEEDED', '重发指南不能因 pending 绕过技能限额');
+  assert.equal(limited.getPendingSize(), 1, '第二个失败只保留第一个在途操作');
 });
 
 test('evaluateCall 在同名多 shadow 绑定同时选中时按 ctx.toolId 精确匹配', async () => {

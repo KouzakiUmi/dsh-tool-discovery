@@ -45,7 +45,7 @@ const MESSAGES = Object.freeze({
     },
     tool_search: {
       description:
-        'Find a few candidate tools for a task described in natural language, within one controlled category. Returns candidate cards and short-lived refs only; loading happens later via tool_load.',
+        'Find a few candidate tools for a natural-language task within a capability category, or use category "all" when unsure. Returns candidate cards and short-lived refs, not schemas; load unselected candidates via tool_load.',
       category: 'Restrict candidates to one capability category, or "all" for every category.',
       query: 'Natural-language description of the task (not a tool name).',
       limit: 'Max candidates. Default 5.',
@@ -190,7 +190,7 @@ const MESSAGES = Object.freeze({
     loadedMeansSelected: 'Loaded means currently selected, not disclosed in this request.',
     browseThenSearch: 'Browse names with tool_list before searching by purpose.',
     searchAfterList: 'Now that you know the purpose, call tool_load by exact name; if unsure, call tool_search.',
-    pickCandidateThenLoad: 'Select a candidate, then call tool_load with its ref. revision is optional; it defaults to the version bound to the ref.',
+    pickCandidateThenLoad: 'If loaded=true, use the tool only when its schema is already visible; otherwise wait for the next request. Load other chosen refs in one batch (revision optional).',
     rewriteOrBrowse: 'Rewrite the query, or browse names with tool_list.',
     callNextRequest: 'Once you see the tool schema next request, call the tool.',
     unloadNext: 'The next request will remove these tools.',
@@ -233,7 +233,7 @@ const MESSAGES_ZH = Object.freeze({
       nextAction_paging: '还有更多名称，传入 nextCursor 继续。',
     },
     tool_search: {
-      description: '在单一受控类别内，按自然语言描述的任务找出少量候选工具。只返回候选卡片与短时效 ref；加载稍后由 tool_load 完成。',
+      description: '按自然语言任务寻找少量候选工具；可限定能力类别，不确定类别时用 "all"。只返回候选卡片和短期 ref，不返回 schema；未选中候选再经 tool_load 加载。',
       query: '用自然语言描述任务（不是工具名）。',
       category: '把候选限定在某个能力类别，或用 "all" 表示全部。',
       limit: '候选上限。缺省 5。',
@@ -360,7 +360,7 @@ const MESSAGES_ZH = Object.freeze({
     loadedMeansSelected: 'loaded 表示有效 selected，不表示当前请求已披露。',
     browseThenSearch: '浏览类别用 tool_list，按用途检索用 tool_search。',
     searchAfterList: '知道用途后按精确名称调用 tool_load；不确定时调用 tool_search。',
-    pickCandidateThenLoad: '选定候选后，用其 ref 调用 tool_load；revision 可选，缺省取 ref 绑定的版本。',
+    pickCandidateThenLoad: 'loaded=true 时，当前工具表已出现其 schema 才可直接调用，否则等下一轮；无需重复加载。其它选定候选按 ref 批量加载（revision 可省略）。',
     rewriteOrBrowse: '改写 query，或用 tool_list 浏览名称。',
     callNextRequest: '下一轮看到工具 schema 后，再调用原工具。',
     unloadNext: '下一轮请求将移除这些工具。',

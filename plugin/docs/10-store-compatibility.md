@@ -1,32 +1,27 @@
 # 10 · DSH STORE 上架契约与兼容声明
 
-核验日期：2026-10-10（Asia/Hong_Kong）。
-证据类型：**固定 Commit 上的 manifest 声明 + 隔离 DSH_HOME 的一次性 Profile 安装/启动/卸载/恢复记录**。
-本文件是上架与兼容口径的权威说明；它**不**构成「已上架」「已通过独立安全审核」或「全部路径已验收」的声明。
+当前 manifest 核对日期：2026-10-21；构建源码版本 `0.4.3`（不代表 npm 新发布）。下文 §3.1、§4、§5 是 2026-10-10/11 的固定快照证据，原文中的“当前”“本机”“STORE 当前现状”只在当时成立，**不是最新商城规则、目录统计或当前宿主版本**。
+兼容声明与历史安装操作分开记录；没有据此验证当前 STORE 收录、npm 最新版本、真实 Profile 或在线 GUI。现行合同见 [00](<00-current-contract.md>)，当前测试见 [05](<05-current-status.md>)。
 
 ## 1. 目的与边界
 
-DSH STORE 对每个第三方插件都从**固定 Commit**读取 manifest、Bundle Patch、许可证、生命周期脚本与
-有界运行时代码，并据此决定目录状态与安装准入。本文件把本仓库对应的事实集中记录，避免把
-「构建产物存在」「npm 已发布」「商城已收录」「真实 Profile 已安装」混成一句话。
+历史上架取证针对固定 Commit 的 manifest、Bundle Patch、许可证与运行时代码；STORE 的当次规则和目录状态需要另行核验，不由旧镜像复算推断。
 
-四件事互相独立，逐项分开写：
-
-| 状态 | 本仓库当前事实 |
+| 独立状态 | 本页可以证明什么 |
 |---|---|
-| 源码可安装契约（manifest / Patch / 许可证 / `files`） | 见 §3 |
-| 一次性 Profile 的安装、启动、卸载、恢复 | 见 §4（有记录） |
-| npm 发布 | `0.2.1`、`0.2.2`、`0.3.0` 已发布（`0.3.0` 自 tag `v0.3.0`，run 38074858965，含 SLSA provenance）；发布不等于已安装到任何 Profile |
-| DSH STORE 收录 / 真实 Profile 加载 | **未验证**；本仓库无上架记录，也未对真实 Profile 执行安装 |
+| 当前源码可分发面 | §3 依据当前 manifest/patch；实际载荷仍须检查该次产物 |
+| 一次性 Profile 安装/启动/卸载/恢复 | §4 的 2026-10-10 固定版本实验，不外推当前版本或用户 Profile |
+| GitHub 构建资产 / npm | 查看对应 Release、tarball、registry 与 provenance；不能从清单版本数值或旧版本列表推断最新发布 |
+| STORE / 用户 Profile / 在线 GUI | 本轮没有重新核验；不能笼统写成“已经生效”或“历史上从未安装” |
 
 核心工具跟版须同时核验默认名单、动态贡献与周期生效条件，维护流程见
 [核心工具跟版与名单漂移](<12-core-tools-maintenance.md>)。只更新版本范围不能证明工具面已经跟版。
 
 ## 2. 兼容矩阵（manifest 声明）
 
-`package.json` 的 `dsh.compatibility.dshReleases` 对官方当前三个发行版逐项声明：
+当前 [package.json](<../../package.json>) 的 `dsh.compatibility.dshReleases` **显式列出以下三项**，并不表示它们是官方最新或全部发行版。下面测试数字是历史证据，不是本轮复跑：
 
-| DSH 版本 | 声明 | 证据 |
+| DSH Core 版本 | manifest 声明 | 历史证据 |
 |---|---|---|
 | `0.2.0-rc.2` | `unknown` | 本机无该版本安装，未测 |
 | `0.2.1-alpha.1` | `compatible` | 发布基线：`0.2.1`–`0.2.2` 的单元与组合测试在该 Core 上通过（结论集见 [当前状态](<05-current-status.md>)）。**本次未复跑**——本机 Core 已是 `0.2.1-alpha.2` |
@@ -53,7 +48,7 @@ macOS / Linux 与其它宿主形态未测，不声明兼容。承诺范围是单
 | `dsh.bundle.patch` | `./cordis.patch.yml`，包内相对路径 |
 | entry ID 唯一 | `tool-search`：Patch 只新增该行，不覆盖、不禁用任何官方组件 |
 | 生命周期脚本 | **无** `preinstall`/`install`/`postinstall`/`prepare`；打包以 `npm pack --ignore-scripts` 执行 |
-| 运行文件与 `files` | `files` 声明 `plugin/adapters/`、`plugin/domain/`、`plugin/client/`、`cordis.patch.yml`；本机 `npm pack` 载荷 36 项 / 约 152 KiB，除声明项外只自动附带 `package.json`、`LICENSE`、`README*`（`CHANGELOG.md` **不在**载荷内，也不在 STORE 的审查面内） |
+| 运行文件与 `files` | `files` 声明 `plugin/adapters/`、`plugin/domain/`、`plugin/client/`、`cordis.patch.yml`；运行入口、客户端和 patch 以该次包载荷核验。README/manifest/LICENSE 等附带项以实际打包输出为准，不沿用旧 36 项/字节数，也不把源码审查面与 npm 实际载荷等同 |
 | 运行依赖 | `zod`（运行时 `import('zod')`）；`@deepseek-ai/*` 为 peer，由宿主安装提供 |
 | 兼容声明 | 见 §2 |
 | 自动策略信号 | 见 §3.1（本地镜像复算，**不复述记忆值**） |

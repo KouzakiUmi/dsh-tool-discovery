@@ -1,100 +1,88 @@
 # DSH Tool Discovery — development guide
 
-Where the code lives, and what you need before you can run the tests. For the design and the
-current state, start at [`docs/README.md`](<docs/README.md>) and
-[`docs/05-current-status.md`](<docs/05-current-status.md>).
+Source manifest: `0.4.2`. Start with the [current contract](<docs/00-current-contract.md>),
+[architecture](<docs/01-requirements-and-architecture.md>) and [verification status](<docs/05-current-status.md>).
+The numbered historical documents retain their original evidence; they are not the current defaults.
 
 ## Layout
 
-| Directory | What it holds |
+| Directory | Responsibility |
 |---|---|
-| [`domain/`](<domain/>) | The kernel: catalog, search, listing, state machine, budgets, error codes. No I/O and no DSH dependency, so it unit-tests on its own. |
-| [`adapters/dsh/`](<adapters/dsh/>) | The DSH adapter: entry definitions, registry, journal, projection, guard, lifecycle, and the schemastery `Config` schema. Everything host-specific lives here. |
-| [`client/`](<client/>) | The plugin-home browser half (its own top-level settings page): an official ModuleLoader lazy CJS factory, JSX-free and build-free, plus the isomorphic pure logic it inlines. |
-| [`contracts/`](<contracts/>) | Runtime contract checks against a real Loader. |
-| [`fixtures/`](<fixtures/>) | Fixtures and mock provider/store used by the composition suites. |
-| [`tests/unit/`](<tests/unit/>) | Kernel unit tests. |
-| [`tests/composition/`](<tests/composition/>) | Composition suites against a real Loader. |
-| [`quality/`](<quality/validate.mjs>) | The quality validator and its tooling. Published, but see below before running it. |
+| [domain/](<domain/>) | Host-independent catalog, search, protocol, budgets and state transitions; no host imports or filesystem I/O |
+| [adapters/dsh/](<adapters/dsh/>) | Registry eligibility, native/PTC projection, canonical journal, execution guard, activation lifetime, optional durable epoch store and Config |
+| [client/](<client/>) | Existing lazy CJS settings page and isomorphic model helpers; no separate frontend build step |
+| [contracts/](<contracts/>) | Real-Loader test harness and installation-anchored resolver; not the production import path |
+| [fixtures/](<fixtures/>) | Composition fixtures; generated `tmp/` content is private |
+| [tests/unit/](<tests/unit/>) | Portable kernel/adapter tests **and two host-bound files** |
+| [tests/composition/](<tests/composition/>) | `gate-*.test.mjs`, requiring an actual resolvable DSH installation |
+| [quality/validate.mjs](<quality/validate.mjs>) | Published tooling that still requires a private scoring dataset |
 
-Directories are named for their responsibility, not for a phase of the project.
+## Verify from the repository root
 
-## Budgets
+The manifest requires Node `^22.19.0 || >=24.0.0`. The manifest declares no build or TypeScript-compile script.
+Read actual command output and exit codes; a skipped suite is not a pass.
 
-Hard caps are **off by default** — this plugin ships no extra risk thresholds. In
-[`domain/constants.mjs`](<domain/constants.mjs>), every key in `OPTIONAL_LIMIT_KEYS`
-(`maxActiveTools`, `maxActiveSchemaBytes`, `maxLoadBatch`, `maxListLimit`, `maxSearchLimit`,
-`maxListResultBytes`, `maxSearchResultBytes`, `maxQueryCodePoints`, `maxSkillBytesPerLoad`)
-defaults to `null`. `null` disables the cap; a positive integer enables it. `Infinity` is rejected
-on purpose: it cannot survive JSON, so it would silently become `null` on the wire.
+| Command | Prerequisite / meaning |
+|---|---|
+| `node scripts/check-repo.mjs` | Identity, published-document paths and a limited unmeasured-claim check; not a semantic documentation audit |
+| `npm test` | Every unit file, including the two host-bound files below |
+| `npm run test:composition` | All composition gates; requires compatible, resolvable host peers |
+| `npm run test:all` | Unit followed by composition; stops if the first stage fails |
+| `npm run check:quality` | Private queries/labels; unavailable on a normal public checkout |
 
-`resolveBudgets` is the only entry point, and it is strict — an unknown key, a non-integer, a
-non-positive number, or a non-null non-integer on an optional limit all fail as
-`INCOMPATIBLE_COMPOSITION` rather than being coerced.
+### Portable unit subset
 
-Turning a cap on blocks work and costs turns: exceeding it rejects the *new* items (never evicts
-disclosed ones), forces the model to split loads, and can force a premature context compaction.
-Limits are not optimisation — the recommendation is to leave them off. See the configuration
-section in the root [README](<../README.md>) (中文) / [README.en.md](<../README.en.md>) for the
-user-facing version.
+The same explicit two-file exclusion used by CI is reproducible in Bash:
 
-What remains bounded with every cap disabled: `defaultListLimit` (20), `defaultSearchLimit` (5),
-pagination, and the TTLs.
-
-`maxActiveTools` and `maxActiveSchemaBytes` are evaluated against the on-demand selections only —
-already-loaded, frozen, and pending disclosure. The initial `alwaysVisible` baseline is injected by
-the host and is deliberately not part of that count.
-
-`initialSchemaTargetTokens` and `maxInitialBytes` are historical target values. No code path
-enforces them, so they are not a measured guarantee of a 2K initial budget.
-
-## Running the tests
-
-From the repository root. Exit code is the result; a suite that looks like it passed is not a
-pass.
-
-```sh
-npm test                          # unit suite — trust the output of this command
-npm run test:composition          # composition gates — trust the output of this command
-npm run test:all                  # both, in order
-npm run check                     # package identity + docs consistency (scripts/check-repo.mjs)
-npm run clean                     # remove regenerable residue (plugin/fixtures/tmp)
+```bash
+files=()
+for file in plugin/tests/unit/*.test.mjs; do
+  case "$file" in
+    */client.test.mjs|*/settings.test.mjs) ;;
+    *) files+=("$file");;
+  esac
+done
+node --test "${files[@]}"
 ```
 
-Counts are deliberately not written down: suites are added over time, so any number printed here
-would drift. Treat the actual output of these commands as the source of truth.
+`client.test.mjs` resolves React and `settings.test.mjs` resolves schemastery from an installed DSH at import time.
+They cannot load on a Node-only checkout. The other unit files use published fixtures, including
+[the synthetic protocol catalog](<quality/fixtures/catalog.invented.json>), not the private quality labels.
+Do not call the portable subset a successful full `npm test`.
 
-`test:composition` runs every `tests/composition/gate-*.test.mjs` through a glob, so a new gate file
-joins it (and the manual CI job that calls it) without editing a list. Helper modules in that
-directory that are not `gate-*.test.mjs` are not suites. See
-[07 — recovery and fork coverage](<docs/07-lifecycle-recovery-coverage.md>).
+### Host-dependent tests
 
-Prerequisites, because the suites do not have the same ones:
+[install-resolver.mjs](<contracts/install-resolver.mjs>) anchors resolution at an installation's manifest.
+`DSH_INSTALL_ROOT` can override its default **unpacked** installation root. A directory with only an ASAR archive
+is not automatically a normal Node package tree; this resolver does not extract ASAR or install missing peers.
+Confirm actual package resolution before running host-bound or composition tests. Do not modify a profile or
+install dependencies to conceal a verification gap.
 
-- **Unit** needs only Node. Its one in-repo data dependency,
-  `quality/fixtures/catalog.invented.json`, is a synthetic protocol fixture and is published, so
-  this suite runs on a fresh clone.
-- **Composition** needs an installed DSH Core that provides the host dependencies at the matching
-  version. It resolves packages from that installation through
-  [`contracts/install-resolver.mjs`](<contracts/install-resolver.mjs>), which uses
-  `DSH_INSTALL_ROOT` when set and otherwise falls back to the default install root. These commands
-  install and restart nothing and do not touch the DSH profile; they do create temporary session
-  files under the git-ignored `fixtures/tmp/`, which `contracts/harness.mjs` removes when each test
-  process exits (`DSH_KEEP_TMP=1` keeps them; `npm run clean` clears leftovers).
-- **The quality tooling is published, but the full suite does not complete on a public checkout.**
-  The validator needs the frozen scoring dataset, and so does the tooling's own digest test, which
-  reads the held-out queries and the frozen labels — none of which are published. Recorded results
-  live in [`docs/05-current-status.md`](<docs/05-current-status.md>). Do not add the dataset to the
-  tree to make it run; that is a decision of its own.
+Composition creates ignored temporary session data under `plugin/fixtures/tmp/`; the harness normally removes
+its own data on exit. `DSH_KEEP_TMP=1` retains it. `npm run clean` is a separate deletion operation, not a required
+verification step; inspect its scope before using it.
 
-The internal reports under `reports/` and `audits/` are not published; they are referenced by path
-where they matter, not linked.
+## State and budget rules that tests must preserve
 
-### What the tests do and do not cover
+- Selection is committed from matched canonical successful results, not from returning `ok:true` in a body.
+- Call seq attributes a pair; result seq orders its commit. Live and replay order must agree.
+- Native frozen wire is a disclosure cache, not execution permission. Same-name schema conflicts require successful compaction.
+- Schema footprint deduplication does not suppress delivery of a new skill revision. An uncommitted pending response is not proof that guidance arrived; only a committed same-version selection permits skill omission.
+- All optional hard caps default to `null`; positive integers opt in. Defaults 20/5 still paginate, and explicit max limits also cap omitted-limit defaults.
+- List/search byte caps measure the **entire successful JSON envelope**. State only truncates invalidation diagnostics with a marker; errors and host wrappers are outside that success cap.
+- Active schema caps cover the deduplicated on-demand selected/frozen/pending footprint, not the initial baseline. Over-budget loads reject additions rather than evict disclosed tools.
+- `initialSchemaTargetTokens` and `maxInitialBytes` are unused historical targets, not an enforced or measured initial token budget.
 
-The unit suite runs the client factory in a `vm` with only React supplied, asserting the inlined pure
-helpers against their isomorphic twin in `plugin/client/model.mjs`. The composition suites exercise
-the native `Config` surface, the mutable settings cycle, and the catalog metadata integration.
+Source of truth: [constants](<domain/constants.mjs>), [engine](<domain/engine.mjs>), [state](<domain/state.mjs>),
+[protocol](<domain/protocol.mjs>) and [design-invariants regressions](<tests/unit/design-invariants.test.mjs>).
 
-**No suite renders the settings page in a real DOM or browser.** There is no rendered-UI acceptance
-test, so the page's runtime appearance remains unverified.
+## Evidence and remaining boundaries
+
+A real Loader plus mock provider proves composition, not external provider wire. A client factory evaluated in a VM
+is not DOM rendering. Earlier DOM probe records are dated evidence, not proof of this source snapshot's online GUI.
+PTC SDK freezing/stable append/restart, crash/fsync, provider wire, retrieval metrics and performance remain separately scoped.
+See [current status](<docs/05-current-status.md>) rather than copying historical test totals.
+
+Private `reports/`, `audits/`, scoring queries/labels and generated session data remain unpublished. Never force-add them
+or link public documentation into them. Use [CONTRIBUTING](<../CONTRIBUTING.md>) for branch/review policy and
+[SECURITY](<../SECURITY.md>) for vulnerability reporting. Security-boundary authors do not approve their own changes.

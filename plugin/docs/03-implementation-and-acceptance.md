@@ -1,69 +1,33 @@
 # 03 · 实施、验收与发布门槛
 
-> 验收矩阵的 **ID 是测试与报告的锚点，保持不变**；判据文字已按实现与宿主接口核对后重述。协议见[协议与数据模型](<02-protocol-and-data-model.md>)，证据见内部证据目录 `plugin/reports/`（不随本文档集公开，见 [README §2.1](<README.md>)），进展见[当前状态](<05-current-status.md>)。
+> 更新日期：2026-10-20。本文区分现行验证方法和历史冻结验收矩阵。原 F/S/L/G/S08 ID 与表格判据保留，便于追溯报告，**不表示旧默认值或卸载 API 仍开放**。
+> 现行实现以 [00](<00-current-contract.md>) 为准，实际执行与未覆盖项见 [05](<05-current-status.md>)。历史矩阵不是当前全部测试文件的清单。
 
 ## 1. 实施原则
 
 1. 从本设计与实际 SDK 公开接口出发；不把任何外部代码作为设计模板。
 2. **先用最小真实 composition 验证宿主 seam，再实现产品内核**；API 探针不通过时，不允许用大量 mock 测试掩盖。
 3. `domain` 层不导入 Cordis / 宿主包；`adapters` 层不承担检索排序、分类或状态归约业务。
-4. 一次性锚定一个目标核心版本；不加入旧版兼容 shim。
+4. 每项宿主证据绑定实际 Core/peer 版本与源码快照；开放 peer 准入不等于新版本已通过兼容测试。
 5. 实现、架构复核与独立审查由不同职责承担；**作者不能给自己的安全边界补签**。
 6. 未经明确授权不安装、不发布、不改 profile、不改全局工具限制、不重启、不启动替代服务器。
 7. 对每个结论区分 **已验证 / 未验证 / 不支持**，不写没有证据的“已完成”。
 
-## 2. 模块边界（实际布局）
+## 2. 模块边界与运行前提
 
-```text
-plugin/                  实现根目录（早期代号 progressive-v2/，见 reports/structure-migration.md）
-  contracts/         阶段0 真实 Loader harness、门禁脚本、安装解析器（只读证据）
-  fixtures/          阶段0 fixture 工具与 mock provider
-  domain/            宿主无关内核（ESM .mjs，零宿主依赖）
-    constants.mjs    协议版本、错误码、预算默认值、受控类别与受控匹配标签
-    errors.mjs       DomainError + code → message/retryable/recovery
-    canonical.mjs    canonicalJson / digest / UTF-8 字节
-    categories.mjs   可信分类、CategoryCard、有界导航
-    catalog.mjs      目录条目、不可变快照、schema 身份与版本
-    budgets.mjs      字节 / token 预算核算（无 tokenizer 时显式标 estimate）
-    search.mjs       双语 tokenizer、token 集合检索（有界线性扫描）、可解释排序
-    candidate-refs.mjs 会话 + 代次绑定的短期 opaque ref
-    list.mjs         四个 view 与 opaque 游标分页
-    skills.mjs       技能校验与投影（禁止复述 schema）
-    protocol.mjs     三个请求的严格校验与响应外壳
-    state.mjs        纯 reducer、canonical 对核验、门禁判据
-    engine.mjs       组合根：请求处理、事务、披露记录、失效、恢复
-    util.mjs         code point 截断、plain object 断言、稳定排序、会话互斥锁
-    index.mjs        唯一公开出口
-  adapters/dsh/      宿主接线层
-    index.mjs        装配面：Config 校验、入口名冲突检测、整组回滚（展示模式按 scope，不在激活期拒绝）
-    registry.mjs     资格事实唯一入口、绑定代次、变更 diff
-    journal.mjs      canonical 对折叠、request/header 观测、公开 query 冷恢复
-    projection.mjs   await next() 之后的最终投影与返回值校验
-    guard.mjs        同步只增拒绝的执行门禁
-    entries.mjs      三个 typed definition（输入/输出 schema 与 render）
-    lifecycle.mjs    scope 注册、事件、disposer、整组回滚
-  tests/
-    unit/            domain 单元测试（8 个 *.test.mjs + helpers.mjs）
-    composition/     真实 Loader 组合门禁
-      harness.mjs + fixtures/          共享 harness 与 fixture 插件
-      gate-adapter.test.mjs             组合门禁 14 项
-      gate-adapter-lifecycle.test.mjs   生命周期 7 项
-      gate-adapter-recovery.test.mjs    恢复与 fork 覆盖 13 项（原分支 fix/lifecycle-recovery-coverage，已并入基线）
-      gate-adapter-event-seq.test.mjs   事件 seq 门禁 8 项（同上分支，同一轮新增）
-  quality/           检索质量数据与验证工装
-    fixtures/ queries/ labels/ tools/ tests/ validate.mjs
-  audits/            独立审查的隔离镜像、反例与日志
-  reports/           合同、审查与实现报告
-  docs/              本文档集
-```
+| 目录 | 当前职责 |
+|---|---|
+| [domain](<../domain/>) | 宿主无关的 catalog/search/list/protocol/budgets/state/engine |
+| [adapters/dsh](<../adapters/dsh/>) | 资格、日志、native/PTC 投影、guard、生命周期、可信基线、配置 |
+| [client](<../client/>) | 已存在的设置页及纯 model，不需要独立构建 |
+| [tests/unit](<../tests/unit/>) | portable 回归 + 两份 host-bound 文件，不能统称只需 Node |
+| [tests/composition](<../tests/composition/>) | 真实 Loader 的 gate-*.test.mjs，不写死文件/用例数 |
+| [contracts](<../contracts/>) / [fixtures](<../fixtures/>) | 测试解析器、harness 与隔离夹具；临时数据不公开 |
+| [quality validator](<../quality/validate.mjs>) | 工装公开，评分输入私有；数据完整性检查不是产品检索评分 |
 
-`domain` 是唯一业务实现处；`adapters` 只做接线、资格视图、投影、门禁、日志折叠与恢复。模块数量表示职责边界，不为形式创建空文件；无 UI 需求时不引入客户端 bundle。框架保留工具由 adapter 的**可信配置**声明，不在 `domain` 里猜名称。
-
-上树中的 `contracts/`、`fixtures/`（`fixtures/tmp/**` 除外）、`tests/`、`domain/`、`adapters/`、`docs/`，以及 `quality/` 下的 `validate.mjs`、`tools/`、`tests/` 与 `fixtures/catalog.invented.json` 随实现公开；`quality/queries/`、`quality/labels/`、`quality/README.md`、`reports/`、`audits/` 与 `fixtures/tmp/**` 是**私有数据与内部证据**，不公开，因此本文只以代码字体写出路径而不建链接（见 [README §2.1](<README.md>)）。
-
-**运行前提**：组合测试文件齐备；**目标 DSH Core 在本 host 且提供被测宿主依赖与对应版本即可运行**（无宿主不可运行）。`contracts/install-resolver.mjs` 以 `DSH_INSTALL_ROOT` 优先、否则回落默认安装根，因此**默认安装根下无需设置该变量**，仅换机器或改用非默认安装根时才需要它覆盖。**`plugin/quality/validate.mjs` 虽已公开，仍依赖私有 `queries/` 与 `labels/`，其 21 项结论只在完整内部资料下成立**。
-
-不把配置瞬态化用于会话身份、协议版本或必须整体重建的索引结构；配置若即时变化，应在操作边界重新读取并重新核验预算与资格，不用旧闭包冒充 live config。
+命令及明确的 portable 排除列表见[开发指南](<../README.md>)。完整 unit 的 client/settings 两文件与 composition 都需要能从目标安装解析对应 peers；仅有 ASAR 不自动满足现有测试解析器。
+私有 reports/audits、评分集与临时会话文件只用代码路径引用，不强制纳入公开仓库来制造“可复现”。
+配置即时变化时按它的实际生效边界核验，不能拿应用登记目录冒充会话资格，也不能在周期中途改写已发送工具表。
 
 ## 3. 阶段划分
 
@@ -101,43 +65,30 @@ plugin/                  实现根目录（早期代号 progressive-v2/，见 re
 - 无法把门禁与执行调用绑定：限制为“一会话一活动模型 agent”，不默认宣称并发共享安全。
 - 无法原子绑定热替换定义：无进行中调用时更新；无停顿热替换明确列为不支持。
 
-## 4. 分工、路由与交接
+## 4. 变更与审查职责
 
-推荐**主代理编排 + 直接 worker**，不为此规模再增子编排者；只有模块与审查进一步独立时才引入一层，且编排者不写交付代码。
+实现者说明需求、可写范围、源码快照、关键不变量和红转绿证据；审查者独立核对反例、实际命令与未覆盖项。安全边界作者不能自签，不能以多份同意代替可复现证据。
 
-| 任务 | 能力门槛 | 范围 | 依赖 |
-|---|---|---|---|
-| 宿主合同 worker | R3 | contracts、fixtures、runtime-contract 报告 | 无 |
-| 内核 worker | R2（安全状态另交 R3） | `domain/**`、`tests/unit/**`、内核实现报告 | 协议冻结 |
-| 适配 worker | R3 | `adapters/**`、组合测试 | 阶段 0 + 内核接口 |
-| 文档 / 基准 worker | R2 | 文档、性能脚本与实测报告 | 内核与适配可运行 |
-| 独立审查者 | V，不低于所审产出门槛 | 独立核验与反例测试 | 实现完成 |
+- 不让多个实现者覆盖共享入口、manifest 或他人审查材料。
+- 私有报告保留原文；文档整理不能把历史测试追认为当前通过。
+- 第三方接口按实际消费版本核验；内部状态机按源码与断言核对。
+- 宿主、Profile、安装和发布与工作区验证分开，不把“能运行脚本”当作执行生产操作的许可。
 
-规则：
+### 历史 ID 到当前语义的映射
 
-- 每次委派前先加载模型选型技能并重新发现可用路由；能力资料只作线索，不硬编码模型。
-- 复杂 SDK 接入、安全边界与终审不得为求快降到窄提取档位。**没有合格独立核验者时标记未完成**，不用作者自评补齐。
-- 同一任务的执行者只派一个；审查者不得是写出该交付物的人。
-- 不让多个 worker 同时改入口装配、manifest 或共享测试配置；文件所有权唯一。
+以下第 5–8 节及阶段 0 表保留早期矩阵原文。对照当前实现时必须应用下表，不能把旧矩阵直接当用户 API：
 
-交接包：
+| 历史项 | 当前解释 |
+|---|---|
+| 首轮仅三入口（G1/F01/L02） | 受控测试可清空初始名单；生产默认还有核心/preset 基线及可信例外 |
+| unload（G7/F08） | 模型接口拒绝 unload；历史 reducer 分支不代表开放卸载；成功压缩才 reset |
+| category=all（F07） | search 与 list 的 available/loaded 都支持 all；仍只在当前 scope 的可发现目录内查询 |
+| 最大 20（F11） | 默认 20；硬上限默认 null，显式 max 才启用，省略 limit 也受该 max 收窄 |
+| 同名新版本（F19/L05） | 相同 schema 可重选；冲突 schema 返回 COMPACTION_REQUIRED，不能静默换 frozen wire |
+| 撤权从请求移除（L06） | 撤销执行/advertised；健康 native 周期可保留旧 frozen 披露，不授予执行 |
+| 非 native 拒绝（S12） | 当前 PTC 默认旁路、可选 SDK 兼容；不得据此声称 native 式冻结或完整组合验收 |
 
-```text
-task_id:
-goal:
-acceptance_criteria:
-scope: 唯一可写文件范围
-required_evidence: 命令、退出码、失败原因、精确路径、测试与未覆盖项
-relevant_prior_state: 协议版本、冻结 DTO、阶段 0 合同结论
-constraints:
-  - 不改宿主核心 / profile
-  - 不安装 / 发布 / 重启 / 跑依赖构建脚本
-  - 不覆盖他人文件
-  - 不擅自改变 search/load 边界或权限模型
-  - 不再委派（直接 worker 模式）
-```
-
-返回：`status / summary / changes / evidence / verification / unresolved / next_action`。完整日志留在 worker 侧，主代理只汇总证据与关键分歧。审查发现问题后按证据归因并返工，不做多模型投票。
+新增跨生命周期保护见 [design-invariants](<../tests/unit/design-invariants.test.mjs>)，覆盖提交次序、冻结恢复、技能换版、类别词准入与完整成功外壳预算；不重编号旧 F/S/L 矩阵。
 
 ## 5. 验收矩阵：功能与请求披露
 
@@ -202,7 +153,7 @@ constraints:
 | L11 | query 缺失或日志损坏 | fail closed；不得恢复成全量可用，也不得因“有历史”误判为新会话 |
 | L12 | renderer / pruner 改写回执 | 不激活，并拒绝未通过验收的组合 |
 
-**当前覆盖速览（不改变上表判据，只标实证状态）**：`L01`、`L03`、`L08` 之外，`L11` 已以真实组合实证（原分支 `fix/lifecycle-recovery-coverage`，已并入基线）（query 缺失 / readSession 失败均 fail closed，含健康会话正控）；另有 8 项 event-seq 套件覆盖 canonical `tool/result` 的 `seq` 门禁与封存后的出站收敛。**L04、L08、L10 仍未验证**，不得因上述用例的绿而外推。对应测试见 [`gate-adapter-recovery.test.mjs`](../tests/composition/gate-adapter-recovery.test.mjs)、[`gate-adapter-event-seq.test.mjs`](../tests/composition/gate-adapter-event-seq.test.mjs) 与 [07](<07-lifecycle-recovery-coverage.md>)。
+**覆盖口径**：own-only/fork/seq 的历史证据见 [07](<07-lifecycle-recovery-coverage.md>)；后续成功手动/自动压缩、activation 释放及 PTC fixture 已有分批记录，不再将 L04/DOM/PTC 全部笼统写成“从未驱动”。crash/fsync、完整 HMR、真实 provider/worker 等仍未闭合。历史绿不替本轮目标 Core 复跑；具体范围见 [05](<05-current-status.md>)。
 
 ## 8. 验收矩阵：宿主 wire 与执行链
 
@@ -279,17 +230,15 @@ B 只作为实验对照，不是默认功能。
 
 未安装到用户正在使用的 profile 时，只能称“工作区实现已验证”，不能称“当前 GUI 已生效”。
 
-**源码基线发布与本节门槛无关**：源码基线发布表示代码、协议、文档与既有证据已一致整理并完成提交、推送与远端验证——**该里程碑当前尚未达成**，且即便达成也不构成任何一条门槛的通过证据。本节全通过才是“产品实现完成”；二者都还要求另行完成 npm 发布 / 安装生效（见[当前状态 §1](<05-current-status.md>)）。
+**源码分发与产品验收分开**：提交/推送、GitHub 构建资产、npm、STORE 与 Profile 安装都是独立里程碑，不能由本节或文档更新推断。这里不保留会过时的“尚无发布/尚无推送”总判断。完整产品门槛未达成，也不等于不能明确标注范围地分发源码基线。
 
 ## 12. 剩余关键验证项
 
-| 项目 | 当前判定 | 下一步 |
-|---|---|---|
-| 公共 assembly / 门禁 seam | 已在真实 composition 上验证 | 继续以组合测试覆盖 |
-| scope-own 工具隐藏 | 已验证 | 保持为回归项 |
-| canonical 回执恢复 | 分支语义已验证，端到端链路待驱动 | 驱动 L01 / L04 |
-| 出站 token 减少 | **未测**（仅有设计推导） | wire 抓取与 tokenizer |
-| TTFT / 任务延迟 | **未测** | A/B/C 实验 |
-| 子代理终止 / 强制输出 | 以 scope 注册形态验证，真实委派链未接 | 接真实子代理链路 |
-| 热替换原子版本绑定 | **不支持**（无停顿热替换） | 保持明确限制 |
-| 技能服务接入 | 首版不依赖 | 需要时再验证公开 provider API |
+- PTC SDK 冻结、稳定追加与跨重启披露一致性。
+- 当前目标宿主的完整 unit/composition 重验，以及真实 provider/程序 worker 和完整 prompt 组合。
+- token、TTFT、首次有效工具和任务完成时间的受控 A/B/C 测量。
+- held-out 任务检索指标与私有评分数据的语义审查，不拿结构 validator 当质量评分。
+- crash/fsync、跨 scope 压力、完整 HMR 及未停顿热替换原子绑定。
+- 既有 trusted-epoch 契约残余与历史签核债务；不能用本次文档维护补签。
+
+动态状态集中维护于 [05](<05-current-status.md>)，本节保留工作方向而不复制滚动测试数字。

@@ -16,6 +16,8 @@
 
 ---
 
+> This README describes the source tree with manifest `0.4.3`. Subsequent fixes are distinguished by `build-<sha>` snapshots, not implied to be present in the npm `0.4.3` release. The [current contract](plugin/docs/00-current-contract.md) consolidates current parameters, state and boundaries; frozen drafts and experiments remain dated history. The preview below primarily describes native mode. PTC bypasses discovery by default; opt-in compatibility still lacks SDK freezing.
+
 ## Feature preview
 
 ### Only the essentials on the first turn
@@ -62,13 +64,13 @@ default. Other ordinary tools are not disclosed up front.
 | `tool_load` | I want these tools. | Yes |
 
 `tool_load` never runs the target tool. It records the selection, and disclosure happens on the
-following turn. Reaching for a tool that has not been loaded is refused, and unloading is not a
+following turn. Outside the initial/framework and other documented exceptions, reaching for an unloaded on-demand tool is refused, and unloading is not a
 model action at all — `action: "unload"` is rejected, so between two successful compactions the
 disclosed set only grows.
 
 ## Two invariants bound the whole design
 
-- **Loaded order and content are append-only within a cache epoch.** A load never moves or rewrites
+- **Native disclosure order and content are append-only within a healthy cache epoch.** A load never moves or rewrites
   an already-disclosed entry — the wire recorded at first disclosure is what keeps being sent, so a
   host-side tool upgrade cannot silently mutate a definition the model has already read.
 - **Only a successful compaction resets the epoch.** A manual `/compact` and DSH's automatic
@@ -85,9 +87,9 @@ tools of its own and never bypasses the host.
 ## Quick start
 
 ```sh
-# DSH profile install — name the package, then the full tarball URL
-dsh plugin --profile <profile> add \
-  dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz
+# CLI Web-profile example; replace web with the target and give the named tarball URL
+dsh plugin --profile web add \
+  "dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz"
 ```
 
 1. Install and enable the bundle, then reload or restart for the host side to pick it up
@@ -118,8 +120,7 @@ rules — npm package for Node projects, tag pinning, CLI-vs-Core version caveat
 - The native **`@deepseek-ai/schemastery`** peer is required for the config surface and the settings
   page. Without it the discovery domain still runs normally, but there is no Config and the plugin
   logs `ConfigUnavailable` instead of silently pretending a settings page exists.
-- **Native** tool display mode. Other display modes are refused at activation rather than
-  downgraded silently.
+- **native** is the full disclosure path. Non-native sessions are not universally rejected at activation: PTC bypasses discovery by default; `ptcCompatibility` opts into the next `run_code` SDK. It does not guarantee native-style freezing or silently change the host presentation mode.
 - **One active agent per session.** Concurrent agents in a single session are not supported,
   because a request cannot be attributed unambiguously.
 - Node `^22.19.0 || >=24.0.0`.
@@ -171,22 +172,19 @@ match `package.json` run the npm publish job after the portable tests and reposi
 GitHub Actions authenticates to npm with OIDC and npm generates provenance; no npm write token is
 stored in GitHub. See [Publishing to npm](#publishing-to-npm) for the release steps.
 
-Use the DSH CLI that belongs to the installation you run, and target the profile that will actually
-load the plugin. DSH NEXT Desktop ships its own CLI (it starts through
-`resources\app\lib\desktop-cli.js`) and manages plugins through its own entry point; a globally
-npm-installed `dsh` on `PATH` is a different launcher with a different profile, not this
-installation's tool. **The CLI version is not the Core version**: `dsh --version` reports the CLI,
-and no CLI number tells you which Core a profile resolves. Check the Core peer under
-[Requirements](#requirements) against that profile instead.
+The commands above and below are **public-CLI Web-profile examples**; `web` is not an inferred installation target.
+DSH NEXT Desktop profiles are managed by its bundled Desktop CLI, not the globally npm-installed public CLI.
+Desktop users should first verify the installation-owned CLI, actual profile and `plugin --help`, then follow that version's quit/reopen requirements. Do not copy an internal bootstrap path from documentation, run bare npm/pnpm inside a managed profile, or edit its lockfiles.
+CLI/shell versions do not establish the actual Core version. References: [CLI plugin management](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/reference/README.md) and [Desktop ownership](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/desktop/README.md). Public master documentation is not proof for every installed version.
 
 ```sh
 # first install — name the package, then the full tarball URL
-dsh plugin --profile <profile> add \
-  dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz
+dsh plugin --profile web add \
+  "dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz"
 
 # update an installed copy — the same name@URL form
-dsh plugin --profile <profile> update \
-  dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz
+dsh plugin --profile web update \
+  "dsh-tool-discovery@https://github.com/KouzakiUmi/dsh-tool-discovery/releases/download/<build-tag>/dsh-tool-discovery.tgz"
 ```
 
 Because the tag carries the commit, a later build never replaces an older one, and two builds can
@@ -209,6 +207,7 @@ surface:
   // "alwaysVisible": ["read", "grep"],  // omit entirely to keep the DSH defaults
   "initialToolsEnabled": true,  // optional manual initial injection; preserves the configured list
   "alwaysAllowPresetTools": true, // retain tools declared by the current bound preset
+  "ptcCompatibility": false, // PTC bypass by default; opt in to discovery in the next run_code SDK
   "requireTrustedEpoch": false, // opt-in strict durable epoch verification
   "requireTrustedEpochForSubagents": false, // also enforce on children only if strict is on
   "frameworkRetained": [],  // trusted framework-mandated names the projection must keep
@@ -252,12 +251,14 @@ is laid out as an at-a-glance home rather than a bare form:
 
 Every switch and field:
 
+- **PTC compatibility** (`ptcCompatibility`, default `false`): off preserves the host PTC SDK; on places discovery entries and selected tools in the next `run_code` SDK, taking effect on the next turn. The SDK still re-renders: byte freezing, stable append and cross-restart freezing remain unimplemented. This is not a native-freeze switch.
+
 - **Inject initial tools** (`initialToolsEnabled`, default `true`): disabling preserves the configured list but stops automatic initial injection; `tool_load` still works. This switch and the list apply in a **new session or after successful compaction**, not mid-epoch.
 - **Always allow tools specified by the preset** (`alwaysAllowPresetTools`, default `true`): retain only tools registered by the exact preset revision the current agent joined, intersected with its native-visible capabilities. Other presets and later agent-only tools do not become trusted. Independent of manual injection; uses the same new-session/successful-compaction boundary. It preserves the initial set, not arbitrary execution or native permission bypass.
 - **Require trusted epoch records** (`requireTrustedEpoch`, default `false`): default mode does not access the trusted epoch store or block sessions for missing records/storageDomain. Initial tools come from the configuration snapshot, never from outbound headers. Enabling reloads the plugin and requires durable records: an existing session without one needs a successful user `/compact`; storage failures also block. Disabling restores sessions missing records but does **not** offer strict mode's frozen-list guarantee across restarts.
 - **Also require trusted epochs for subagents** (`requireTrustedEpochForSubagents`, default `false`): only effective when `requireTrustedEpoch` is on. Live runtime-owned children otherwise use the configuration baseline without reading/writing epoch records or requiring `/compact`, including resumed legacy child sessions. Runtime ownership—not header/meta tags or durable fork lineage—identifies a child. A fork resumed as a top-level agent still follows the main strict switch. Changing this ordinary setting reloads the plugin, so disabling it recovers legacy children without a synthetic compaction. Enabling it explicitly may block old children; subagents cannot perform the user's `/compact` themselves.
 - **Interface language** (`locale`, default `auto`): `auto` reads the host's own `locale.preference` from the active profile patch, and otherwise falls back to the desktop language file — any failure (missing, bad JSON, unsupported language) falls back to `en` and is always logged, never silent. `zh`/`en` pins the model-visible copy language and **skips those reads entirely**. Not a volatile field: a change takes effect when the plugin reloads.
-- **Make the initial list an exact set** (`respectAlwaysVisible`, default `false`): **off with initial injection enabled**, DSH core tools that the current scope actually offers are auto-enrolled and can be called without a load — fewer round-trips, and a new upstream core tool keeps working without waiting for a plugin update. **On**, your `alwaysVisible` (plus preset retention) is the *ceiling*: a core tool you left out has to be loaded like any other tool. Refusing it is not a deadlock — an omitted core tool is simply **not in the protected baseline**, so one ordinary `tool_load` admits it on the next request (`tolerantLoadProtected` is about something else: re-loading a tool that is *already* resident stays idempotent). Two caveats: a session already running under strict mode keeps admitting what its durable record already lists until the next user `/compact`; and this is not a volatile field — changing it reloads the plugin.
+- **Make the initial list an exact set** (`respectAlwaysVisible`, default `false`): **off with initial injection enabled**, DSH core tools that the current scope actually offers are auto-enrolled and can be called without a load — fewer round-trips. This only recognizes names in the maintained core list; an unknown upstream addition still needs a [baseline review](plugin/docs/12-core-tools-maintenance.md). **On**, your `alwaysVisible` (plus preset retention) is the *ceiling*: a core tool you left out has to be loaded like any other tool. Refusing it is not a deadlock — an omitted core tool is simply **not in the protected baseline**, so one ordinary `tool_load` admits it on the next request (`tolerantLoadProtected` is about something else: re-loading a tool that is *already* resident stays idempotent). Two caveats: a session already running under strict mode keeps admitting what its durable record already lists until the next user `/compact`; and this is not a volatile field — changing it reloads the plugin.
 - Eligibility, protocol receipts, corrupt-history checks and execution guards remain enforced. The three discovery entries cannot be disabled.
 
 The page also exposes **idempotent baseline loading** (`tolerantLoadProtected`) and **exact initial
@@ -269,6 +270,8 @@ editable here.
 An omitted `alwaysVisible` displays the actual schema defaults. All mutation controls are disabled during loading, read-only state or an in-flight save to prevent concurrent overwrites. Restore-default is disabled without metadata and avoids unchanged writes. Rejected writes show an error, not a success notice. Non-volatile fields reload the plugin when saved; the page warns about this. This is the native config surface, with no legacy wrapper/UI compatibility promise. The standalone real-DOM probe uses a controlled persistence channel, not the active user's configuration, and does not imply online installation or deployment.
 
 ### Budgets: hard caps are off by default
+
+An omitted `limit` uses 20/5 narrowed by any explicit `maxListLimit`/`maxSearchLimit`; an explicit oversized limit is rejected. Byte caps cover the entire successful JSON envelope for all four list views and search, including empty results. Error envelopes and host wrappers are outside this success cap. State may only trim `invalidated` diagnostics with a marker, never `selected`/`advertised`. See the [current budget contract](plugin/docs/00-current-contract.md#5-预算).
 
 By default this plugin **adds no extra risk thresholds**. Every hard cap — tool count, batch size,
 schema bytes, page size, result bytes, query length, skill bytes — is `null`, meaning *disabled*.
@@ -352,7 +355,6 @@ npm test                          # unit suite — trust the output of this comm
 npm run test:composition          # composition gates (real DSH Loader) — trust the output
 npm run test:all                  # both, in order
 npm run check                     # package identity + docs consistency (needs only Node)
-npm run clean                     # remove regenerable test residue
 ```
 
 Most of the unit suite needs nothing but Node. Two files —
@@ -363,12 +365,13 @@ such an installation is present; if it is not at the default location, point
 `DSH_INSTALL_ROOT` at it.
 
 CI's portable unit job therefore runs everything except exactly those two files, which it
-reports as skipped with the reason. That job is the portable subset, not the whole unit
-proof: the full suite, both host-bound files included, is what the local `npm test` run
-against a real DSH root exercises. Nothing here claims browser or DOM rendering coverage.
+reports as skipped with the reason. That job is the portable subset, not a passing full `npm test`. The exact exclusion command is in the
+[development guide](plugin/README.md#portable-unit-subset). Host tests need a resolvable installation tree;
+an ASAR archive alone does not satisfy this resolver. Historical DOM probes are not rerun by the portable job.
 
 Counts move as suites are added, so they are deliberately not written down here. Treat the actual
 output of these two commands as the source of truth; a number printed in this file would drift.
+`npm run clean` is a separate deletion operation, not a test prerequisite; inspect its scope first.
 
 `test:composition` runs every `plugin/tests/composition/gate-*.test.mjs` file against a real Loader:
 adapter gates, lifecycle, recovery and fork, event-`seq`, cache epoch, settings, tool churn and the
@@ -407,33 +410,22 @@ package.
 
 ## Publishing to npm
 
-The initial `0.2.1` publication was a one-time bootstrap because npm only lets a maintainer attach a
-Trusted Publisher after the package exists. The npm account's two-factor check was completed with
-Windows Hello. The Trusted Publisher is now registered for:
+This describes the current [repository workflow](.github/workflows/ci.yml), not verified registry-side authorization or a successful publication:
 
-| Setting | Value |
-| --- | --- |
-| Provider | GitHub Actions |
-| Organization/user | `KouzakiUmi` |
-| Repository | `dsh-tool-discovery` |
-| Workflow filename | `ci.yml` |
-| Environment | None |
-| Allowed publishing | `npm publish`; `npm stage publish` (npm default) |
+| Item | Current source |
+|---|---|
+| Trigger | A stable `v<version>` tag exactly matching the manifest; prerelease tags do not run this job |
+| Gates | Portable unit and repository checks |
+| GitHub environment | **`npm`**, not “none” |
+| Runtime | Node 24; the official Trusted Publishing minimum for the publishing client is npm 11.5.1+ |
+| Identity | The job grants `id-token: write` and uses OIDC; the workflow does not read `NPM_TOKEN` |
+| Publish command | `npm publish --provenance --access public` |
 
-npm also enables `npm stage publish` for new Trusted Publisher configurations. For each stable
-release, bump `package.json`, commit the change, create the matching `v<version>` tag, and push it.
-The `publish-npm` job waits for portable tests and repository checks, verifies the tag, then publishes
-with OIDC and provenance. A staged version stays unpublished until a maintainer reviews and approves
-it with two-factor authentication.
+Maintainers must separately verify the npm Trusted Publisher's repository, workflow filename `ci.yml`, environment and permission to publish directly. Saving that configuration does not test it.
+Check the source version, tag, payload, provenance and actual registry result individually; an old account setup record or the CI file does not prove current authorization.
+Reference: [npm Trusted Publishers](https://docs.npmjs.com/trusted-publishers).
 
-The workflow requires Node 24 and npm 11.5.1 or newer. It does not use an `NPM_TOKEN` GitHub
-secret. Pre-release tags are not published by this job.
-
-**Build and publication checks are not installation acceptance.** This release process does not
-install into, reload or restart a real profile. A release's payload, digest and provenance must be
-checked against that specific published artifact; they do not establish that a host GUI loaded it.
-Exact flags and spec forms come from the target CLI's own `plugin --help`. If an install fails,
-keep the manifest, lockfile and CLI output and report it rather than hand-editing a profile.
+The GitHub `build-<sha>` asset uses a separate workflow path. Neither kind of publication establishes Profile installation or an active GUI.
 
 ## Architecture and what it costs
 
@@ -448,27 +440,16 @@ balance — not a promise of a 2K initial budget.
 
 ## What this is not yet
 
-This is a working implementation, not a finished product.
-
-- It has not completed full product acceptance. `0.2.1`, `0.2.2`, and `0.3.0` are published to npm
-  (`0.3.0` from tag `v0.3.0` through the Trusted Publisher workflow, run 38074858965). **No real Profile was
-  installed into, reloaded, or restarted**: the install/start/uninstall/recovery evidence in
-  [STORE compatibility](plugin/docs/10-store-compatibility.md) was taken in a disposable `DSH_HOME`,
-  so nothing here should be read as an accepted online GUI or as full product acceptance.
-- **The settings UI is covered by unit and integration tests, not by rendered-DOM acceptance.** The
-  native config surface, the cache-epoch behaviour, the catalog metadata, and the client-side
-  helpers are all tested; the page has not been exercised in a real browser.
-- **No token saving is claimed.** The point of the design is to carry less in each request; the
-  actual reduction has not been measured, and neither has latency.
-- Retrieval quality — how often the right tool is found — has not been measured either.
-- Fork inheritance and cold recovery after a process restart are covered only in part. The
-  invariants and the known gaps are listed in
-  [current status](plugin/docs/05-current-status.md).
+- **Source implementation is not full product acceptance.** npm, GitHub build assets, STORE listing, Profile installation and an online GUI are separate states. Check actual evidence for each; historical disposable-Profile operations are in [compatibility evidence](plugin/docs/10-store-compatibility.md).
+- **The current GUI is unaccepted, not historically never DOM-tested.** Earlier records describe controlled React/Chromium probes; they were not reverified or rerun in this round. VM tests, historical DOM records and the current online page are different evidence layers; see [current status](plugin/docs/05-current-status.md).
+- **No measured token or latency benefit is claimed.** Smaller disclosure is the design goal; additional round-trips and end-to-end task time require measurement.
+- **Retrieval metrics remain incomplete.** Fixing category-only false positives does not establish Recall@K, negative-query precision or model selection rates. Category-only queries may need browsing.
+- Native recovery, successful compaction and completion ordering have scoped regressions; crash/fsync, full HMR and new-host end-to-end coverage still need verification. **The PTC SDK freeze gap remains open.**
 
 ## Further reading
 
-- [Design documents](plugin/docs/README.md) — requirements, the frozen protocol, the acceptance
-  matrix, runtime evidence, and current status.
+- [Design documents](plugin/docs/README.md) — the current contract, architecture, historical frozen protocol, acceptance
+  matrices and evidence status.
 - [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
 ## License

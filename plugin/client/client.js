@@ -39,11 +39,9 @@ window.__ModuleLoader__.load({
     }
 
     function toggleName (selected, name) {
-      const list = Array.isArray(selected) ? [...selected] : [];
-      const at = list.indexOf(name);
-      if (at === -1) list.push(name);
-      else list.splice(at, 1);
-      return list;
+      const list = Array.isArray(selected) ? selected : [];
+      // 与批量操作相同：取消勾选移除该名称的所有重复项。
+      return setMembership(list, [name], !list.includes(name));
     }
 
     function isDefaultSelection (selected, defaults) {
