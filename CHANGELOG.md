@@ -25,6 +25,42 @@ what is verified, what is unverified, and what this version refuses to support �
 
 ## [Unreleased]
 
+- Preserve observed native wire key order when deep-copying frozen definitions.
+- Fit list/search byte-limited responses incrementally, including full-envelope metadata,
+  without first materializing or serializing the entire candidate page.
+
+- Reject same-name schema changes that conflict with the native epoch's frozen definition as
+  `COMPACTION_REQUIRED`, before reserving budget. Same-schema rebinding and skill updates remain allowed.
+- Recover native disclosure history separately from execution selections, using matched successful load
+  receipts and subsequent same-digest headers. Removed or changed definitions remain frozen but not executable;
+  inherited history and earlier compacted epochs do not restore disclosure or authority.
+- Fold live and replayed load results in canonical result-commit order, retaining call seq for attribution.
+  Reverse completion order no longer loses a successful selection or changes it after restart.
+- Separate skill delivery/version deduplication from schema-budget deduplication, so frozen schemas no longer
+  suppress newly versioned guidance or its explicit skill-byte limit.
+- Require tool-specific evidence in search; category vocabulary alone no longer returns office tools for
+  unrelated creation queries. Retain bilingual read-file and spreadsheet intent through controlled synonyms.
+- Measure list/search byte caps against the complete successful JSON envelope, including paging metadata,
+  refs and next actions. Empty results are covered; structured error envelopes are not truncated to fit.
+- Clarify that optional PTC SDK rendering still lacks native-style frozen content/order and cross-restart
+  SDK freezing. This disclosure gap is not fixed by the native lifecycle changes.
+
+- Release the active-tool budget reservation when a canonical receipt is rejected for not matching the
+  expected receipt. Previously the pending operation was closed but kept, so a later unrelated
+  `tool_load` could fail with `BUDGET_EXCEEDED` and `tool_list(view:"state")` could report an active
+  item with no selected, advertised or frozen entry.
+- Normalize an empty-string or `null` candidate `revision` the same way in request validation and in
+  canonical receipt folding. A `tool_load` that returned `ok: true` no longer fails later with
+  `candidate-revision-mismatch`, leaving the tool silently inactive.
+- Make explicit `maxListLimit` and `maxSearchLimit` bound the default page size as well; omitting `limit`
+  no longer returns the default 20/5 past a smaller configured cap.
+- Return the structured `INCOMPATIBLE_COMPOSITION` error for invalid engine configuration instead of
+  throwing a `ReferenceError` from temporal-dead-zone shadowing.
+- Do not charge an already-frozen tool a second time when it is loaded again after invalidation; the
+  frozen wire is already counted by the active-tool budget.
+- Throw `BUDGET_EXCEEDED` from `assertBytes` on overflow instead of `TypeError` caused by parameter
+  shadowing.
+
 ## [0.4.2] — 2026-10-15 — admit newer DSH Core releases
 
 - Open the DSH Core install constraint from the two tested alpha releases to `>=0.2.1-alpha.1` on

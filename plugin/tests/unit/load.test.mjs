@@ -516,3 +516,22 @@ test('PTC 守卫分支放行 frameworkRetained 与动态 CORE_TOOL_NAMES', async
   assert.equal(await guardHandler({ name: 'read', agent }), undefined);
 });
 
+test('引擎配置非法时返回结构化 DomainError，不得以 ReferenceError 逃逸', async () => {
+  const { createDiscoveryEngine } = await import('../../domain/index.mjs');
+  const base = { categoryConfig: {}, clock: { now: () => 0 }, random: { bytes: () => new Uint8Array(1) } };
+  const invalid = [
+    null,
+    { ...base, protocolVersion: 99 },
+    { ...base, categoryConfig: null },
+    { ...base, clock: null },
+    { categoryConfig: {}, clock: { now: () => 0 } },
+  ];
+  for (const config of invalid) {
+    assert.throws(() => createDiscoveryEngine(config), (error) => {
+      assert.equal(error.name, 'DomainError', `配置 ${JSON.stringify(config)} 必须走结构化错误`);
+      assert.equal(error.code, 'INCOMPATIBLE_COMPOSITION');
+      return true;
+    });
+  }
+});
+

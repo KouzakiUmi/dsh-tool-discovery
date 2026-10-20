@@ -488,6 +488,33 @@ test('热态回执被改写 → 拒绝激活(逐字比较)', async () => {
   assert.equal(engine.getState(SCOPE_A).selected.size, 0);
 });
 
+test('回执不一致必须释放预算预留：不得留下 pending 让后续 load 误报超限', async () => {
+  const { engine } = await makeEngine({ engineConfig: { budgets: { maxActiveTools: 1 } } });
+  const op = nextOpId();
+  const res = await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: op });
+  assert.equal(res.response.ok, true);
+  assert.equal(engine.getPendingSize(), 1, '前置：本次 load 已预留预算');
+
+  const tampered = JSON.parse(JSON.stringify(res.response.data.receipt));
+  tampered.selected[0].skillRevision = 's_hacked';
+  const out = engine.applyCanonicalPair({
+    seq: 1,
+    call: { operationId: op, tool: 'tool_load', input: { names: ['glob'] } },
+    result: { isError: false, ok: true, payload: tampered },
+  }, SCOPE_A);
+  assert.equal(out.reason, 'receipt-mismatch');
+  assert.equal(engine.getPendingSize(), 0, '回执被拒后预算预留必须同步释放');
+
+  // 与 state 视图同一口径：没有 selected/advertised/frozen 时不得报告活跃项
+  const state = engine.handleList({ view: 'state' }, SCOPE_A).data;
+  assert.equal(state.selected.length, 0);
+  assert.equal(state.budgets.activeCount, 0, 'state 视图不得把已收口的操作计为活跃项');
+
+  const next = await engine.handleLoad({ names: ['grep'] }, SCOPE_A, { operationId: nextOpId() });
+  assert.equal(next.response.ok, true, `释放预留后后续 load 必须成功：${JSON.stringify(next.response.error)}`);
+  engine.dispose();
+});
+
 test('engine 释放后 guard fail closed', async () => {
   const { engine } = await makeEngine();
   engine.dispose();

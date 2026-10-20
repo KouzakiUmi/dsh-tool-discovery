@@ -188,3 +188,13 @@ test('未知预算项被拒绝(不静默接受拼写错误)', async () => {
     await makeEngine({ engineConfig: { budgets: { maxActiveTool: 5 } } });
   });
 });
+
+test('assertBytes 超限抛结构化 BUDGET_EXCEEDED，不得被参数遮蔽成 TypeError', async () => {
+  const { assertBytes } = await import('../../domain/index.mjs');
+  assert.throws(() => assertBytes('x'.repeat(20), 5, 'probe'), (error) => {
+    assert.equal(error.name, 'DomainError');
+    assert.equal(error.code, 'BUDGET_EXCEEDED');
+    return true;
+  });
+  assert.equal(assertBytes('abc', 5, 'ok'), 3, '未超限时返回真实字节数');
+});

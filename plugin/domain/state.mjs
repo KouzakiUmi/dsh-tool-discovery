@@ -6,6 +6,8 @@
 //
 // 纯函数约束:不读时钟、不读随机、不写文件、不发事件;所有外部事实由 ResolverContext 传入。
 import { canonicalJson, deepEqualCanonical, digestOf, utf8Bytes } from './canonical.mjs';
+import { DomainError } from './errors.mjs';
+import { normalizeCandidateRevision } from './protocol.mjs';
 import { recomputeIdentity } from './catalog.mjs';
 import { isNonEmptyString, isPlainObject } from './util.mjs';
 import { createText } from './locale.mjs';
@@ -192,6 +194,11 @@ export function reducePair(state, pair, ctx) {
   if (!isPlainObject(pair) || typeof pair.seq !== 'number' || !isNonEmptyString(pair.call?.operationId)) {
     return reject('pair-malformed');
   }
+  // call seq 用于归属；resultSeq 才是提交次序。旧的内核调用方可省略 resultSeq。
+  if (pair.resultSeq !== undefined && (!Number.isSafeInteger(pair.resultSeq) || pair.resultSeq <= pair.seq)) {
+    return reject('result-seq-invalid');
+  }
+  const appliedSeq = pair.resultSeq ?? pair.seq;
   // 判据 1:只认 tool_load
   if (pair.call.tool !== 'tool_load') return reject('not-tool-load');
 
@@ -203,9 +210,9 @@ export function reducePair(state, pair, ctx) {
   if (isNonEmptyString(pair.result?.rewrittenBy)) return reject('result-rewritten');
 
   // 判据 12:重复 / 更小 seq 忽略
-  if (pair.seq <= state.lastAppliedSeq) {
+  if (appliedSeq <= state.lastAppliedSeq) {
     const next = cloneState(state);
-    if (pair.seq === state.lastAppliedSeq) next.integrity.duplicatesIgnored += 1;
+    if (appliedSeq === state.lastAppliedSeq) next.integrity.duplicatesIgnored += 1;
     else next.integrity.outOfOrderIgnored += 1;
     return { state: next, applied: false, reason: 'stale-seq' };
   }
@@ -231,9 +238,9 @@ export function reducePair(state, pair, ctx) {
   }
 
   const next = cloneState(state);
-  if (pair.seq > state.lastAppliedSeq + 1) {
+  if (appliedSeq > state.lastAppliedSeq + 1) {
     // 缺口只作诊断：保留最近 GAP_HISTORY_LIMIT 条，总量单独计数（见 GAP_HISTORY_LIMIT）。
-    next.integrity.gaps.push(pair.seq);
+    next.integrity.gaps.push(appliedSeq);
     if (next.integrity.gaps.length > GAP_HISTORY_LIMIT) next.integrity.gaps.shift();
     next.integrity.gapsTotal += 1;
   }
@@ -251,7 +258,7 @@ export function reducePair(state, pair, ctx) {
       next.advertised.delete(toolId);
       next.invalidated.delete(toolId);
     }
-    next.lastAppliedSeq = pair.seq;
+    next.lastAppliedSeq = appliedSeq;
     next.integrity.applied += 1;
     return { state: next, applied: true };
   }
@@ -269,6 +276,8 @@ export function reducePair(state, pair, ctx) {
     if (ctx.protectedNames && ctx.protectedNames.has(entry.name)) return reject('protected-tool');
     const idCheck = recomputeSelectionIdentity(entry, s);
     if (!idCheck.ok) return reject(idCheck.reason);
+    const frozen = [...state.frozen.values()].find((f) => f.name === s.name);
+    if (frozen && frozen.schemaDigest !== s.schemaDigest) return reject('frozen-definition-conflict');
     claimedNames.push(s.name);
   }
 
@@ -288,7 +297,10 @@ export function reducePair(state, pair, ctx) {
       for (const c of refs) {
         const r = ctx.resolveRef(c.ref);
         if (!r) return reject('candidate-ref-unresolvable');
-        if (c.revision !== undefined && r.revision !== c.revision) return reject('candidate-revision-mismatch');
+        // 与 protocol.normalizeCandidateRevision 同一口径：''/null 是“未给出”，
+        // 不是“断言 version 为空串”。两边分叉会让成功回执在折叠时静默作废。
+        const claimedRevision = normalizeCandidateRevision(c.revision);
+        if (claimedRevision !== undefined && r.revision !== claimedRevision) return reject('candidate-revision-mismatch');
         resolved.push(r.toolId);
       }
       for (const s of receipt.selected) {
@@ -314,7 +326,7 @@ export function reducePair(state, pair, ctx) {
       skillRevision: s.skillRevision,
       selectionSource: receipt.selectionSource,
       operationId: receipt.operationId,
-      seq: pair.seq,
+      seq: appliedSeq,
       activatedAt: ctx.now(),
     });
     // 换了版本 → 旧曝光立即作废
@@ -322,7 +334,7 @@ export function reducePair(state, pair, ctx) {
     next.invalidated.delete(s.toolId);
   }
 
-  next.lastAppliedSeq = pair.seq;
+  next.lastAppliedSeq = appliedSeq;
   next.integrity.applied += 1;
   return { state: next, applied: true };
 }
@@ -330,7 +342,7 @@ export function reducePair(state, pair, ctx) {
 /**
  * 冻结一次真实出站披露的 wire —— 披露缓存的唯一写入口。
  *
- * **幂等且不可更新**：已冻结的 toolId 一律原样保留，哪怕这次观测到的 wire 与
+ * **幂等且不可更新**：已冻结的 toolId 或原生名称一律原样保留，哪怕这次观测到的 wire 与
  * 冻结值不同（宿主换版）。换版必须走一次成功压缩的 reset，而不是让模型上下文里
  * 已披露的 schema 静默变形。调用方负责在漂移时仍按原 guard 拒绝执行。
  *
@@ -339,15 +351,23 @@ export function reducePair(state, pair, ctx) {
  * @returns {SessionDiscoveryState}
  */
 export function freezeTool(state, rec) {
-  if (state.frozen.has(rec.toolId)) return state;
+  if (state.frozen.has(rec.toolId) || [...state.frozen.values()].some((f) => f.name === rec.name)) return state;
+  const wireJson = canonicalJson(rec.wire);
+  const wire = JSON.parse(JSON.stringify(rec.wire));
+  // Getters/proxies or a hidden toJSON must not change the identity while we
+  // take the order-preserving snapshot. Reject before changing either ledger.
+  if (canonicalJson(wire) !== wireJson) {
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'Observed wire changed during JSON snapshot.');
+  }
   const next = cloneState(state);
   next.frozen.set(rec.toolId, {
     toolId: rec.toolId,
     name: rec.name,
     revision: rec.revision,
     schemaDigest: rec.schemaDigest,
-    wire: rec.wire,
-    bytes: utf8Bytes(canonicalJson(rec.wire)),
+    // Preserve the observed JSON key order independently of canonical accounting.
+    wire,
+    bytes: utf8Bytes(wireJson),
     order: next.frozenOrder,
     epoch: next.epoch,
   });

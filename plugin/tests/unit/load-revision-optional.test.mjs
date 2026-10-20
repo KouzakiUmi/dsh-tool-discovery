@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateLoadRequest } from '../../domain/protocol.mjs';
 import { resolveBudgets } from '../../domain/budgets.mjs';
-import { makeEngine, SCOPE_A, nextOpId, sampleBindings } from './helpers.mjs';
+import { makeEngine, SCOPE_A, nextOpId, sampleBindings, pair } from './helpers.mjs';
 
 const B = resolveBudgets({});
 
@@ -114,3 +114,28 @@ test('LR9 ref 仍有效但回写的版本与 ref 绑定的不一致 → STALE_CA
   assert.equal(res.response.error.code, 'STALE_CANDIDATE');
   assert.equal(engine.getState(SCOPE_A).selected.size, 0);
 });
+
+test('LR10 空串/null revision 的成功回执必须能真正折叠（协议与折叠共用同一归一）', async () => {
+  // 回归：协议层把 ''/null 归一为“未给出”，折叠层若仍按原始值比较，
+  // 就会得到 ok:true 但 candidate-revision-mismatch、selected 为空的静默丢工具。
+  for (const revision of ['', null]) {
+    const { engine } = await makeEngine();
+    const c = searchGlob(engine);
+    const input = { candidates: [{ ref: c.ref, revision }] };
+    const op = nextOpId();
+    const res = await engine.handleLoad(input, SCOPE_A, { operationId: op });
+    assert.equal(res.response.ok, true, `revision=${JSON.stringify(revision)} 的请求应成功`);
+    const out = engine.applyCanonicalPair(pair({
+      seq: nextSeqFor(engine), operationId: op, input, payload: res.response.data.receipt,
+    }), SCOPE_A);
+    assert.equal(out.applied, true, `revision=${JSON.stringify(revision)} 必须折叠成功：${out.reason}`);
+    assert.equal(engine.getState(SCOPE_A).selected.size, 1, '折叠后必须真正激活');
+    engine.dispose();
+  }
+});
+
+let seqCounter = 0;
+function nextSeqFor() {
+  seqCounter += 1;
+  return seqCounter;
+}

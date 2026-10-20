@@ -341,3 +341,42 @@ test('O21 缓存周期重置释放全部未决预留（沿用既有 resetCacheEp
   const after = await engine.handleLoad({ names: ['grep'] }, SCOPE_A, { operationId: nextOpId() });
   assert.equal(after.response.ok, true, `重置后预算必须释放：${JSON.stringify(after.response.error)}`);
 });
+
+test('O22 已冻结工具被撤权后可重新加载，不得因重复计费被拒', async () => {
+  const { engine } = await makeEngine({
+    bindings: sampleBindings(),
+    engineConfig: { budgets: { maxActiveTools: 1 } },
+  });
+  assert.equal((await commitLoad(engine, SCOPE_A, { names: ['glob'] })).applied, true);
+  const entry = engine.getCatalog().byName.get('glob')[0];
+  engine.recordAdvertisement(SCOPE_A, {
+    requestId: 'r1', toolId: entry.toolId, name: entry.name,
+    revision: entry.revision, schemaDigest: entry.schemaDigest, wire: entry.wire,
+  });
+  assert.equal(engine.getFrozenWire(SCOPE_A).length, 1, '前置：工具已冻结披露');
+
+  engine.invalidate(entry.toolId, 'temporarily-unavailable');
+  assert.equal(engine.getState(SCOPE_A).selected.size, 0, '撤权后执行授权失效');
+
+  const reload = await commitLoad(engine, SCOPE_A, { names: ['glob'] });
+  assert.equal(reload.response.ok, true, `重新加载必须放行：${JSON.stringify(reload.response.error)}`);
+  assert.equal(reload.applied, true, '重新加载必须恢复执行授权');
+  assert.equal(engine.getState(SCOPE_A).selected.size, 1);
+  engine.dispose();
+});
+
+test('O23 显式页大小上限必须约束默认值（省略 limit 也不例外）', async () => {
+  const listEngine = await makeEngine({ engineConfig: { budgets: { maxListLimit: 1 } } });
+  const page = listEngine.engine.handleList({ view: 'available', category: 'files' }, SCOPE_A);
+  assert.equal(page.ok, true);
+  assert.equal(page.data.names.length, 1, '默认值 20 不得越过显式上限 1');
+  assert.equal(page.data.truncated, true, '被上限截断必须如实标记');
+
+  const searchEngine = await makeEngine({ engineConfig: { budgets: { maxSearchLimit: 1 } } });
+  const hits = searchEngine.engine.handleSearch({ category: 'files', query: 'file' }, SCOPE_A);
+  assert.equal(hits.ok, true);
+  assert.equal(hits.data.candidates.length, 1, '默认值 5 不得越过显式上限 1');
+
+  listEngine.engine.dispose();
+  searchEngine.engine.dispose();
+});

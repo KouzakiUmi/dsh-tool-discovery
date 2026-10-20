@@ -7,7 +7,7 @@ import { resolveBudgets } from './budgets.mjs';
 import { buildCatalog, identityFingerprintOf, orderedNamesFor, resolveByName, resolveByToolId } from './catalog.mjs';
 import { buildCategoryCards, resolveCategory } from './categories.mjs';
 import { deepEqualCanonical, digestOf } from './canonical.mjs';
-import { createByteAccumulator } from './budgets.mjs';
+import { fitPrefixLength } from './budgets.mjs';
 import { createCursorStore, fitStateWithinBudget, paginateCategories, paginateNames, projectState } from './list.mjs';
 import { createRefStore } from './candidate-refs.mjs';
 import { DomainError, toDomainError } from './errors.mjs';
@@ -32,11 +32,10 @@ import { createText } from './locale.mjs';
 // threading it through every signature. setLocaleForDomain() is called by the
 // adapter at activation; tests call it directly to exercise both languages.
 import { domainText } from './locale.mjs';
-const text = domainText;
-const t = (path) => text.t(path);
 
 
 const MAX_SUMMARY_CODE_POINTS = 96;
+const jsonBytes = (value) => Buffer.byteLength(JSON.stringify(value), 'utf8');
 
 // 候选 ref 的定长形状:与 candidate-refs.mjs 的 mintOpaqueId(random, 'c_') 一致
 // (前缀 + byteLength×2 个 hex 字符,全是 ASCII)。预算判定必须发生在铸 ref 之前,
@@ -50,21 +49,24 @@ const REF_PLACEHOLDER = `c_${'0'.repeat(REF_BYTE_LENGTH * 2)}`;
  * @returns {import('./index.mjs').DiscoveryEngine}
  */
 export function createDiscoveryEngine(config) {
-  if (!isPlainObject(config)) throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'engineConfigNotObject']));
+  // 配置校验发生在显式 locale 解析之前：这里必须直接用 domainText（默认语言），
+  // 不能引用函数内稍后才声明的 `t` —— 那会让这些分支在 TDZ 里抛 ReferenceError，
+  // 使规定的 INCOMPATIBLE_COMPOSITION 在导出面上不可达。
+  if (!isPlainObject(config)) throw new DomainError('INCOMPATIBLE_COMPOSITION', domainText.t(['detail', 'engineConfigNotObject']));
   if ((config.protocolVersion ?? PROTOCOL_VERSION) !== PROTOCOL_VERSION) {
-    throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'protocolVersionUnsupported']));
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', domainText.t(['detail', 'protocolVersionUnsupported']));
   }
   if (config.capabilityKind && config.capabilityKind !== 'native') {
     throw new DomainError('INCOMPATIBLE_PRESENTATION');
   }
   if (!isPlainObject(config.categoryConfig)) {
-    throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'categoryConfigRequired']));
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', domainText.t(['detail', 'categoryConfigRequired']));
   }
   if (!isPlainObject(config.clock) || typeof config.clock.now !== 'function') {
-    throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'clockRequired']));
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', domainText.t(['detail', 'clockRequired']));
   }
   if (!isPlainObject(config.random) || typeof config.random.bytes !== 'function') {
-    throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'randomRequired']));
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', domainText.t(['detail', 'randomRequired']));
   }
 
   const budgets = resolveBudgets(config.budgets);
@@ -92,6 +94,12 @@ export function createDiscoveryEngine(config) {
   const explicitLocale = config.locale === undefined || config.locale === AUTO_LOCALE ? undefined : config.locale;
   const text = explicitLocale === undefined ? domainText : createText(explicitLocale);
   const t = (path) => text.t(path);
+  const listEnvelope = (data, nextKey) => okEnvelope('tool_list', 'list', data, text.t(['nextAction', nextKey]));
+  const measureListPage = (view, category, nextKey) => (page) => jsonBytes(listEnvelope(
+    view === 'categories'
+      ? { view, categories: page.pageItems, nextCursor: page.nextCursor, truncated: page.truncated }
+      : { category, view, names: page.pageItems, nextCursor: page.nextCursor, truncated: page.truncated }, nextKey,
+  ));
 
   const clock = config.clock;
   const refStore = createRefStore({ clock, random: config.random, ttlMs: budgets.candidateTtlMs });
@@ -219,9 +227,11 @@ export function createDiscoveryEngine(config) {
     // 尚未走到真实出站披露的 selected（还没冻结）按其选中时的 catalog 条目计字节，
     // 否则"加载成功但本轮还没发出去"的窗口会被免费。
     /** @type {Array<{wireBytes:number}>} */
-    const active = frozenWireList(st).map((f) => ({ wireBytes: f.bytes }));
+    const frozen = frozenWireList(st);
+    const frozenNames = new Set(frozen.map((f) => f.name));
+    const active = frozen.map((f) => ({ wireBytes: f.bytes }));
     for (const [toolId, selection] of st.selected) {
-      if (st.frozen.has(toolId)) continue;
+      if (st.frozen.has(toolId) || frozenNames.has(selection.name)) continue;
       const entry = resolveByToolId(catalog, toolId);
       // `resolveByToolId` 找不到时返回 **null**：判据必须是 `!entry`，
       // 写成 `entry === undefined` 会让 null 通过并在此处抛 TypeError。
@@ -234,7 +244,7 @@ export function createDiscoveryEngine(config) {
     for (const toolId of reserved) {
       if (st.frozen.has(toolId) || st.selected.has(toolId)) continue;
       const entry = resolveByToolId(catalog, toolId);
-      if (!entry) continue;
+      if (!entry || frozenNames.has(entry.name)) continue;
       active.push({ wireBytes: entry.wireBytes });
       reservedOnly.add(toolId);
     }
@@ -277,9 +287,10 @@ export function createDiscoveryEngine(config) {
           // 只增不减，长会话里会单独把整个视图顶穿，让"配了上限"变成永久报错；连诊断段裁空都装不下
           // 才明确失败。度量与出站同口径（JSON.stringify），并走文案表（数字并进 what）。
           const maxBytes = budgets.maxListResultBytes;
-          const fitted = fitStateWithinBudget(payload, maxBytes);
+          const fitted = fitStateWithinBudget(payload, maxBytes,
+            (data) => jsonBytes(listEnvelope(data, 'stateViewNoHidden')));
           if (fitted === null) {
-            const bytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
+            const bytes = jsonBytes(listEnvelope(payload, 'stateViewNoHidden'));
             throw new DomainError(
               'BUDGET_EXCEEDED',
               text.format(['detail', 'bytesOverBudget'], { what: `state view (${bytes} bytes > ${maxBytes})` }),
@@ -297,6 +308,7 @@ export function createDiscoveryEngine(config) {
           const orderDigest = catalog.orderDigestByView.get('categories:all') || 'empty';
           const page = paginateCategories({
             allCards: cards,
+            measurePage: measureListPage('categories', undefined, 'searchInCategory'),
             cursorStore,
             sessionId: scope.sessionId,
             view: 'categories',
@@ -335,6 +347,7 @@ export function createDiscoveryEngine(config) {
           // 顺序摘要取**这份名单自己的**摘要（它来自会话状态而非目录），名单一变旧游标即失效。
           const page = paginateNames({
             allNames,
+            measurePage: measureListPage('loaded', category, 'loadedMeansSelected'),
             cursorStore,
             sessionId: scope.sessionId,
             view: 'loaded',
@@ -358,6 +371,7 @@ export function createDiscoveryEngine(config) {
         const orderDigest = catalog.orderDigestByView.get(`available:${category}`) || 'empty';
         const page = paginateNames({
           allNames,
+          measurePage: measureListPage('available', category, 'searchAfterList'),
           cursorStore,
           sessionId: scope.sessionId,
           view: 'available',
@@ -393,24 +407,15 @@ export function createDiscoveryEngine(config) {
         const category = resolveCategory(req.category, catalog, config.categoryConfig);
         const st = requireState(scope);
 
-        const hits = runSearch(index, { query: req.query, category, limit: req.limit });
-        // 自然无关 → 零命中,ok=true,不凑 K
-        if (hits.length === 0) {
-          return okEnvelope('tool_search', 'search', {
-            catalogGeneration: catalog.generation,
-            category,
-            candidates: [],
-            truncated: false,
-          }, text.t(['nextAction', 'rewriteOrBrowse']));
-        }
-
-        const acc = createByteAccumulator(budgets.maxSearchResultBytes);
-        /** @type {any[]} */
-        const candidates = [];
-        let truncated = false;
-        for (const hit of hits) {
+        // 多取一条只用于判断截断；返回数量仍不超过请求 limit。
+        const hits = runSearch(index, { query: req.query, category, limit: req.limit + 1 });
+        const count = Math.min(hits.length, req.limit);
+        const cards = [];
+        const cardAt = (i) => {
+          if (cards[i]) return cards[i];
+          const hit = hits[i];
           const sel = st.selected.get(hit.entry.toolId);
-          const card = {
+          return cards[i] = {
             toolId: hit.entry.toolId,
             ref: REF_PLACEHOLDER,
             revision: hit.entry.revision,
@@ -420,24 +425,23 @@ export function createDiscoveryEngine(config) {
             matchReasons: hit.reasons,
             loaded: alwaysNames.has(hit.entry.name) || Boolean(sel && sel.revision === hit.entry.revision),
           };
-          // 先判字节、过了才铸 ref:被上限挡掉的那个候选,不该在 ref store 里留下
-          // 一条模型从未收到的引用(candidate-refs.mjs 注释里明确要避免的泄漏)。
-          if (!acc.tryAdd(JSON.stringify(card))) {
-            truncated = true;
-            break;
-          }
-          card.ref = refStore.issue(scope.sessionId, eligibilityGeneration, hit.entry.toolId, hit.entry.revision);
-          candidates.push(card);
-        }
-        if (candidates.length === 0) {
+        };
+        const envelopeFor = (candidates, length = candidates.length) => okEnvelope('tool_search', 'search', {
+          catalogGeneration: catalog.generation, category, candidates,
+          truncated: length < hits.length,
+        }, text.t(['nextAction', hits.length === 0 ? 'rewriteOrBrowse' : 'pickCandidateThenLoad']));
+        // 包含外壳、数组分隔与 nextAction；空命中同样必须满足完整响应限额。
+        const keep = fitPrefixLength(count, budgets.maxSearchResultBytes,
+          (n) => jsonBytes(envelopeFor([], n)), (i) => jsonBytes(cardAt(i)));
+        if (keep < 0 || (count > 0 && keep === 0)) {
           throw new DomainError('BUDGET_EXCEEDED', t(['detail', 'candidateCardOverByteBudget']), undefined, explicitLocale);
         }
-        return okEnvelope('tool_search', 'search', {
-          catalogGeneration: catalog.generation,
-          category,
-          candidates,
-          truncated,
-        }, text.t(['nextAction', 'pickCandidateThenLoad']));
+        const candidates = Array.from({ length: keep }, (_, i) => cardAt(i));
+        // 预算判定结束后才铸 ref，等长占位符与真实值的计量完全一致。
+        for (const card of candidates) {
+          card.ref = refStore.issue(scope.sessionId, eligibilityGeneration, card.toolId, card.revision);
+        }
+        return envelopeFor(candidates);
       } catch (e) {
         return failEnvelope('tool_search', 'search', e, scope);
       }
@@ -552,6 +556,16 @@ export function createDiscoveryEngine(config) {
 
       if (resolved.length === 0) throw new DomainError('INVALID_ARGS', t(['detail', 'nothingToLoad']), undefined, explicitLocale);
 
+      // 披露按原生名称占一个槽位，不能以换 toolId 绕过旧定义。
+      // schema 不同的重选在当前周期根本无法被投影，必须在产生 pending 前明确拒绝。
+      const frozenByName = new Map(frozenWireList(st).map((f) => [f.name, f]));
+      for (const { entry } of resolved) {
+        const frozen = frozenByName.get(entry.name);
+        if (frozen && frozen.schemaDigest !== entry.schemaDigest) {
+          throw new DomainError('COMPACTION_REQUIRED', undefined, undefined, explicitLocale);
+        }
+      }
+
       // 锁定本次验证快照(含资格代次)
       const genAtStart = eligibilityGeneration;
       const snapshot = resolved.map((r) => ({
@@ -573,12 +587,17 @@ export function createDiscoveryEngine(config) {
       const fresh = resolved.filter((r) => {
         const sel = st.selected.get(r.entry.toolId);
         if (sel && sel.revision === r.entry.revision) return false;
+        // 同名且 schema 相同的冻结 wire 已计费；绑定/技能换版不是新增 schema。
+        if (frozenByName.has(r.entry.name)) return false;
         return !reservedOnly.has(r.entry.toolId);
       });
       assertActiveBudget(fresh.map((r) => r.entry), alreadyActive, budgets);
-      // 优化 token: 仅为本会话尚未选中、且尚未在途预留的新增工具交付 skills 载荷;
-      // 已选或已预留同版本工具已在既有交互中提供过使用指南,避免在历史上下文重复灌入相同文本。
-      const skills = fresh.map((r) => projectSkill(r.entry));
+      // 技能交付与 schema 计费是两件事：冻结旧 wire 不证明新版本指南已经发过。
+      const skills = resolved.filter(({ entry }) => {
+        if (st.selected.get(entry.toolId)?.revision === entry.revision) return false;
+        return ![...pending.values()].some((op) => op.sessionId === scope.sessionId
+          && op.expectedReceipt?.selected?.some((s) => s.toolId === entry.toolId && s.revision === entry.revision));
+      }).map(({ entry }) => projectSkill(entry));
       assertSkillBudget(skills, budgets.maxSkillBytesPerLoad);
 
       // 提交前 recheck:资格代次 + 每项 revision 重算。变化则整批失败,绝不偷偷改选。
@@ -674,7 +693,10 @@ export function createDiscoveryEngine(config) {
       if (op) {
         // 热态:回执必须与登记的期望回执逐字一致(renderer/pruner 改写 → 拒)
         if (!deepEqualCanonical(op.expectedReceipt, pair?.result?.payload)) {
+          // 收口是操作级事实（迟到回执不得再折叠），预算预留则必须同步释放：
+          // 这条回执已经不会再被接受，留着 pending 只会让后续 load 误报 BUDGET_EXCEEDED。
           closeOperation(pair.call.operationId, scope.sessionId);
+          pending.delete(pair.call.operationId);
           const next = reducePair(st, { ...pair, result: { ...pair.result, rewrittenBy: 'receipt-mismatch' } }, {
             now: () => clock.now(), catalog,
           });
@@ -722,6 +744,20 @@ export function createDiscoveryEngine(config) {
       const st = requireState(scope);
       let next = recordAdvertisement(st, { ...rec, now: clock.now() });
       next = freezeTool(next, rec);
+      sessions.set(scope.sessionId, next);
+    },
+
+    /** 按历史首见次序恢复披露账本；绝不写 selected / advertised 或扩大当前资格。 */
+    restoreDisclosures(scope, records) {
+      if (disposed) return;
+      let next = { ...requireState(scope), frozen: new Map(), frozenOrder: 0 };
+      // adapter 提供 own 当前周期内已配对成功回执 + 实际 header 的同 digest 证据。
+      for (const rec of records) {
+        if (digestOf(rec.wire) !== rec.schemaDigest || rec.wire.name !== rec.name) {
+          throw new DomainError('INCOMPATIBLE_COMPOSITION', undefined, undefined, explicitLocale);
+        }
+        next = freezeTool(next, rec);
+      }
       sessions.set(scope.sessionId, next);
     },
 
@@ -886,7 +922,7 @@ export function createDiscoveryEngine(config) {
       }
       const sorted = pairs
         .filter((p) => isPlainObject(p) && typeof p.seq === 'number')
-        .sort((a, b) => a.seq - b.seq);
+        .sort((a, b) => (a.resultSeq ?? a.seq) - (b.resultSeq ?? b.seq));
       // 按 seq 去重(同 seq 只折叠第一次)
       /** @type {Set<number>} */
       const seenSeq = new Set();

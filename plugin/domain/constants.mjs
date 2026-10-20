@@ -89,6 +89,7 @@ export function errorCodes (locale) {
     CANDIDATE_UNAVAILABLE: { message: text.t(['error', 'CANDIDATE_UNAVAILABLE']), retryable: true, recovery: 'search_again' },
     STALE_CANDIDATE: { message: text.t(['error', 'STALE_CANDIDATE']), retryable: true, recovery: 'select_again' },
     SELECTION_CHANGED: { message: text.t(['error', 'SELECTION_CHANGED']), retryable: true, recovery: 'select_again' },
+    COMPACTION_REQUIRED: { message: text.t(['error', 'COMPACTION_REQUIRED']), retryable: false, recovery: 'wait_for_successful_compaction' },
     // 模型不得自主 unload：超预算是**拒绝新增**，已披露集合不会被淘汰腾位。
     // 恢复指引只能是"减少本次新增"或"等待用户/DSH 的一次成功压缩"，
     // 绝不能引导模型自行压缩或伪造 compaction 事件。
@@ -148,6 +149,10 @@ export const SYNONYM_GROUPS = Object.freeze([
     'by path', 'path pattern', 'file entries', 'file path', 'file name',
   ]),
   Object.freeze([
+    'read-file',
+    '读取文件', '读取文件内容', '读文件', 'read file', 'read a file', 'file body',
+  ]),
+  Object.freeze([
     'search-content',
     '搜正文', '全文搜索', '内容检索', '在正文', '正文里', '字符串', '内容中',
     'search content', 'grep', 'full text', 'inside files',
@@ -189,7 +194,7 @@ export const SYNONYM_GROUPS = Object.freeze([
   ]),
   Object.freeze([
     'office-docs',
-    '文档表格', '表格文件', '办公文档', 'excel', 'word', 'spreadsheet', 'office document',
+    '文档表格', '表格文件', '办公文档', '电子表格', 'excel', 'word', 'spreadsheet', 'office document',
     'office', 'document',
   ]),
   Object.freeze([

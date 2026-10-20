@@ -2,7 +2,7 @@
 // 四个 view 的名称/类别/状态投影 + opaque 游标分页。
 // 名称模式逐项**只有完整原生名称**:不附 description / summary / revision / schema / skill。
 // 游标绑定 {sessionId, view, category, eligibilityGeneration, offset, expiresAt, orderDigest}。
-import { createByteAccumulator, estimatedTokenCount } from './budgets.mjs';
+import { fitPrefixLength, estimatedTokenCount } from './budgets.mjs';
 import { canonicalJson } from './canonical.mjs';
 import { DomainError } from './errors.mjs';
 import { isNonEmptyString, isPlainObject, mintOpaqueId } from './util.mjs';
@@ -82,7 +82,8 @@ export function createCursorStore(deps) {
  * @param {{
  *   items: T[], cursorStore: any, sessionId: string, view: string, category: string,
  *   eligibilityGeneration: number, orderDigest: string, limit: number, budgets: any,
- *   now: number, cursor?: string, emptyBudgetMessagePath: string[], emptyBudgetDetails?: Record<string, unknown>
+ *   now: number, cursor?: string, emptyBudgetMessagePath: string[], emptyBudgetDetails?: Record<string, unknown>,
+ *   measurePage?: (page:{pageItems:T[],nextCursor:string|null,truncated:boolean})=>number
  * }} args
  * @returns {{ pageItems: T[], nextCursor: string|null, truncated: boolean }}
  */
@@ -101,37 +102,26 @@ function paginateItems(args) {
     offset = rec.offset;
   }
 
-  const acc = createByteAccumulator(budgets.maxListResultBytes);
-  /** @type {T[]} */
-  const pageItems = [];
-  let idx = offset;
-  let truncated = false;
-
-  for (; idx < items.length; idx++) {
-    const item = items[idx];
-    if (!acc.tryAdd(JSON.stringify(item))) {
-      if (pageItems.length === 0) {
-        throw new DomainError('BUDGET_EXCEEDED', t(emptyBudgetMessagePath), emptyBudgetDetails);
-      }
-      truncated = true;
-      break;
-    }
-    pageItems.push(item);
-    if (pageItems.length >= limit) {
-      idx += 1;
-      if (idx < items.length) truncated = true;
-      break;
-    }
+  // 与 createCursorStore 的 p_ + 16 字节 hex 同形；确认页大小后才真正铸游标。
+  const placeholder = `p_${'0'.repeat(32)}`;
+  const count = Math.min(limit, items.length - offset);
+  const pageAt = (n, pageItems = items.slice(offset, offset + n)) => ({ pageItems,
+    nextCursor: n > 0 && offset + n < items.length ? placeholder : null,
+    truncated: offset + n < items.length });
+  const measure = args.measurePage ?? ((page) => Buffer.byteLength(JSON.stringify(page), 'utf8'));
+  const keep = fitPrefixLength(count, budgets.maxListResultBytes,
+    (n) => measure(pageAt(n, [])),
+    (i) => Buffer.byteLength(JSON.stringify(items[offset + i]), 'utf8'));
+  if (keep < 0 || (count > 0 && keep === 0)) {
+    throw new DomainError('BUDGET_EXCEEDED', t(emptyBudgetMessagePath), emptyBudgetDetails);
   }
-
-  let nextCursor = null;
-  if (truncated && pageItems.length > 0) {
-    nextCursor = cursorStore.issue({
-      sessionId, view, category, eligibilityGeneration, offset: offset + pageItems.length, orderDigest,
+  const page = pageAt(keep);
+  if (page.nextCursor !== null) {
+    page.nextCursor = cursorStore.issue({
+      sessionId, view, category, eligibilityGeneration, offset: offset + keep, orderDigest,
     });
   }
-
-  return { pageItems, nextCursor, truncated };
+  return page;
 }
 
 /**
@@ -227,10 +217,10 @@ export function navigationFootprint(cards) {
  *
  * @param {{invalidated?: unknown[]}} payload
  * @param {number|null} maxBytes
+ * @param {(payload:object)=>number} [sizeOf] 引擎传入完整成功外壳的字节度量。
  * @returns {object|null}
  */
-export function fitStateWithinBudget(payload, maxBytes) {
-  const sizeOf = (value) => Buffer.byteLength(JSON.stringify(value), 'utf8');
+export function fitStateWithinBudget(payload, maxBytes, sizeOf = (value) => Buffer.byteLength(JSON.stringify(value), 'utf8')) {
   if (maxBytes === null) return payload;
   if (sizeOf(payload) <= maxBytes) return payload;
   const invalidated = Array.isArray(payload.invalidated) ? payload.invalidated : [];

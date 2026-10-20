@@ -597,3 +597,52 @@ PTC 加载回执使用宿主公开 `tool/ptc-dispatch-start` → `tool/ptc-dispa
 缺失契约或实际出站 SDK 不符时明确拒绝，不退回全量 SDK。隔离组合门禁核验了本机安装内
 `dsh-tools` / `dsh-agent-loop` `0.2.1-alpha.2` 的实际 SDK、transport、日志和出站请求；
 模型与程序 backend 是声明式 fixture，未据此声明真实 Node/Python worker 或其它 Core 版本已验收。
+
+## 14. 状态契约修订（未发布工作树）
+
+本节更新上文的版本迁移、提交次序与字节口径；不改变外部协议版本 2，不等于真实宿主或产品验收。
+
+### 14.1 当前周期内的版本迁移
+
+- native 冻结槽位按原生名称识别，换 `toolId` 不能替换同名已冻结 schema。
+- 当前 schemaDigest 与冻结定义不同：整批 `tool_load` 返回 `COMPACTION_REQUIRED`，不产生 pending，
+  `retryable=false`、`recovery=wait_for_successful_compaction`。解除点仅为用户或 DSH 的成功压缩；
+  重试或换新 ref 无法解除，不引导模型自行压缩。
+- schemaDigest 相同的绑定重连、技能更新仍可显式加载。schema 按冻结名称槽位只计一次；
+  技能按当前选择/在途回执的精确版本独立去重，新版本指南仍交付并接受技能字节校验。
+
+### 14.2 披露账本与执行选择分别恢复
+
+native 冷恢复只在 own 当前周期内恢复披露：先验证配对 load 的最终成功、回执形状与操作归属、
+输入路径及请求子集，再要求后续真实 header 包含同名且同 schemaDigest 的 wire。只出现 header
+或失败结果不构成按需冻结资格；继承段与成功压缩前的段不恢复。
+
+这份账本保留历史 wire 及首见顺序，即使当前工具已移除或换版。它不写 selected/advertised，
+不扩大当前 scope 资格。执行选择继续由当前目录完整重算；冻结定义与当前选择冲突时不激活。
+
+### 14.3 调用归属与提交次序分离
+
+内部 `CanonicalPair.seq` 继续指向 call，供 sourceEventSeqs 归属与压缩边界校验；新增可选
+`resultSeq` 指向最终结果事件，必须为安全整数且大于 call seq。实际 adapter 总是提供它，
+热态和冷恢复均按结果提交次序更新 selected 与 lastAppliedSeq，因此多个在途 load 逆序结算不再丢项。
+旧内核调用方省略该字段时保留原 call-seq 兼容语义，不声称该兼容路径能处理逆序结算。
+
+### 14.4 完整响应限额与搜索准入
+
+`maxListResultBytes` / `maxSearchResultBytes` 度量 JSON.stringify 后的完整成功外壳 UTF-8 字节：
+名称/卡片、数组分隔、分页游标、truncated 和 nextAction 全部计入。state 只裁 invalidated；
+空页与零命中也计量。连最小成功响应都放不下即明确失败。错误外壳本身不受该成功响应限额约束，
+否则极小限额将无法交付完整的结构化错误；宿主额外的消息包装不属于此处度量。
+
+分页与候选先用等长不透明引用占位符确定可交付的最大完整前缀，再铸实际 cursor/ref。
+启用字节上限时逐项累计 JSON 字节与数组分隔符，只度量空数组外壳，不先序列化整页；
+项本身累计超限后停止。完整最后一页可能省去游标，仍按该页实际元数据判定，避免虚拟游标误拒。
+
+搜索必须具有名称、同义词、摘要或技能的工具级命中证据；类别词只能辅助排序，不能单独制造候选。
+该准入规则不等于检索质量指标已达标。
+
+### 14.5 保留的 PTC 缺口
+
+本轮不修改 PTC SDK 的渲染/持久化策略。SDK 仍取当前有效选择，不能保证 native 式的冻结内容、
+稳定追加顺序或跨重启冻结；因此文档中的严格 wire 冻结承诺限于 native。共享的结果提交次序修复
+同时覆盖 PTC 子调用，但不能据此称 PTC 披露冻结已完成。

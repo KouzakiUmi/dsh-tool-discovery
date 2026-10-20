@@ -80,16 +80,38 @@ export function estimatedTokenCount(text) {
 /**
  * 检查 UTF-8 字节硬限。`maxBytes` 为 null 时**不限制**（上限已关闭）。
  * 超限抛 BUDGET_EXCEEDED(调用方应先减项数)。
- * @param {string} text
+ * @param {string} value
  * @param {number|null} maxBytes
  * @param {string} what 仅用于 details
  */
-export function assertBytes(text, maxBytes, what) {
-  const bytes = utf8Bytes(text);
+export function assertBytes(value, maxBytes, what) {
+  const bytes = utf8Bytes(value);
   if (maxBytes !== null && bytes > maxBytes) {
     throw new DomainError('BUDGET_EXCEEDED', text.format(['detail', 'bytesOverBudget'], { what }), { bytes, maxBytes });
   }
   return bytes;
+}
+
+/**
+ * Fit complete items using cumulative serialized bytes and the empty envelope at
+ * each prefix. Stop once item bytes alone exceed the cap: even a final page
+ * without a cursor cannot fit then. This preserves terminal metadata savings
+ * without ever serializing the whole candidate page first.
+ * @param {number} count
+ * @param {number|null} maxBytes
+ * @param {(count:number)=>number} envelopeBytesAt Empty array, with metadata for count.
+ * @param {(index:number)=>number} itemBytesAt Serialized JSON bytes of one item.
+ */
+export function fitPrefixLength(count, maxBytes, envelopeBytesAt, itemBytesAt) {
+  if (maxBytes === null) return count;
+  let best = envelopeBytesAt(0) <= maxBytes ? 0 : -1;
+  let itemBytes = 0;
+  for (let n = 1; n <= count; n++) {
+    itemBytes += itemBytesAt(n - 1) + (n > 1 ? 1 : 0);
+    if (itemBytes > maxBytes) break;
+    if (envelopeBytesAt(n) + itemBytes <= maxBytes) best = n;
+  }
+  return best;
 }
 
 /**
