@@ -2,7 +2,7 @@
 // 事件与渲染入口为声明式 fixture；不冒称真实 Loader/provider 已验证。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeEngine, SCOPE_A, sampleBindings, binding, commitLoad } from './helpers.mjs';
+import { makeEngine, SCOPE_A, sampleBindings, binding, commitLoad, fakeClock } from './helpers.mjs';
 import { createJournal } from '../../adapters/dsh/journal.mjs';
 import { createProjection } from '../../adapters/dsh/projection.mjs';
 
@@ -143,6 +143,41 @@ test('DI6 有效结果逆序提交：热态与同一日志的冷恢复必须一�
   assert.equal(engine.getPendingSize(), 0);
   journal.onEvent({ ...ra, seq: 5 });
   assert.deepEqual([...engine.getState(SCOPE_A).selected.values()].map((s) => s.name), hot, '重复 result 不二次认领');
+});
+
+test('DI6b 候选 ref 在已接纳 load 等待期间过期：提交与冷恢复仍一致', async (t) => {
+  const clock = fakeClock();
+  const { engine } = await makeEngine({ clock });
+  t.after(() => engine.dispose());
+  const candidate = engine.handleSearch({ category: 'files', query: 'glob' }, SCOPE_A).data.candidates[0];
+  const input = { candidates: [{ ref: candidate.ref }] };
+  const operationId = 'op_candidate_expiry';
+  const loaded = await engine.handleLoad(input, SCOPE_A, { operationId });
+  assert.equal(loaded.response.ok, true);
+
+  // Ref 的 TTL 限制新的候选请求，不应撤销已经接纳且等待 canonical 回执的操作。
+  clock.advance(900_000);
+  const retry = await engine.handleLoad(input, SCOPE_A, { operationId: 'op_candidate_expired_retry' });
+  assert.equal(retry.response.ok, false);
+  assert.equal(retry.response.error.code, 'CANDIDATE_UNAVAILABLE');
+  const canonical = {
+    seq: 1,
+    call: { operationId, tool: 'tool_load', input },
+    result: { isError: false, ok: true, payload: loaded.response.data.receipt },
+  };
+  const hot = engine.applyCanonicalPair(canonical, SCOPE_A);
+  assert.equal(hot.applied, true, hot.reason);
+
+  const { engine: cold } = await makeEngine({ newSessionMode: 'restoring' });
+  t.after(() => cold.dispose());
+  const restored = cold.restore([canonical], SCOPE_A);
+  assert.equal(restored.applied, 1);
+  assert.deepEqual(
+    [...cold.getState(SCOPE_A).selected.values()].map(({ toolId, revision }) => ({ toolId, revision })),
+    [...engine.getState(SCOPE_A).selected.values()].map(({ toolId, revision }) => ({ toolId, revision })),
+  );
+  assert.equal(engine.getState(SCOPE_A).integrity.coldCandidateRestores, 0);
+  assert.equal(cold.getState(SCOPE_A).integrity.coldCandidateRestores, 1);
 });
 
 test('DI7 冻结 schema 不等于已发送新技能：技能换版必须交付并计入技能限额', async (t) => {

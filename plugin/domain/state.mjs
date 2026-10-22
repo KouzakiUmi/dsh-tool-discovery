@@ -289,25 +289,29 @@ export function reducePair(state, pair, ctx) {
     }
     if (receipt.selected.length > requestedNames.length) return reject('selected-exceeds-request');
   } else {
-    // 判据 7:候选路径 —— 热态交叉校验 ref;冷态只重算定义并计数
+    // 判据 7:候选路径。新请求的 ref 在 handleLoad 接纳时已验证；热态已登记操作
+    // 还会逐字匹配期望回执，因此同一资格代次内折叠不能再次要求短期 ref 仍未过期。
+    // 无已接纳操作或资格代次已变化的热态调用仍交叉校验 ref；冷恢复按受信任历史重算定义并计数。
     const refs = /** @type {any[]} */ (input.candidates);
     if (receipt.selected.length > refs.length) return reject('selected-exceeds-request');
-    if (typeof ctx.resolveRef === 'function') {
-      const resolved = [];
-      for (const c of refs) {
-        const r = ctx.resolveRef(c.ref);
-        if (!r) return reject('candidate-ref-unresolvable');
-        // 与 protocol.normalizeCandidateRevision 同一口径：''/null 是“未给出”，
-        // 不是“断言 version 为空串”。两边分叉会让成功回执在折叠时静默作废。
-        const claimedRevision = normalizeCandidateRevision(c.revision);
-        if (claimedRevision !== undefined && r.revision !== claimedRevision) return reject('candidate-revision-mismatch');
-        resolved.push(r.toolId);
+    if (ctx.candidateAcceptedAtAdmission !== true) {
+      if (typeof ctx.resolveRef === 'function') {
+        const resolved = [];
+        for (const c of refs) {
+          const r = ctx.resolveRef(c.ref);
+          if (!r) return reject('candidate-ref-unresolvable');
+          // 与 protocol.normalizeCandidateRevision 同一口径：''/null 是“未给出”，
+          // 不是“断言 version 为空串”。两边分叉会让成功回执在折叠时静默作废。
+          const claimedRevision = normalizeCandidateRevision(c.revision);
+          if (claimedRevision !== undefined && r.revision !== claimedRevision) return reject('candidate-revision-mismatch');
+          resolved.push(r.toolId);
+        }
+        for (const s of receipt.selected) {
+          if (!resolved.includes(s.toolId)) return reject('selected-not-from-candidate');
+        }
+      } else {
+        next.integrity.coldCandidateRestores += 1;
       }
-      for (const s of receipt.selected) {
-        if (!resolved.includes(s.toolId)) return reject('selected-not-from-candidate');
-      }
-    } else {
-      next.integrity.coldCandidateRestores += 1;
     }
   }
 

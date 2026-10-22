@@ -1,6 +1,6 @@
 # 05 · 当前状态
 
-更新日期：**2026-10-21**（Asia/Hong_Kong）。对应源码 manifest `0.4.3`，整合已发布主线 `c1709d3` 与后续业务修复；本批仅作 GitHub 构建分发，不代表新 npm 正式版。
+更新日期：**2026-10-22**（Asia/Hong_Kong）。对应源码 manifest `0.4.3`，整合已发布主线 `c1709d3` 与后续业务修复；本批仅作 GitHub 构建分发，不代表新 npm 正式版。
 现行行为见 [00 当前实现契约](<00-current-contract.md>)，验收判据见 [03](<03-implementation-and-acceptance.md>)。
 本文不登记未经重新核验的远端最新发布、STORE 收录或在线安装状态。
 
@@ -36,7 +36,7 @@
 游标测试只在同步构造期观察原生 Map 分配并立即恢复全局，不替换业务方法；证明记录数回收，不是 RSS/TTFT 实测。前轮 VM client 测试也不是 React/DOM 渲染。生产 registry 仍为 `skill:null`。
 精确 portable 命令见[开发指南](<../README.md#portable-unit-subset>)；本次整合日志为私有 `.probe/publish-github-20261021-portable.log`。整合前 533 项、红转绿和负控制日志仍保留原文件，不冒充本次整合结果。
 
-**单列但未修**：候选在 ref 有效时已被 load 接纳，ref 过期后的成功回执可能被热态拒绝、却在冷恢复中被选中。人工反例已复现 0/1 的选择差异；本轮保留现有提交校验，不声称所有热冷历史均已一致。检索通用动词误召回与 PTC SDK 冻结也仍未闭合。
+候选 ref 在 `tool_load` 接纳时校验；已接纳操作在资格代次未变时以逐字匹配的 canonical 回执提交，不因等待期间 ref 到期而撤销。DI6b 回归覆盖 ref 到期后的热态提交与冷恢复一致性；目录资格变更仍会使旧候选失效。该修复不解决检索通用动词误召回或 PTC SDK 冻结。
 `npm test` 全量、真实 Loader composition、质量评分、真实 provider、当前 GUI 与安装均**未在本轮执行**。
 
 ### 0.3 历史测试不等于本轮通过

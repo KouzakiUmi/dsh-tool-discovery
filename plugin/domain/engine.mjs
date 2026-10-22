@@ -654,6 +654,7 @@ export function createDiscoveryEngine(config) {
         operationId: ctx.operationId,
         // 预算需要按会话隔离统计未决预留（pending 本身是 engine 全局的），故带上归属会话。
         sessionId: scope.sessionId,
+        eligibilityGeneration: genAtStart,
         action: /** @type {const} */ ('load'),
         selectionSource,
         input: raw,
@@ -714,11 +715,18 @@ export function createDiscoveryEngine(config) {
         }
         pending.delete(pair.call.operationId);
       }
+      // 候选 ref 在 handleLoad 入队前已解析并校验。已登记操作的期望回执又与本次
+      // canonical 结果逐字一致，因此同一资格代次内不应因短期 ref 在等待期间过期而撤销它。
+      // 资格代次若已变化，仍走当前 ref 解析路径拒绝旧候选，保持目录变更的既有语义。
+      const candidateAcceptedAtAdmission = op?.action === 'load'
+        && op.selectionSource === 'candidate'
+        && op.eligibilityGeneration === eligibilityGeneration;
       const resolver = {
         now: () => clock.now(),
         catalog,
         protectedToolIds: protectedToolIdsNow(),
         protectedNames: tolerantLoadProtected ? strictProtectedNames : protectedNames,
+        candidateAcceptedAtAdmission,
         resolveRef: (ref) => {
           try {
             const rec = refStore.resolve(ref, scope.sessionId, eligibilityGeneration, clock.now());
