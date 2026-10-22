@@ -180,6 +180,26 @@ test('DI6b 候选 ref 在已接纳 load 等待期间过期：提交与冷恢复�
   assert.equal(cold.getState(SCOPE_A).integrity.coldCandidateRestores, 1);
 });
 
+test('DI6c 已接纳 operationId 配上不同 canonical candidate input 不得跳过 ref 归属核验', async (t) => {
+  const { engine } = await makeEngine();
+  t.after(() => engine.dispose());
+  const glob = engine.handleSearch({ category: 'files', query: 'glob' }, SCOPE_A).data.candidates[0];
+  const grep = engine.handleSearch({ category: 'files', query: 'grep' }, SCOPE_A).data.candidates[0];
+  const admittedInput = { candidates: [{ ref: glob.ref }] };
+  const operationId = 'op_candidate_input_mismatch';
+  const loaded = await engine.handleLoad(admittedInput, SCOPE_A, { operationId });
+  assert.equal(loaded.response.ok, true);
+
+  const out = engine.applyCanonicalPair({
+    seq: 1,
+    call: { operationId, tool: 'tool_load', input: { candidates: [{ ref: grep.ref }] } },
+    result: { isError: false, ok: true, payload: loaded.response.data.receipt },
+  }, SCOPE_A);
+  assert.equal(out.applied, false);
+  assert.equal(out.reason, 'selected-not-from-candidate');
+  assert.equal(engine.getState(SCOPE_A).selected.size, 0);
+});
+
 test('DI7 冻结 schema 不等于已发送新技能：技能换版必须交付并计入技能限额', async (t) => {
   const h = await loadedHistory(t);
   const updated = sampleBindings().map((b) => b.name !== 'glob' ? b : { ...b,
