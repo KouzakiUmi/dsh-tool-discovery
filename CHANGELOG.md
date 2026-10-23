@@ -28,6 +28,32 @@ what is verified, what is unverified, and what this version refuses to support �
 The entries below are post-v0.4.3 source changes. Green main builds publish `build-<sha>` assets
 independently; those assets do not imply a new npm release.
 
+- Optimize request-path hot spots without changing observable semantics. Canonical JSON builds its
+  output by string concatenation and tracks error paths in place instead of copying a path array at
+  every node. Registry binding generation reuses the previous canonical digest when the definition
+  instance and its plain serialization are unchanged; the serialization probe still detects in-place
+  schema rewrites, so binding-generation semantics are identical. The journal advertisement pass
+  skips entries whose recorded advertisement already matches the pass field-for-field (including the
+  request id consumed by `TOOL_NOT_ADVERTISED`). Names-drift diagnostics compute differences with
+  sets instead of `includes` scans, and the guard's core-name lookups use a prebuilt set. Local
+  micro-benchmark (`.probe`, Node 24.13): `bindingsFor` over 200 unchanged bindings drops from
+  ~4.3 ms to ~0.8 ms per tools/change; single-schema digest and receipt comparison get ~20% faster.
+  All 543 portable unit tests pass unchanged.
+- Improve lexical search ranking. Field coverage is now rarity-weighted: document frequencies are
+  computed once per index build, so a broad common term (`file`, `list`) no longer contributes the
+  same coverage as a precise rare one. Synonym concepts accumulate per matched concept — concepts
+  triggered by the tool's own name count at full weight, summary-only hits at half — so
+  "manage-everything" summaries can no longer tie and outrank the tool whose name is the intent.
+  The controlled synonym table gains ten high-frequency intent groups (delete/move/copy, archive,
+  processes, environment variables, logs, time zones, database queries, scheduled tasks), and
+  English stemming handles `ies` plurals and doubled-consonant gerunds (`running`→`run`).
+  Word-order symmetry ("file files" ≡ "files file") is preserved and regression-tested.
+- The native and PTC guard branches share one admission chain (same checks in the same order with
+  the same messages and the same runtime-resolution timing); only presentation-specific entry
+  admission (`run_code`, entry names) remains branch-local. PTC denial diagnostics now include the
+  `visibility` field, aligning host-log payloads with the native branch; model-visible rejection
+  text is unchanged.
+
 - Bind pending-budget reservations to every version in their atomic receipt. If any definition was
   removed or revised, stop billing that whole uncommittable batch rather than reserving current bytes
   by tool ID. This prevents oversized replacement schemas borrowing an old reservation and avoids

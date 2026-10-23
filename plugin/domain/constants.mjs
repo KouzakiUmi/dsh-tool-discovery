@@ -216,6 +216,60 @@ export const SYNONYM_GROUPS = Object.freeze([
     '查数据', '单位换算', '换算', '转换', 'convert', 'unit', 'numeric transform',
     'convert numeric',
   ]),
+  // ---- 2026-10 扩充：删除/移动/复制、压缩解压、进程/环境变量/日志、
+  // 时间转换、数据库、定时任务是高频意图，此前词表全缺（中文查询唯一的
+  // 桥就是这张表）。触发词保持受控短语，避免单字/双字母误命中。
+  Object.freeze([
+    'delete-file',
+    '删除文件', '删掉文件', '移除文件', '删除数据', 'delete file', 'remove file',
+    'delete a file', 'file deletion',
+  ]),
+  Object.freeze([
+    'move-rename',
+    '移动文件', '移动到', '重命名', '改名', '换个名字', 'move file', 'rename file',
+    'rename', 'move a file',
+  ]),
+  Object.freeze([
+    'copy-file',
+    '复制文件', '拷贝文件', '复制一份', 'copy file', 'duplicate file', 'make a copy',
+  ]),
+  Object.freeze([
+    'archive-extract',
+    '压缩文件', '解压', '解压缩', '打包', '归档', 'compress file', 'extract file',
+    'archive file', 'unzip', 'zip a', 'tar',
+    // 注意不给裸词 'archive'：网页存档/邮件归档（web archive、archived emails）是
+    // 另一种"归档"，裸词会把它们误吸进"解压压缩包"概念。
+  ]),
+  Object.freeze([
+    'process-control',
+    '查看进程', '杀进程', '结束进程', '进程列表', 'process list', 'kill process',
+    'running process', 'list processes',
+  ]),
+  Object.freeze([
+    'env-var',
+    '环境变量', '读取环境变量', '设置环境变量', 'environment variable', 'env var',
+    // 注意不给裸词 'environment'："运行环境/社区环境"类描述会误触发，只收短语。
+  ]),
+  Object.freeze([
+    'log-view',
+    '看日志', '查看日志', '运行日志', '日志文件', '日志内容', 'log file', 'view logs',
+    'read logs', 'tail log', 'application log',
+  ]),
+  Object.freeze([
+    'time-convert',
+    '时间戳', '时区', '时间转换', '换算时间', '格式化时间', 'timestamp', 'timezone',
+    'time zone', 'convert time', 'format time', 'date format',
+  ]),
+  Object.freeze([
+    'database-query',
+    '数据库', '执行查询', '查询表', '连接数据库', 'database query', 'run sql',
+    'execute sql', 'sql query', 'database table', 'connect to database',
+  ]),
+  Object.freeze([
+    'schedule-task',
+    '定时任务', '计划任务', '定期执行', '每隔一段时间', 'scheduled task',
+    'schedule task', 'cron job', 'run periodically', 'periodic task',
+  ]),
 ]);
 
 /** 同义词扩展触发词 → 概念,运行时构建(只读)。 */

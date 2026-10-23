@@ -9,9 +9,7 @@ import { createHash } from 'node:crypto';
  * @returns {string}
  */
 export function canonicalJson(value) {
-  const out = [];
-  write(value, out, []);
-  return out.join('');
+  return write(value, '', []);
 }
 
 /**
@@ -39,39 +37,34 @@ export function deepEqualCanonical(a, b) {
 
 /**
  * @param {unknown} value
- * @param {string[]} path
- * @param {string[]} out
+ * @param {string} out 已累积的规范 JSON 前缀
+ * @param {Array<string|number>} path 深度轨迹。只在错误信息里使用；递归采用
+ *   push/pop 而不是每节点 `[...path, k]` 复制 —— digest 在 journal/registry/
+ *   ptc 的每次对账与每个 tools/change 上都跑，逐节点复制是 O(深度²) 的纯浪费，
+ *   且 join 时数字下标与字符串下标产出完全相同的错误文本。
+ * @returns {string}
  */
 function write(value, out, path) {
-  if (value === null) {
-    out.push('null');
-    return;
-  }
+  if (value === null) return out + 'null';
   const t = typeof value;
-  if (t === 'boolean') {
-    out.push(value ? 'true' : 'false');
-    return;
-  }
+  if (t === 'boolean') return out + (value ? 'true' : 'false');
   if (t === 'number') {
     if (!Number.isFinite(value)) throw new Error(`canonicalJson: non-finite number at ${path.join('.')}`);
     // -0 与 0 在 JSON 中同形,统一为 0 以保证 digest 稳定
-    out.push(Object.is(value, -0) ? '0' : JSON.stringify(value));
-    return;
+    return out + (Object.is(value, -0) ? '0' : JSON.stringify(value));
   }
-  if (t === 'string') {
-    out.push(JSON.stringify(value));
-    return;
-  }
+  if (t === 'string') return out + JSON.stringify(value);
   if (Array.isArray(value)) {
-    out.push('[');
+    out += '[';
     for (let i = 0; i < value.length; i++) {
-      if (i > 0) out.push(',');
+      if (i > 0) out += ',';
       const item = value[i];
       if (item === undefined) throw new Error(`canonicalJson: undefined array item at ${path.join('.')}[${i}]`);
-      write(item, out, [...path, String(i)]);
+      path.push(i);
+      out = write(item, out, path);
+      path.pop();
     }
-    out.push(']');
-    return;
+    return out + ']';
   }
   if (t === 'object') {
     const proto = Object.getPrototypeOf(value);
@@ -79,18 +72,20 @@ function write(value, out, path) {
       throw new Error(`canonicalJson: non-plain object at ${path.join('.')}`);
     }
     const keys = Object.keys(/** @type {object} */ (value)).sort();
-    out.push('{');
+    out += '{';
     let first = true;
     for (const k of keys) {
       const v = /** @type {Record<string, unknown>} */ (value)[k];
       if (v === undefined) continue; // 对象中 undefined 等价于缺省,不参与 digest
-      if (!first) out.push(',');
+      if (!first) out += ',';
       first = false;
-      out.push(JSON.stringify(k), ':');
-      write(v, out, [...path, k]);
+      out += JSON.stringify(k);
+      out += ':';
+      path.push(k);
+      out = write(v, out, path);
+      path.pop();
     }
-    out.push('}');
-    return;
+    return out + '}';
   }
   throw new Error(`canonicalJson: unsupported type ${t} at ${path.join('.')}`);
 }

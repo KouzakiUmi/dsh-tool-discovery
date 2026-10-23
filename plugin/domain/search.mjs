@@ -81,11 +81,33 @@ function stemForms(token) {
   const forms = [];
   // 多个后缀规则独立生效(如 'files' 同时得到 'file' 与 'fil' 的近形),
   // 不用 else-if,避免 'es' 分支吞掉 's' 分支。
-  if (token.length > 4 && token.endsWith('ing')) forms.push(token.slice(0, -3));
-  if (token.length > 4 && token.endsWith('ed')) forms.push(token.slice(0, -2));
+  if (token.length > 4 && token.endsWith('ing')) pushWithUnwrap(forms, token.slice(0, -3));
+  if (token.length > 4 && token.endsWith('ed')) pushWithUnwrap(forms, token.slice(0, -2));
+  if (token.length > 3 && token.endsWith('ies')) forms.push(`${token.slice(0, -3)}y`);
   if (token.length > 3 && token.endsWith('es')) forms.push(token.slice(0, -2));
   if (token.length > 3 && token.endsWith('s') && !token.endsWith('ss')) forms.push(token.slice(0, -1));
   return forms;
+}
+
+/**
+ * ing/ed 剥离后把**双写辅音**还原一并收录:'running' 同时给 'runn' 与 'run'、
+ * 'stopped' 给 'stopp' 与 'stop'。守卫三条：
+ *   * ll/ss/ff/zz 不是屈折双写（fall/pull/class/buzz），不剥；
+ *   * 双元音词尾（seeing→'see'、freeing→'fre'）不是双写，不剥；
+ *   * 剥出的形态落在停用词表上（inning→'in'、upping→'up'）时**必须拒绝** ——
+ *     停用词只在基元层整词丢弃，从词干后门回来的停用词会让 "inning" 命中
+ *     一切摘要里带 " in " 的文档，击穿"自然无关查询零命中"。
+ * @param {string[]} forms
+ * @param {string} form
+ */
+function pushWithUnwrap(forms, form) {
+  forms.push(form);
+  const n = form.length;
+  if (n < 3) return;
+  const c = form[n - 1];
+  if (c !== form[n - 2] || 'lsfz'.includes(c) || 'aeiou'.includes(c)) return;
+  const unwrapped = form.slice(0, -1);
+  if (!QUERY_STOPWORDS.has(unwrapped)) forms.push(unwrapped);
 }
 
 /**
@@ -127,77 +149,124 @@ export function synonymConcepts(text) {
 /**
  * 查询有效词分组:停用词在基元层整词丢弃(连同其词形派生),
  * 其余词的词形变体归为一组,保证"一个词只算一次覆盖",覆盖比例才可比。
+ *
+ * 分组用 **union-find 连通分量**：token 与它的每个词干形连一条边，最终的组就是
+ * 图的连通分量。此前用"首建组 + 首个命中的词形归并"，组结构依赖词形**首现顺序**
+ * —— "file filing files" 与 "files file filing" 会得到不同的组划分（跨组共享词形），
+ * 稀有度计权把这个隐性差异放大成了可见分差；连通分量划分只由词集合决定，对词序
+ * 天然不变。索引 Map 保证 O(L)（此前 8000 个 CJK 字符的 O(L²) 路径要 729ms）。
+ *
+ * 返回顺序按**组内最小 token** 字典序规范化：组的覆盖贡献是浮点求和，求和顺序
+ * 跟随组序 —— 不规范化时重排查询会差出 1 ULP，逐分一致的不变量就破了。
  * @param {string} query
  * @returns {Array<Set<string>>}
  */
 function queryTermGroups(query) {
-  /** @type {Array<Set<string>>} */
-  const groups = [];
-  /**
-   * token/词形 → 它所属的组。
-   *
-   * 为什么不是 `groups.find(g => g.has(token))`：那是**对不断增长的数组**做线性扫描，
-   * distinct token 数随查询长度线性增长 ⇒ 整段是 O(L²)。实测 8000 个 CJK 字符要 729ms，
-   * 而查询长度默认没有上限（见 constants.mjs 的 maxQueryCodePoints），等于给了一条
-   * 用一句话把宿主事件循环按住不放的路径。用索引后同样的查询是 O(L)。
-   */
-  const owner = new Map();
+  /** @type {Map<string, string>} token/词形 → union-find 父指针 */
+  const parent = new Map();
+  const find = (t) => {
+    let root = t;
+    while (parent.get(root) !== root) root = parent.get(root);
+    // 路径压缩：长查询里把链压平，避免退化回 O(L²)。
+    let cur = t;
+    while (parent.get(cur) !== root) {
+      const next = parent.get(cur);
+      parent.set(cur, root);
+      cur = next;
+    }
+    return root;
+  };
+  const union = (a, b) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
   for (const token of baseTokens(query)) {
     if (QUERY_STOPWORDS.has(token)) continue;
-    const forms = stemForms(token);
-    // 兼顾原词先到（"file files"）与屈折形先到（"files file"）：先查 token 自身，
-    // 未命中再查其词干形是否已有归属组，使分组结果对词序完全对称。
-    let seen = owner.get(token);
-    if (seen === undefined) {
-      for (const form of forms) {
-        seen = owner.get(form);
-        if (seen !== undefined) break;
-      }
+    if (!parent.has(token)) parent.set(token, token);
+    for (const form of stemForms(token)) {
+      if (!parent.has(form)) parent.set(form, form);
+      union(token, form);
     }
-    if (seen !== undefined) {
-      seen.add(token);
-      owner.set(token, seen);
-      for (const form of forms) {
-        seen.add(form);
-        owner.set(form, seen);
-      }
-      continue;
-    }
-    const group = new Set([token]);
-    owner.set(token, group);
-    for (const form of forms) {
-      group.add(form);
-      owner.set(form, group);
-    }
-    groups.push(group);
   }
-  return groups;
+  /** @type {Map<string, Set<string>>} 根 → 组 */
+  const byRoot = new Map();
+  for (const t of parent.keys()) {
+    const root = find(t);
+    let g = byRoot.get(root);
+    if (g === undefined) byRoot.set(root, (g = new Set()));
+    g.add(t);
+  }
+  const groups = [...byRoot.values()];
+  const minOf = (g) => { let m = ''; for (const v of g) if (m === '' || v < m) m = v; return m; };
+  return groups.sort((a, b) => (minOf(a) < minOf(b) ? -1 : 1));
 }
 
 /**
- * 统计文档某字段命中了多少个有效词分组。
+ * 词项稀有度（IDF 形态，无外部依赖）：出现在越少文档里的词，命中它越能证明相关性。
+ * `df` 为 0（查询词在语料中未出现）时取最大稀有度 —— 罕见词命中权重最高，
+ * 正是"通用动词误召回"（'file'/'list' 命中大半目录却与意图无关）的对症修正。
+ * @param {number} df 出现该词的文档数
+ * @param {number} n 文档总数
+ */
+function rarity(df, n) {
+  return Math.log(1 + n / Math.max(1, df));
+}
+
+/**
+ * 查询的稀有度分母：每个有效词组按其**最稀有词形**计权。
+ * 单词组查询里分子分母同源相消，覆盖率与旧的等权实现完全一致 ——
+ * 只有多个词组参与时才产生重新配权。
+ * @param {Array<Set<string>>} groups
+ * @param {Map<string, number>} df
+ * @param {number} n
+ */
+function totalRarity(groups, df, n) {
+  let sum = 0;
+  for (const g of groups) {
+    let minDf = Infinity;
+    for (const v of g) {
+      const d = df.get(v) ?? 0;
+      if (d < minDf) minDf = d;
+    }
+    sum += rarity(minDf, n);
+  }
+  return sum;
+}
+
+/**
+ * 字段命中的稀有度分子：每个命中词组按其**最稀有的命中词形**计权。
+ * 取组内最值（而不是"第一个命中"）是为了与 Set 迭代序无关 —— 词形插入顺序
+ * 随查询词序变化，"第一个命中"会让 "file files" 与 "files file" 得出不同分数。
+ * 命中词形的最大稀有度 ≤ 词组最小 df 对应的稀有度（分母取法），分子不超过分母。
  * @param {Array<Set<string>>} groups
  * @param {Set<string>} fieldTokens
- * @returns {number}
+ * @param {Map<string, number>} df
+ * @param {number} n
  */
-function matchCount(groups, fieldTokens) {
-  let n = 0;
+function matchedRarity(groups, fieldTokens, df, n) {
+  let sum = 0;
   for (const g of groups) {
+    let best = 0;
     for (const v of g) {
-      if (fieldTokens.has(v)) { n += 1; break; }
+      if (fieldTokens.has(v)) {
+        const r = rarity(df.get(v) ?? 0, n);
+        if (r > best) best = r;
+      }
     }
+    sum += best;
   }
-  return n;
+  return sum;
 }
 
 /**
- * 字段贡献 = 固定权重 × 该字段的有效词覆盖率。
- * 覆盖一个词的宽泛文档(如正文里带 "file" 的 read_file)因此不会因为
- * "每字段固定分"而压过逐词描述目的的精确工具;未命中字段计 0。
- * 理由标签集合不变:命中即仍是同一个受控 matchReasons。
+ * 字段贡献 = 固定权重 × 该字段的**稀有度加权**有效词覆盖率。
+ * 与旧的等权覆盖相比：宽泛词（'file'/'list' 这类出现在大半文档里的词）贡献被压低，
+ * 精确词贡献抬高 —— 宽泛摘要靠堆常见词覆盖多个词组的旧路径因此难再压过
+ * 名称/精确证据。未命中字段计 0；理由标签集合不变（受控 matchReasons）。
  * @param {string} reason
- * @param {number} matched
- * @param {number} total
+ * @param {number} matched 稀有度分子
+ * @param {number} total 稀有度分母
  */
 function fieldScore(reason, matched, total) {
   if (matched <= 0 || total <= 0) return 0;
@@ -264,25 +333,40 @@ export function documentTokens(entry) {
     for (const t of tokenize(entry.skill.usage)) skillTokens.add(t);
     for (const lim of entry.skill.limitations) for (const t of tokenize(lim)) skillTokens.add(t);
   }
-  // 条目自身触发哪些受控概念(与查询侧同一个 synonymConcepts:对文档全文做同法匹配)
+  // 条目自身触发哪些受控概念(与查询侧同一个 synonymConcepts:对文档全文做同法匹配)。
+  // 额外单算一份**只来自工具名**的概念：名字本身就是该概念(如 'view_logs' ↔ log-view)
+  // 是比"摘要顺带提到一次"更强的证据 —— 打分阶段据此对纯概念命中分强弱，
+  // 避免"大而全的摘要工具"与"名字就是意图的精确工具"同分后凭名字序反超。
   const docText = [entry.name, entry.summary, entry.skill ? entry.skill.usage : '', entry.skill ? entry.skill.limitations.join(' ') : ''].join(' ');
   const entryConcepts = synonymConcepts(docText);
-  return { nameTokens, categoryTokens, summaryTokens, skillTokens, entryConcepts };
+  const nameConcepts = synonymConcepts(entry.name);
+  return { nameTokens, categoryTokens, summaryTokens, skillTokens, entryConcepts, nameConcepts };
 }
 
 /**
  * @typedef {Object} SearchIndex
  * @property {Array<{entry: import('./catalog.mjs').CatalogEntry, doc: ReturnType<typeof documentTokens>}>} items
+ * @property {Map<string, number>} df token → 出现该 token 的文档数（稀有度加权用）
+ * @property {number} n 文档总数
  */
 
 /**
- * 构建检索索引。
+ * 构建检索索引。除每条目的分词文档外，还统计全部字段的合并词文档频率（DF）：
+ * 打分阶段的覆盖率按稀有度加权（见 rarity），权重必须在索引期一次算好，
+ * 否则每次查询都要对全目录重扫一遍词频。
  * @param {ReadonlyArray<import('./catalog.mjs').CatalogEntry>} entries
  * @returns {SearchIndex}
  */
 export function buildSearchIndex(entries) {
   const items = entries.map((entry) => ({ entry, doc: documentTokens(entry) }));
-  return { items };
+  /** @type {Map<string, number>} */
+  const df = new Map();
+  for (const { doc } of items) {
+    // 一个文档对同一 token 只计一次（词频不进 DF；这是集合语义的索引）
+    const seen = new Set([...doc.nameTokens, ...doc.categoryTokens, ...doc.summaryTokens, ...doc.skillTokens]);
+    for (const token of seen) df.set(token, (df.get(token) ?? 0) + 1);
+  }
+  return { items, df, n: items.length };
 }
 
 /**
@@ -322,6 +406,7 @@ export function search(index, args) {
   // 没有有效词时(查询全是停用词)不返回命中,避免"只命中 please/to/the"的
   // 无关结果;但不提前 return,精确名称匹配仍然生效。
   const hasEffectiveTerm = qGroups.length > 0;
+  const totalWeight = hasEffectiveTerm ? totalRarity(qGroups, index.df, index.n) : 0;
 
   /** @type {Map<number, { score: number; reasons: Set<string> }>} */
   const scores = new Map();
@@ -341,44 +426,56 @@ export function search(index, args) {
       reasons.add(MATCH_REASONS.EXACT_NAME);
     }
 
-    // 2) 名称 token(按有效词覆盖率缩放)
-    const nameHits = matchCount(qGroups, doc.nameTokens);
-    if (nameHits > 0) {
-      score += fieldScore(MATCH_REASONS.NAME_TOKEN, nameHits, qGroups.length);
+    // 2) 名称 token(按稀有度加权覆盖率缩放)
+    const nameWeight = matchedRarity(qGroups, doc.nameTokens, index.df, index.n);
+    const nameHits = nameWeight > 0;
+    if (nameHits) {
+      score += fieldScore(MATCH_REASONS.NAME_TOKEN, nameWeight, totalWeight);
       reasons.add(MATCH_REASONS.NAME_TOKEN);
     }
 
-    // 3) 同义词概念(受控词表,命中即为完整概念信号,不按覆盖率缩放;
-    //    没有有效词时不得凭停用词子串碰巧命中同义词;
-    //    名字零命中时减半,让直接名字证据优先——见 synonymWeight)
+    // 3) 同义词概念(受控词表;每个命中概念计一份**等分**信号,多概念查询按命中
+    //    份额累计、总额始终 ≤ SIGNAL_WEIGHTS.SYNONYM,不会反超名字证据 ——
+    //    见 synonymWeight)。概念命中分三档(单概念、nameHits>0 时的取值):
+    //      8 —— 名字 token 已命中查询有效词(既有不变量,双语回归锁定);
+    //      8 —— 名字本身触发该概念(名字就是意图,如 'view_logs' ↔ log-view);
+    //      4 —— 概念只在摘要/技能里顺带出现(再减半)。
+    //    没有 nameHits 时三档整体减半(4/4/2)。第三档是本次新增的区分:
+    //    没有它,"管理一切"式的宽泛摘要会与精确工具同分,再凭 name 升序排到前面。
+    //    没有有效词时不得凭停用词子串碰巧命中同义词。
     if (hasEffectiveTerm && qConcepts.size > 0) {
+      const share = synonymWeight(nameHits ? 1 : 0) / qConcepts.size;
+      let conceptScore = 0;
       for (const c of qConcepts) {
-        if (doc.entryConcepts.has(c)) {
-          score += synonymWeight(nameHits);
-          reasons.add(MATCH_REASONS.SYNONYM);
-          break;
-        }
+        // 概念必须真的命中（名字或全文触发）；nameHits/inName 只决定满额还是减半。
+        const inName = doc.nameConcepts.has(c);
+        if (!inName && !doc.entryConcepts.has(c)) continue;
+        conceptScore += (nameHits || inName) ? share : share / 2;
+      }
+      if (conceptScore > 0) {
+        score += conceptScore;
+        reasons.add(MATCH_REASONS.SYNONYM);
       }
     }
 
     // 4) 类别 token(仅当查询有效词命中条目所属类别的名字/同义词)
-    const categoryHits = matchCount(qGroups, doc.categoryTokens);
-    if (categoryHits > 0) {
-      score += fieldScore(MATCH_REASONS.CATEGORY_TOKEN, categoryHits, qGroups.length);
+    const categoryWeight = matchedRarity(qGroups, doc.categoryTokens, index.df, index.n);
+    if (categoryWeight > 0) {
+      score += fieldScore(MATCH_REASONS.CATEGORY_TOKEN, categoryWeight, totalWeight);
       reasons.add(MATCH_REASONS.CATEGORY_TOKEN);
     }
 
     // 5) 摘要 token(低权重资料)
-    const summaryHits = matchCount(qGroups, doc.summaryTokens);
-    if (summaryHits > 0) {
-      score += fieldScore(MATCH_REASONS.SUMMARY_TOKEN, summaryHits, qGroups.length);
+    const summaryWeight = matchedRarity(qGroups, doc.summaryTokens, index.df, index.n);
+    if (summaryWeight > 0) {
+      score += fieldScore(MATCH_REASONS.SUMMARY_TOKEN, summaryWeight, totalWeight);
       reasons.add(MATCH_REASONS.SUMMARY_TOKEN);
     }
 
     // 6) 技能 token(最低权重)
-    const skillHits = matchCount(qGroups, doc.skillTokens);
-    if (skillHits > 0) {
-      score += fieldScore(MATCH_REASONS.SKILL_TOKEN, skillHits, qGroups.length);
+    const skillWeight = matchedRarity(qGroups, doc.skillTokens, index.df, index.n);
+    if (skillWeight > 0) {
+      score += fieldScore(MATCH_REASONS.SKILL_TOKEN, skillWeight, totalWeight);
       reasons.add(MATCH_REASONS.SKILL_TOKEN);
     }
 
