@@ -4,7 +4,11 @@ export function describeNamesDrift(candidateNames, runtime) {
   const candidates = sorted(candidateNames);
   const epoch = sorted(runtime.alwaysNames ?? []);
   const effective = sorted(runtime.alwaysNameSet ?? []);
-  const difference = (left, right) => left.filter((name) => !right.includes(name));
+  // 每轮 pre-step 都会跑到这里：filter+includes 是 O(n×m)，换 Set 做排除集。
+  const difference = (left, right) => {
+    const exclude = new Set(right);
+    return left.filter((name) => !exclude.has(name));
+  };
   return {
     added: difference(candidates, epoch),
     removed: difference(epoch, candidates),

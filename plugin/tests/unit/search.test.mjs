@@ -289,3 +289,81 @@ test('queryTermGroups 与词序无关:"file files" 与 "files file" 得分完全
   );
 });
 
+
+// --- 2026-10 优化批次补的回归网 ---------------------------------------------
+// 覆盖:稀有度加权、概念三档、3+ 词置换一致性、词干守卫、新同义词组的端到端与负面。
+
+test('稀有词命中优先于常见词命中(DF 加权)', () => {
+  // quark 只出现在一个文档里,file 出现在大半文档里:命中 quark 的文档必须排前。
+  const entries = [
+    binding({ name: 'quark_counter', toolId: 't_quark', namespace: 'data', description: 'count quark events per run', skill: null }),
+    binding({ name: 'file_lister', toolId: 't_list', namespace: 'files', description: 'list file entries in a file directory of files', skill: null }),
+    binding({ name: 'file_reader', toolId: 't_read', namespace: 'files', description: 'read file contents from a file on the file system', skill: null }),
+  ];
+  const c = buildCatalog(entries, { now: 0, generation: 'gQ' });
+  const i = buildSearchIndex(Array.from(c.entries.values()));
+  const hits = search(i, { query: 'quark file', category: 'all', limit: 3 });
+  assert.equal(hits[0].entry.name, 'quark_counter', `实际第一: ${hits.map((h) => h.entry.name).join(',')}`);
+});
+
+test('概念三档:名字触发概念 > 摘要触发概念(名字零命中时)', () => {
+  const entries = [
+    binding({ name: 'view_logs', toolId: 't_vl', namespace: 'other', description: 'inspect runtime behaviour', skill: null }),
+    binding({ name: 'runtime_probe', toolId: 't_rp', namespace: 'other', description: 'a tool that also mentions view logs once', skill: null }),
+  ];
+  const c = buildCatalog(entries, { now: 0, generation: 'gT' });
+  const i = buildSearchIndex(Array.from(c.entries.values()));
+  const hits = search(i, { query: '看日志', category: 'all', limit: 2 });
+  assert.equal(hits[0].entry.name, 'view_logs');
+  assert.ok(hits[0].score > hits[1].score, `分数必须严格区分,实际 ${hits[0].score} vs ${hits[1].score}`);
+});
+
+test('3+ 词置换一致性:"file filing files" 各置换得分逐分一致', () => {
+  const i = capabilityIdx();
+  const perms = ['file filing files', 'files file filing', 'filing files file', 'files filing file'];
+  const base = search(i, { query: perms[0], category: 'all', limit: 8 })
+    .map((h) => ({ id: h.entry.toolId, score: h.score }));
+  for (const q of perms.slice(1)) {
+    assert.deepEqual(
+      search(i, { query: q, category: 'all', limit: 8 }).map((h) => ({ id: h.entry.toolId, score: h.score })),
+      base,
+      `"${q}" 与 "${perms[0]}" 不一致`,
+    );
+  }
+});
+
+test('词干守卫:双元音与停用词形不回灌(inning/upping/seeing)', () => {
+  const t1 = tokenize('inning');
+  assert.ok(t1.includes('inn') && !t1.includes('in'), `inning 不得剥出停用词 'in': ${t1}`);
+  assert.ok(!tokenize('upping').includes('up'), 'upping 不得剥出停用词 up');
+  assert.ok(tokenize('seeing').includes('see') && !tokenize('seeing').includes('se'), 'seeing 保留 see,不得剥成 se');
+  assert.ok(tokenize('running').includes('run') && tokenize('stopped').includes('stop'), '常规双写还原保持');
+  assert.ok(!tokenize('falling').includes('fal') && !tokenize('class').includes('clas'), 'll/ss 不剥');
+  // 端到端:'inning' 不得命中一切摘要含 " in " 的文档
+  const entries = [
+    binding({ name: 'misc_tool', toolId: 't_misc', namespace: null, description: 'fill values in a table in memory', skill: null }),
+  ];
+  const c = buildCatalog(entries, { now: 0, generation: 'gS' });
+  const i = buildSearchIndex(Array.from(c.entries.values()));
+  assert.equal(search(i, { query: 'inning upping', category: 'all', limit: 5 }).length, 0, '停用词形不得产生命中');
+});
+
+test('新同义词组:高频中文意图端到端命中(样例)', () => {
+  const entries = [
+    binding({ name: 'delete_file', toolId: 't_del', namespace: 'files', description: 'delete files from the file system', skill: null }),
+    binding({ name: 'run_sql', toolId: 't_sql', namespace: 'data', description: 'execute sql queries against a database table', skill: null }),
+    binding({ name: 'cron_task', toolId: 't_cron', namespace: 'data', description: 'schedule a cron job to run periodically', skill: null }),
+  ];
+  const c = buildCatalog(entries, { now: 0, generation: 'gN' });
+  const i = buildSearchIndex(Array.from(c.entries.values()));
+  assert.equal(search(i, { query: '删除文件', category: 'all', limit: 3 })[0].entry.name, 'delete_file');
+  assert.equal(search(i, { query: '执行数据库查询', category: 'all', limit: 3 })[0].entry.name, 'run_sql');
+  assert.equal(search(i, { query: '定时任务', category: 'all', limit: 3 })[0].entry.name, 'cron_task');
+});
+
+test('新触发词负面:裸 archive/environment 不误触发归档概念', () => {
+  assert.ok(!synonymConcepts('search archived emails in a web archive of conversations').has('archive-extract'),
+    '邮件/网页存档不是解压概念');
+  assert.ok(!synonymConcepts('community environment for kids').has('env-var'), '泛指 environment 不是环境变量概念');
+  assert.ok(synonymConcepts('unzip the archive file').has('archive-extract'), '短语形式仍应触发');
+});

@@ -500,6 +500,13 @@ export function createJournal(deps) {
    * **幂等**：state.recordAdvertisement 对「已记账且 name/revision/digest 三者全等」的项
    * 是覆盖写，对任一不符的项是删除。所以重复调用只会让记账回到与该 header 一致的
    * 状态，不放宽任何判据 —— digest 仍逐字比对。
+   *
+   * **已记账短路**：本 pass 会被真实 header **和** 每次 canonical 折叠后的
+   * replayAdvertisements 反复触发；稳定状态下逐项重算 wireOfSchema + digestOf 只是
+   * 把一条完全相同的记录重写一遍（recordAdvertisement 是覆盖写、freezeTool 对已冻结
+   * 项保留首见 wire）。当现有记账与本 pass 将写入的值**逐字段一致**（含 requestId ——
+   * evaluateCall 用它对账当前请求，见 state.mjs 的 TOOL_NOT_ADVERTISED）时直接跳过。
+   * 任何字段（含 requestId 指向新 header）不一致都照旧走完整 digest 判据。
    * @param {Map<string, any>} byName header tools 的 name → 定义
    * @param {number|undefined} headerSeq 该 header 的事件 seq（记账的 requestId 依据）
    */
@@ -508,9 +515,16 @@ export function createJournal(deps) {
     // 与 recordSdkAdvertisements 同一形状守卫：上游传入非预期形状时不得抛错
     // （restore 重放 / replayAdvertisements 都可能赶在引擎 ready 之前触达这里）。
     if (state?.mode !== 'ready' || typeof state.selected?.entries !== 'function') return;
+    const requestId = requestIdFor(headerSeq);
     for (const [toolId, selection] of state.selected) {
       const advertisedTool = byName.get(selection.name);
       if (advertisedTool === undefined) continue;
+      const recorded = state.advertised.get(toolId);
+      if (recorded !== undefined
+        && recorded.name === selection.name
+        && recorded.revision === selection.revision
+        && recorded.schemaDigest === selection.schemaDigest
+        && recorded.requestId === requestId) continue;
       const wire = wireOfSchema(advertisedTool);
       if (digestOf(wire) !== selection.schemaDigest) {
         // 出站定义与选中时的定义不一致 → 不算已披露（不静默放行）
@@ -518,7 +532,7 @@ export function createJournal(deps) {
         continue;
       }
       engine.recordAdvertisement(scope, {
-        requestId: requestIdFor(headerSeq),
+        requestId,
         toolId,
         name: selection.name,
         revision: selection.revision,

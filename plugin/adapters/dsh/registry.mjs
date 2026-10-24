@@ -93,15 +93,40 @@ export function createRegistryAdapter(deps) {
   /**
    * 单个绑定的代次：首次出现 / 从缺席重现 / 实例被换 / wire 变了 → 推进；
    * 其余情况原样返回（同一实例 + 同一 wire），使无关变更不波及已有 selected。
+   *
+   * digest 的重算探针：宿主对**任一 scope** 的任意注册动作都广播 tools/change，
+   * 每次都会对**全部**可见绑定重走这里。同一实例且序列化内容未变时（绝大多数
+   * 广播都是这种无关变更），用上次缓存的 digest 即可 —— 但"实例未变"单独不足以
+   * 跳过：digest 兜的正是**同一实例被就地改写 schema**。因此对 wire 实际读取的
+   * 三个字段（name/description/parameters，**直接属性读取**，能看到非枚举与原型
+   * 解析值，与 wireOfDefinition 同一读取面；不读 definition 的其它字段，避免
+   * 触发无关 getter）做一次普通 JSON.stringify（约 canonical 的 1/5 成本）作内容
+   * 探针，探针一致才复用；探针不同或序列化失败则当场重算 canonical digest。
+   * 残余盲区（Symbol 键携带 wire 数据、不可枚举 toJSON 快照）下代次计数可能少推
+   * 一次，但 wire/digest 本身仍按当前内容重建，授权语义由 catalog 的
+   * schemaDigest 判据兜底，不受影响。
+   * @param {string} scopeKey
+   * @param {string} toolId
+   * @param {any} definition
+   * @param {object} wire 该定义的 wire 投影（仅在探针未命中时才需要其 digest）
    */
-  function bindingGenerationFor(scopeKey, toolId, definition, digest) {
+  function bindingGenerationFor(scopeKey, toolId, definition, wire) {
     const key = bindingKey(scopeKey, toolId);
     const prev = bindingState.get(key);
+    let probe;
+    try {
+      probe = JSON.stringify([definition.name, definition.description, definition.parameters]);
+    } catch {
+      probe = undefined; // 循环引用等病态形状 → 视为已变化，交给 canonical 路径报错
+    }
+    const reusable = prev !== undefined && prev.definition === definition
+      && probe !== undefined && prev.probe === probe;
+    const digest = reusable ? prev.digest : digestOf(wire);
     const changed = prev === undefined
       || prev.definition !== definition
       || prev.digest !== digest;
     const gen = changed ? (prev?.gen ?? 0) + 1 : prev.gen;
-    bindingState.set(key, { gen, definition, digest });
+    bindingState.set(key, { gen, definition, digest, probe });
     return `bg_${scopeKey}_${gen}`;
   }
 
@@ -168,7 +193,7 @@ export function createRegistryAdapter(deps) {
         ? `${scopeKey}::${name}`
         : `global::${name}`;
       const wire = wireOfDefinition(definition);
-      const bindingGeneration = bindingGenerationFor(scopeKey, toolId, definition, digestOf(wire));
+      const bindingGeneration = bindingGenerationFor(scopeKey, toolId, definition, wire);
       present.add(bindingKey(scopeKey, toolId));
       bindings.push({
         toolId,
