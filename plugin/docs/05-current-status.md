@@ -1,6 +1,6 @@
 # 05 · 当前状态
 
-更新日期：**2026-10-22**（Asia/Hong_Kong）。对应源码 manifest `0.4.3`，整合已发布主线 `c1709d3` 与后续业务修复；本批仅作 GitHub 构建分发，不代表新 npm 正式版。
+更新日期：**2026-10-24**（Asia/Hong_Kong）。对应源码 manifest `0.4.4`，整合 PR #21（`d1aa807`）的热路径性能与检索排序批次；本批以 `v0.4.4` 标签驱动正式版本，npm 发布状态以 registry 为准。
 现行行为见 [00 当前实现契约](<00-current-contract.md>)，验收判据见 [03](<03-implementation-and-acceptance.md>)。
 本文不登记未经重新核验的远端最新发布、STORE 收录或在线安装状态。
 
@@ -10,12 +10,12 @@
 旧文件中的“本轮”“当前宿主”“未发布”“待合并”仅在其取证时点成立，不自动滚动到今天。
 历史记录保留在 [04](<04-runtime-evidence.md>)、[06](<06-rewrite-changelog.md>)、[07](<07-lifecycle-recovery-coverage.md>)、[08](<08-trusted-epoch-baselines.md>)、[10](<10-store-compatibility.md>)、[11](<11-code-review-findings.md>) 与私有证据中。
 
-**版本坐标**：本源码 manifest 为 `0.4.3`，但后续 `build-<sha>` 与已发布的 npm `0.4.3` 是不同源码快照。npm 发布与 provenance 以 registry 为准；GitHub Release/tarball 不能替代 npm 发布证明。每个绿色 main 构建会产出 `build-<sha>` 资产，正式语义版本由 `v<version>` 标签驱动。本次不新增正式版本标签或 npm 发布。
+**版本坐标**：本源码 manifest 为 `0.4.4`。npm 发布与 provenance 以 registry 为准；GitHub Release/tarball 不能替代 npm 发布证明。每个绿色 main 构建会产出 `build-<sha>` 资产，正式语义版本由 `v<version>` 标签驱动；本次打 `v0.4.4` 标签，npm 是否随之发布须单独核对 registry。
 上游记录的 2026-10-06 重建前历史（`2a1f9c0`、`257ddc0` 等）已淘汰，不作为本批证据来源。
 
 ### 0.1 版本与兼容
 
-- 包版本：`0.4.3`；协议版本：`2`。不要把包版本当 Core 版本。
+- 包版本：`0.4.4`；协议版本：`2`。不要把包版本当 Core 版本。
 - manifest 的 Core peer 准入范围为 `>=0.2.1-alpha.1`；显式兼容声明仍只将 alpha.1、alpha.2 标为 `compatible`，`0.2.0-rc.2` 为 `unknown`。未列出的新版本不据此变成“已测”。
 - `schemastery` peer 仍是 `3.18.5-alpha.1`；不能把所有 peer 都描述成同一开放 Core 范围。
 - 当前文档核对没有重新读取宿主安装版本；[04](<04-runtime-evidence.md>) 的 alpha.1 现场与 [10](<10-store-compatibility.md>) 的 alpha.2 实验均是历史坐标。
@@ -23,13 +23,18 @@
 
 ### 0.2 本次运行证据
 
-2026-10-21 将已核业务批次 `fcdb348` 与已发布主线 `c1709d3` 整合。Node **v24.13.0**。保留上游有序 wire 副本、逐项字节有界构造和本批预算/名单/技能/回收修复；本次为 GitHub build，不新增 npm 正式版本。
+2026-10-24 整合 PR #21（`d1aa807`）热路径性能与检索排序批次并准备 `v0.4.4`。Node **v24.13.0**。上一批（2026-10-21，`fcdb348`×`c1709d3` 整合）的证据移入 0.3 节的历史口径，不在本轮重复宣称。
 
 | 本次实际执行 | 退出码 | 结果与边界 |
 |---|---|---|
-| 显式排除 `client.test.mjs`、`settings.test.mjs` 后运行全部 unit 文件 | 0 | **544 pass / 0 fail / 0 skip**；含上游 PR18 跟进与本批业务回归，两份宿主绑定文件仍是排除，不是通过 |
-| 本批 [business-workflow](<../tests/unit/business-workflow.test.mjs>) / [catalog-workflow](<../tests/unit/catalog-workflow.test.mjs>) | 0 | 分别 16/16 与 14/14，包含在上面的 544 项中，不重复累加 |
-| `node --check`（engine、budgets、list、state、registry） | 0 | 语法检查，不等于类型检查、Loader 或 GUI |
+| 显式排除 `client.test.mjs`、`settings.test.mjs` 后运行全部 unit 文件 | 0 | **549 pass / 0 fail / 0 skip**；含 6 项新增检索回归（稀有词优先、概念三档、3+ 词置换一致、词干守卫、新同义词组端到端与负面）；两份宿主绑定文件仍是排除，不是通过 |
+| 新旧实现差分探针（私有 `.probe/crosscheck-a/b/c`） | 0 | canonical 20034 例输出与报错逐字一致；registry 15 场景（含非枚举/原型/toJSON/BigInt/循环引用）绑定代次一致；guard 31 样本 30 一致，1 项为已记录的 PTC 日志载荷对齐（模型可见文案不变）；journal 广告记账与放行条件等价 |
+| `npm run check`（仓库身份与文档链接） | 0 | 全部通过 |
+| `node --check`（本批改动文件：canonical、search、constants、journal、registry、guard、names-drift） | 0 | 语法检查，不等于类型检查、Loader 或 GUI |
+
+上一批 2026-10-21 整合时的对应记录（544 pass / 0 fail、business/catalog 回归 16/16 与 14/14、`node --check` 五文件）仍按原时点成立；本批微基准（`bindingsFor` 200 条不变绑定约 4.3ms→0.8ms、单 schema digest 约 -20%）在私有 `.probe/bench-hot-paths.mjs`，属工作区测量，不是端到端时延验收。
+
+`npm test` 全量、真实 Loader composition、质量评分、真实 provider、当前 GUI 与安装均**未在本轮执行**。
 
 修复前人工反例中，258 字节上限被同 ID 的 1213 字节新 schema 绕过，另一项小工具反被旧预留阻塞。现在按整笔回执的当前定义版本核算预留，不把旧 ID 预留借给新 schema；任一项移除/换版则整批不计费，但不提前取消操作，也不释放独立 selected/frozen。资格代次改变时，已无法使用的游标立即回收；无变化/校验失败仍保留有效游标。
 
@@ -52,6 +57,7 @@
 | 2026-10-20，前轮四项业务修复 | 519 portable、16/16 业务回归、五组负控制 | 私有 `.probe/business-review-20261020-*` 是前轮快照；后续整合没有重写它 |
 | 2026-10-20，目录/在途复核 | 533 portable、14/14 目录回归、三组负控制分别 9/2/2 转红 | 对应私有 `.probe/catalog-review-20261020-*`；不是整合上游后的数字 |
 | 2026-10-20，PR18 后续审核 | Node 26.8.1、固定 React 18.3.1 与 schemastery 3.18.5-alpha.1 的独立副本 549 pass / 0 fail；其中 client/settings 35 pass；11 项新增回归 | 官方依赖下的单测，不是桌面安装、真实 Loader 或性能验收。原先 5 项审核反例中 4 项失败，修正后通过 |
+| 2026-10-21，`fcdb348`×`c1709d3` 整合 | 544 portable / 0 fail；business 16/16、catalog 14/14；预算预留整批核算、游标随资格代次即时回收、DI6b 候选 ref 过期一致性修复 | 对应当时快照，行为叙述见 CHANGELOG `0.4.4` 节；不证明 2026-10-24 性能批的本轮结果 |
 
 以上历史的完整叙述可从[文档刷新前快照](https://github.com/KouzakiUmi/dsh-tool-discovery/blob/b12dfef1815636c1518f741da870c1dd5427442f/plugin/docs/05-current-status.md)及[PR18 后续主线记录](https://github.com/KouzakiUmi/dsh-tool-discovery/blob/c1709d3693ed89d4f6c7185cf27c4d86aa5ea910/plugin/docs/05-current-status.md)取回。后者也保留 503 项、18 项设计回归、七组负控制及私有质量 20/1 的原始说明；私有原始报告与审查镜像未被改写。
 

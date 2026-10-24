@@ -25,8 +25,14 @@ what is verified, what is unverified, and what this version refuses to support �
 
 ## [Unreleased]
 
-The entries below are post-v0.4.3 source changes. Green main builds publish `build-<sha>` assets
+The entries below are post-v0.4.4 source changes. Green main builds publish `build-<sha>` assets
 independently; those assets do not imply a new npm release.
+
+## [0.4.4] — 2026-10-24 — hot-path performance and lexical search ranking
+
+Performance and search-quality batch merged in PR #21: per-request digest and
+advertisement-pass costs cut without observable semantics changes (differential probes against
+the previous implementation), and rarity-weighted, synonym-concept-tiered lexical ranking.
 
 - Optimize request-path hot spots without changing observable semantics. Canonical JSON builds its
   output by string concatenation and tracks error paths in place instead of copying a path array at
