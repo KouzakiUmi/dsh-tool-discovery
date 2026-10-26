@@ -16,6 +16,23 @@ import { DEFAULT_BUDGETS, OPTIONAL_LIMIT_KEYS, resolveBudgets } from '../../doma
 
 const Schema = (await import(dshModule('@deepseek-ai/schemastery'))).default
 
+test('S-U00: per-tool description map is volatile, validates keys and publishes its choices', () => {
+  const config = buildConfig(Schema)
+  const field = config.dict.compactBuiltinToolOverrides
+  assert.equal(field.meta.volatile, true)
+  assert.deepEqual(field.meta.default, {})
+  const choices = config.dict.alwaysVisible.meta.settingConstraints.builtinDescriptionTools
+  assert.equal(choices.length, 28)
+  assert.equal(choices.filter(tool => tool.defaultEnabled).length, 5)
+  const resolved = config({ compactBuiltinToolOverrides: { skill: true, bash: false } }).compactBuiltinToolOverrides
+  assert.equal(typeof resolved.get, 'function')
+  assert.deepEqual(resolved.get(), { skill: true, bash: false })
+  assert.throws(() => config({ compactBuiltinToolOverrides: { unknown: true } }))
+  assert.throws(() => config({ compactBuiltinToolOverrides: { skill: 'yes' } }))
+  const roundtrip = new Schema(config.toJSON())
+  assert.throws(() => roundtrip({ compactBuiltinToolOverrides: { unknown: true } }))
+})
+
 test('S-U01: Config.alwaysVisible 是 volatile 的 string[]，默认值是 DSH 自带工具', () => {
   const config = buildConfig(Schema)
   const node = config.dict.alwaysVisible

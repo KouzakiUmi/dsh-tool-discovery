@@ -74,6 +74,13 @@ function makePair (srcCall, srcResult, callId, callSeq, resultSeq) {
   }
 }
 
+/** 热态回执必须对应真实接纳的 pending，不能用合成历史回执绕过防重放。 */
+async function admitPair (engine, sessionId, pair) {
+  const input = typeof pair.call.data.arguments === 'string'
+    ? JSON.parse(pair.call.data.arguments) : pair.call.data.arguments
+  await engine.handleLoad(input, scopeOf(sessionId), { operationId: `op_${pair.call.data.callId}` })
+}
+
 /** 新会话 journal：与 lifecycle 新会话同一条公开接缝（engine.ready）。 */
 function freshJournal (engine, sessionId, { boundary = 0, queryEvents = [] } = {}) {
   const journal = createJournal({
@@ -179,6 +186,7 @@ async function revokeChain (sessionId, badSeq) {
   const engine = SYN.engine
   const journal = freshJournal(engine, sessionId)
   const load = makePair(SYN.load.call, SYN.load.result, `${sessionId}-load`, 10, 11)
+  await admitPair(engine, sessionId, load)
   journal.onEvent(load.call)
   journal.onEvent(load.result)
   const established = engine.getState(scopeOf(sessionId))
@@ -287,6 +295,7 @@ test('SEQ3: fail closed 之后的 restore 不得重新置 ready（原选中原�
   // seq 自 0 连续，使 mergeBySeq 后的合并流合法（排除 event-seq-not-contiguous 干扰）
   journal.onEvent({ type: 'user/message', seq: 0, data: {} })
   const load = makePair(SYN.load.call, SYN.load.result, `${sessionId}-load`, 1, 2)
+  await admitPair(engine, sessionId, load)
   journal.onEvent(load.call)
   journal.onEvent(load.result)
   const beforeSeal = engine.getState(scopeOf(sessionId))
@@ -306,6 +315,7 @@ test('SEQ3: fail closed 之后的 restore 不得重新置 ready（原选中原�
   // 正控制：未 fail closed 的同构 journal 仍正常恢复为 ready
   const okJournal = freshJournal(engine, 'seq3-control')
   const okLoad = makePair(SYN.load.call, SYN.load.result, 'seq3-control-load', 1, 2)
+  await admitPair(engine, 'seq3-control', okLoad)
   okJournal.onEvent({ type: 'user/message', seq: 0, data: {} })
   okJournal.onEvent(okLoad.call)
   okJournal.onEvent(okLoad.result)
@@ -343,6 +353,7 @@ test('SEQ4: 非 canonical 的 tool/result 与普通事件不得被误 fail close
 
   // 合法 load 对照常折叠
   const load = makePair(SYN.load.call, SYN.load.result, 'seq4-load', 51, 52)
+  await admitPair(engine, sessionId, load)
   journal.onEvent(load.call)
   journal.onEvent(load.result)
   const state = engine.getState(scopeOf(sessionId))
@@ -359,6 +370,7 @@ test('SEQ5: own-only 边界不因新门禁放宽 —— 继承前缀零观察，
   const pair = makePair(SYN.load.call, SYN.load.result, 'seq5-load', 3, 4)
 
   const inherited = freshJournal(engine, 'seq5-inherited', { boundary: 5 })
+  await admitPair(engine, 'seq5-inherited', pair)
   inherited.onEvent(pair.call)
   inherited.onEvent(pair.result)
   const inheritedState = engine.getState(scopeOf('seq5-inherited'))
@@ -368,6 +380,7 @@ test('SEQ5: own-only 边界不因新门禁放宽 —— 继承前缀零观察，
   assert.equal(inheritedState.integrity.rejected, 0, '继承前缀不得计入 rejected')
 
   const own = freshJournal(engine, 'seq5-own', { boundary: 0 })
+  await admitPair(engine, 'seq5-own', pair)
   own.onEvent(pair.call)
   own.onEvent(pair.result)
   const ownState = engine.getState(scopeOf('seq5-own'))
@@ -521,6 +534,7 @@ test('SEQ7: 双重损坏的 result → fail closed；已知普通 result 不误�
     const sessionId = `seq7-second-${label}`
     const journal = freshJournal(engine, sessionId)
     const load = makePair(SYN.load.call, SYN.load.result, `${sessionId}-load`, 10, 11)
+    await admitPair(engine, sessionId, load)
     journal.onEvent(load.call)
     journal.onEvent(load.result)
     assert.deepEqual(namesOf(engine.getState(scopeOf(sessionId))), ['fixture_hidden_inherited'],
@@ -594,6 +608,7 @@ test('SEQ7: 双重损坏的 result → fail closed；已知普通 result 不误�
     assert.equal(engine.getState(scopeOf(sessionId)).mode, 'ready',
       '无未决 tool_load 调用时，普通 result 的畸形 seq 不得 fail closed（可证无关）')
     const load = makePair(SYN.load.call, SYN.load.result, `${sessionId}-load`, 40, 41)
+    await admitPair(engine, sessionId, load)
     journal.onEvent(load.call)
     journal.onEvent(load.result)
     const state = engine.getState(scopeOf(sessionId))
@@ -605,6 +620,7 @@ test('SEQ7: 双重损坏的 result → fail closed；已知普通 result 不误�
     const sessionId = 'seq7-ordinary-valid'
     const journal = freshJournal(engine, sessionId)
     const load = makePair(SYN.load.call, SYN.load.result, `${sessionId}-load`, 50, 51)
+    await admitPair(engine, sessionId, load)
     journal.onEvent(load.call)
     journal.onEvent({ ...SYN.ordinaryResult, seq: 52 })
     assert.equal(engine.getState(scopeOf(sessionId)).mode, 'ready',
@@ -620,6 +636,7 @@ test('SEQ7: 双重损坏的 result → fail closed；已知普通 result 不误�
     const sessionId = 'seq7-conservative'
     const journal = freshJournal(engine, sessionId)
     const load = makePair(SYN.load.call, SYN.load.result, `${sessionId}-load`, 60, 61)
+    await admitPair(engine, sessionId, load)
     journal.onEvent(load.call)
     journal.onEvent(withBadSeq(SYN.ordinaryResult, 'bad-seq'))
     assert.equal(engine.getState(scopeOf(sessionId)).mode, 'incompatible',

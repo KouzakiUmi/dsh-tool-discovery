@@ -24,7 +24,7 @@ test('CP1: config.mjs 声明的每个配置字段都必须出现在 validateConf
   const fields = declaredFields()
   // 棘轮：只许增不许减。这里原先写 `>= 8`，而当时字段已有 11 个 —— 扫描器丢掉 1~3 个字段
   // （缩进变化、加一层嵌套、格式重排）时门禁仍然全绿。新增字段时把下限一起上调。
-  assert.ok(fields.length >= 12, `前置：字段扫描必须扫到全部字段，实际只扫到 ${fields.length} 个`)
+  assert.ok(fields.length >= 14, `前置：字段扫描必须扫到全部字段，实际只扫到 ${fields.length} 个`)
 
   const returned = validateConfig({})
   const missing = fields.filter((field) => !Object.hasOwn(returned, field))

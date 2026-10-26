@@ -401,6 +401,8 @@ test('TS1: 迁移写 PENDING 期间收尾不得提前终态，释放最新 manua
   assert.equal(store.requests.filter((r) => r.purpose !== 'compaction').length, 0,
     '前置：基线落定前不得发出任何对话出站请求')
 
+  const initialRevision = runtime.ledger.revision
+
   // 真实改当前配置（B）：**在压缩边界之前**。迁移记录必须捕获边界那一刻的这份。
   setCurrentAlwaysVisible(boot2, BOUNDARY_NAMES)
 
@@ -436,14 +438,14 @@ test('TS1: 迁移写 PENDING 期间收尾不得提前终态，释放最新 manua
     `前置：迁移写的 epoch 必须是本次真实压缩边界；期望 ${manualEpochId}，实际 ${manualTicket.value.epochId}`)
   assert.equal(manualTicket.value.compactionEndSeq, compactionEnd.seq,
     '前置：迁移记录的 compactionEndSeq 必须等于 durable compaction/end 的 seq')
-  // 账本确实被**更新的一次写**推进过：load → begin → adopt 三次 revision。
-  assert.equal(runtime.ledger.revision >= 3, true,
-    `前置：引导写必须已被 adopt supersede（revision 至少三次）；实际 ${runtime.ledger.revision}`)
+  // 验证旧写被新周期取代，不绑定 load/begin 的内部调用次数。
+  assert.ok(runtime.ledger.revision > initialRevision, '迁移必须推进初始写的 revision')
+  assert.equal(runtime.ledger.identity.epochId, manualEpochId, '账本身份必须已切换到最新迁移周期')
 
   // ---- 放行**被 supersede 的那条**初始写，让收尾真正走到裁决点 ----
   barrier.releaseNext()
   assert.equal(initialTicket.released, true, '前置：被 supersede 的初始写必须先放行')
-  await until(() => runtime.ledger.revision >= 3 && runtime.ledger.inFlight === true,
+  await until(() => runtime.ledger.revision > initialRevision && runtime.ledger.inFlight === true,
     '收尾抵达裁决点且最新 manual 写仍在途')
 
   // ---- 真实 pending 用户轮：窗口内必须有**真的**一次对话在等基线 ----

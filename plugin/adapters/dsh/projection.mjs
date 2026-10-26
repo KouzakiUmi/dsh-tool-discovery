@@ -43,7 +43,7 @@
 //   `await query.readSession(...)` 上让出；读盘不会回调 `system-prompt/assemble`，
 //   `ensureRuntime` 里的 `refreshToolChoices()` 也只是同步排一个微任务。无环形等待。
 import { DomainError, ENTRY_TOOL_NAMES } from '../../domain/index.mjs';
-import { BASELINE_STATE, trustedEpochBlockedError } from './trusted-epoch.mjs';
+import { BASELINE_STATE, SESSION_FAILED_CLOSED, TRUSTED_EPOCH_REASONS, trustedEpochBlockedError } from './trusted-epoch.mjs';
 
 /**
  * @param {{ctx:any, lifecycle:any, frameworkRetained?:readonly string[], log?:Function}} deps
@@ -101,7 +101,10 @@ export function createProjection(deps) {
     for (const name of frameworkRetained) allowed.add(name);
     for (const name of runtime.alwaysNameSet ?? []) allowed.add(name);
 
-    const byName = indexIncoming(incoming);
+    const displayed = runtime.descriptions
+      ? incoming.map((wire) => runtime.descriptions.control(runtime.descriptions.project(wire)))
+      : incoming;
+    const byName = indexIncoming(displayed);
 
     // header 只提供首见字节与顺序，绝不是名单/选择的授权来源。
     // 常驻与按需项共享顺序队列，避免迟到的常驻项插到已加载项前面破坏前缀。
@@ -203,6 +206,10 @@ export function createProjection(deps) {
   async function enforceTrustedBaseline(runtime, signal) {
     const ledger = runtime.ledger;
     if (runtime.requireTrustedEpoch === false || ledger === undefined) return;
+    if (ledger.state === BASELINE_STATE.FAILED_CLOSED
+      && ledger.reason === `${SESSION_FAILED_CLOSED}:${TRUSTED_EPOCH_REASONS.MISSING}`) {
+      throw trustedEpochBlockedError(ledger.reason);
+    }
     if (ledger.state !== BASELINE_STATE.PENDING && ledger.state !== BASELINE_STATE.BLOCKED) return;
     if (ledger.state === BASELINE_STATE.BLOCKED) throw trustedEpochBlockedError(ledger.reason);
     const settled = await lifecycle.awaitEpochRecord(runtime.scope.sessionId, signal);
@@ -240,6 +247,7 @@ export function createProjection(deps) {
     //「冷恢复窗口」）。仍在恢复 = 不发请求；已决失败 = 只留基线（fail closed）。
     if (runtime.restoring) await awaitRestore(runtime, context?.signal);
     assertActive();
+    lifecycle.setPresentationMode?.(runtime, mode);
     // 可信基线（trusted-epoch.mjs）：pending/blocked 一律**不发请求**。
     // 这不是"缩水兜底"——发一份只带三入口的请求等于承认"没有授权也照发"，
     // 那正是本轮要移除的出站授信。

@@ -1,6 +1,6 @@
 # 00 · 当前实现契约
 
-> 更新日期：2026-10-24。依据 manifest `0.4.4` 的构建源码，整合 PR #21 的热路径优化与检索排序改进；不等同于任何 npm 发布快照的验收声明。
+> 更新日期：2026-10-26。依据 manifest `0.4.4` 的构建源码，包含 PR #21 热路径优化、检索排序及后续默认关闭的官方工具描述精简；不等同于任何 npm 发布快照的验收声明。
 > 本文是现行行为入口，不是发布、安装或完整产品验收声明。
 > [02 历史冻结协议](<02-protocol-and-data-model.md>)保留了早期设计和历次 delta；其中旧默认值、unload、展示模式等不能直接当作当前行为。
 
@@ -141,6 +141,8 @@ crash/fsync 窗口、真实 provider、所有 fork 生命周期或跨进程完�
 | `alwaysVisible` | 核心手工名单 | volatile；与下面两项在新 runtime/成功周期边界采用 |
 | `initialToolsEnabled` | `true` | 只控制手动名单，不关闭发现入口或独立 preset 保留 |
 | `alwaysAllowPresetTools` | `true` | 独立的当前 preset 保留 |
+| `compactBuiltinToolDescriptions` | `false` | 描述精简总开关；volatile，新会话/成功压缩采用，仅限 native；[详细契约](<13-builtin-descriptions.md>) |
+| `compactBuiltinToolOverrides` | `{}` | 28 个受支持工具的逐项布尔开关；原五项未配置时沿用总开关，新工具默认关；v2 标记冻结本周期选择，v1 回放不扩张 |
 | `ptcCompatibility` | `false` | volatile；下一轮按展示模式采用；不补齐 SDK 冻结 |
 | `requireTrustedEpoch` | `false` | 改动重挂载；启用 durable 基线记录 |
 | `requireTrustedEpochForSubagents` | `false` | 仅与主开关同时启用时要求运行时子代理记录；所有权未知不获豁免 |

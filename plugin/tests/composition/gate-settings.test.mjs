@@ -284,6 +284,9 @@ test('SG7: 已发送的数组不再被后来的压缩改写（canonical header �
   const sentSettled = await lifecycle.whenReady('s-sent')
   assert.equal(sentSettled.mode, 'ready',
     `新周期必须落 ready 才允许断言新名单；实际：${JSON.stringify(sentSettled)}`)
+  // whenReady 仅是初始恢复屏障；周期写和采用名单由真实 pre-step 屏障等待。
+  await lifecycle.awaitEpochRecord('s-sent')
+  assert.deepEqual(pending.map((t) => t.name), namesAtSend, '新周期写落定后的迟到刷新也不得改写已发送数组')
   assert.deepEqual(runtime.alwaysNames, ['fixture_mutating'], '但下一个周期的名单确实换了')
 })
 

@@ -6,7 +6,7 @@
 import { resolveBudgets } from './budgets.mjs';
 import { buildCatalog, identityFingerprintOf, orderedNamesFor, resolveByName, resolveByToolId } from './catalog.mjs';
 import { buildCategoryCards, resolveCategory } from './categories.mjs';
-import { canonicalJson, deepEqualCanonical, digestOf } from './canonical.mjs';
+import { canonicalJson, deepEqualCanonical, deepFreeze, digestOf } from './canonical.mjs';
 import { fitPrefixLength } from './budgets.mjs';
 import { createCursorStore, fitStateWithinBudget, paginateCategories, paginateNames, projectState } from './list.mjs';
 import { createRefStore } from './candidate-refs.mjs';
@@ -118,35 +118,11 @@ export function createDiscoveryEngine(config) {
   const locks = new Map();
   /** @type {Map<string, any>} operationId → pending */
   const pending = new Map();
-  /**
-   * operationId → 归属会话：**已收口**的操作（显式取消 / 压缩边界 / 会话销毁 / 回执不符）。
-   *
-   * 为什么需要它：pending 的删除就是"这个操作不再有对价"的唯一事实，但删除之后
-   * `pending.get()` 的 undefined 无法区分三种情形 —— 从未登记（冷恢复 / 别的引擎实例）、
-   * 已成功折叠、以及**已收口**。前两种必须继续走 reducePair（重复投递交给 stale-seq 语义），
-   * 后一种绝不能折叠成 selected。台账只记录"谁收口了"，不参与任何预算或授权核算。
-   * 上限 256 条：它只用于拒绝**迟到**回执，最近的若干条已覆盖真实重放窗口。
-   * @type {Map<string, string>}
-   */
-  const closedOperations = new Map();
-  const CLOSED_OPERATION_LIMIT = 256;
+  // 热态的新提交必须仍有 pending；删除即永久撤销该次接纳，不保存逐操作墓碑。
+  // 无 pending 只允许 reducer 处理已落后的 seq（不会再激活），冷恢复独立走 restore。
+  // 因而取消次数不增加常驻内存，也不存在有限墓碑淘汰后的重放窗口。
   let opCounter = 0;
   let disposed = false;
-
-  /**
-   * 记下"该操作已收口"。超过上限时按插入序淘汰最旧的一条。
-   * @param {string} operationId
-   * @param {string} sessionId
-   */
-  function closeOperation(operationId, sessionId) {
-    if (!isNonEmptyString(operationId)) return;
-    closedOperations.delete(operationId);
-    closedOperations.set(operationId, sessionId);
-    while (closedOperations.size > CLOSED_OPERATION_LIMIT) {
-      const oldest = closedOperations.keys().next().value;
-      closedOperations.delete(oldest);
-    }
-  }
 
   /**
    * @param {any} scope
@@ -311,9 +287,8 @@ export function createDiscoveryEngine(config) {
         }
 
         if (req.view === 'categories') {
-          const cards = buildCategoryCards(catalog, config.categoryConfig, {
-            limit: budgets.maxInitialCategories,
-          });
+          // 预算限制每页卡片数，不能先截掉全集，否则后续类别永远没有游标可达。
+          const cards = buildCategoryCards(catalog, config.categoryConfig);
           const orderDigest = catalog.orderDigestByView.get('categories:all') || 'empty';
           const page = paginateCategories({
             allCards: cards,
@@ -324,7 +299,7 @@ export function createDiscoveryEngine(config) {
             category: 'all',
             eligibilityGeneration,
             orderDigest,
-            limit: req.limit,
+            limit: Math.min(req.limit, budgets.maxInitialCategories),
             budgets,
             now: clock.now(),
             cursor: req.cursor,
@@ -650,34 +625,34 @@ export function createDiscoveryEngine(config) {
         schemaDelivery: 'native_tools_only',
       }, text.t(['nextAction', 'callNextRequest']));
 
-      const op = {
+      const inputCanonical = canonicalJson(raw);
+      // 内部期望与出站响应不共享引用；预算预留也只读取这份稳定快照。
+      // 冻结前复制 input，不能顺带冻结宿主传入的原对象。
+      const op = deepFreeze({
         operationId: ctx.operationId,
         // 预算需要按会话隔离统计未决预留（pending 本身是 engine 全局的），故带上归属会话。
         sessionId: scope.sessionId,
         eligibilityGeneration: genAtStart,
         action: /** @type {const} */ ('load'),
         selectionSource,
-        input: raw,
-        inputCanonical: canonicalJson(raw),
-        expectedReceipt: receipt,
-      };
+        input: JSON.parse(inputCanonical),
+        inputCanonical,
+        expectedReceipt: JSON.parse(canonicalJson(receipt)),
+      });
       pending.set(ctx.operationId, op);
-      // 同一 operationId 重新登记（宿主重试）→ 旧的收口记录不再适用。
-      closedOperations.delete(ctx.operationId);
-      return { response, operation: op };
+      // adapter 的观察对象同样独立，替换字段或修改嵌套数组都不能改写 pending。
+      return { response, operation: JSON.parse(canonicalJson(op)) };
     },
 
     // ---- canonical 折叠 --------------------------------------------------
     /**
      * 只在 adapter 确认 canonical tool/call → tool/result 对时调用。
      *
-     * 折叠资格：该回执必须**仍登记在案**且属于本会话。pending 的既有收口路径
-     * （cancelOperation 显式取消、resetCacheEpoch 压缩边界、destroySession）
-     * 都会把操作移出 pending，并把"已收口"记进 closedOperations —— 否则
-     * `pending.get()` 的 undefined 会把「已被取消」和「跨压缩边界的迟到回执」
-     * 误当成「另一个引擎实例的冷回放」放行，让它们折叠进 selected。
-     * 已成功折叠过的**重复投递**不受影响：那条路没有收口记录，仍交给 reducePair
-     * 的 stale-seq 语义处理（seq 已进 lastAppliedSeq，不可能再改 selected）。
+     * 新提交必须**仍登记在案**且属于本会话。cancelOperation、resetCacheEpoch、
+     * destroySession 删除 pending 后，无论过多久或换 scope 都不得再次激活。
+     * 无 pending 的冷回放必须走 restore，不能借热态入口绕过接纳。
+     * 已成功折叠过的重复 / 乱序投递仍交给 reducePair 的 stale-seq 语义；
+     * 它们的提交 seq 已不大于 lastAppliedSeq，不可能再改 selected。
      * @param {any} pair
      * @param {any} scope
      */
@@ -696,9 +671,7 @@ export function createDiscoveryEngine(config) {
         // 这里**不**删除它 —— 它仍属于登记它的那个会话。
         return { applied: false, reason: 'operation-session-mismatch' };
       }
-      if (!op && closedOperations.has(operationId)) {
-        // 收口是**操作级**事实（宿主 callId 唯一），不限于某个会话：
-        // 该操作的对价已被丢弃，任何会话的迟到回执都不得把它折叠成授权。
+      if (!op && !((pair?.resultSeq ?? pair?.seq) <= st.lastAppliedSeq)) {
         return { applied: false, reason: 'operation-closed' };
       }
       if (op) {
@@ -706,7 +679,6 @@ export function createDiscoveryEngine(config) {
         if (!deepEqualCanonical(op.expectedReceipt, pair?.result?.payload)) {
           // 收口是操作级事实（迟到回执不得再折叠），预算预留则必须同步释放：
           // 这条回执已经不会再被接受，留着 pending 只会让后续 load 误报 BUDGET_EXCEEDED。
-          closeOperation(pair.call.operationId, scope.sessionId);
           pending.delete(pair.call.operationId);
           const next = reducePair(st, { ...pair, result: { ...pair.result, rewrittenBy: 'receipt-mismatch' } }, {
             now: () => clock.now(), catalog,
@@ -755,8 +727,7 @@ export function createDiscoveryEngine(config) {
     cancelOperation(operationId) {
       const op = pending.get(operationId);
       if (!op) return false;
-      // 收口必须留痕：否则该操作的迟到回执会走"找不到 pending"这条冷回放路径折叠激活。
-      closeOperation(operationId, op.sessionId);
+      // 删除接纳即释放预算；无 pending 的迟到回执不能成为新提交。
       return pending.delete(operationId);
     },
 
@@ -808,8 +779,7 @@ export function createDiscoveryEngine(config) {
       sessions.set(scope.sessionId, next);
       for (const [operationId, op] of pending) {
         if (op.sessionId !== scope.sessionId) continue;
-        // 边界之前的回执不再有对价：收口留痕，迟到的 canonical 对不得折进新周期。
-        closeOperation(operationId, op.sessionId);
+        // 边界之前的回执不再有对价：删除接纳，迟到的 canonical 对不得折进新周期。
         pending.delete(operationId);
       }
       void reason;
@@ -1021,8 +991,7 @@ export function createDiscoveryEngine(config) {
       // 会话销毁是第五条 —— 漏掉它就把最后一次 load 的现场留到插件结束（实测可复现）。
       for (const [operationId, op] of pending) {
         if (op?.sessionId !== sessionId) continue;
-        // 会话已销毁：它的迟到回执同样不得在重建的会话里折叠激活。
-        closeOperation(operationId, sessionId);
+        // 会话已销毁：删除接纳，迟到回执不得在重建的会话里折叠激活。
         pending.delete(operationId);
       }
       // 会话级 store 也要回收：ref / cursor 都按 sessionId 归属，sessionId 重建后
@@ -1036,7 +1005,6 @@ export function createDiscoveryEngine(config) {
       refStore.clear();
       cursorStore.clear();
       pending.clear();
-      closedOperations.clear();
       sessions.clear();
       locks.clear();
     },

@@ -452,6 +452,8 @@ test('L06xL01: 恢复与当前资格取交集：已撤工具不恢复且 body=0�
   const h1 = await drive(boot1.ctx, boot1.tmpRoot, 'rec-elig-1')
   await userTurn(h1, 'Load two hidden tools.')
   assert.equal(JSON.parse(resultTextOf(toolResultFor(await rawEvents(boot1.ctx, 'rec-elig-1'), 'el-load-b'))).ok, true)
+  const frozenRemoved = store.requests.at(-1).tools.find((tool) => tool.name === 'fixture_hidden_scope')
+  assert.ok(frozenRemoved, '撤权前必须实际披露过该定义，才能验证冻结恢复')
   await h1.dispose()
 
   // 重开时不再装配 scope-tools（fixture_hidden_scope 被撤除）→ 恢复必须与当前资格取交集
@@ -484,7 +486,8 @@ test('L06xL01: 恢复与当前资格取交集：已撤工具不恢复且 body=0�
   await userTurn(h2, 'Use the surviving tool.')
   const disclosed = namesOf(store.requests[store.requests.length - 1])
   assert.ok(disclosed.includes('fixture_hidden_inherited'), `eligible tool must disclose: ${disclosed}`)
-  assert.equal(disclosed.includes('fixture_hidden_scope'), false, 'removed tool must never be disclosed')
+  assert.deepEqual(store.requests.at(-1).tools.find((tool) => tool.name === 'fixture_hidden_scope'), frozenRemoved,
+    '撤权只使执行资格失效；own 当前周期内已披露的旧 wire 按当前冻结契约保留')
   assert.equal(store.bodyCount('el-legit'), 1, 'eligible tool must execute exactly once (未误伤正控)')
   assert.equal(store.bodyCount('el-guess'), 0, 'removed tool body must not run (负控)')
   const guess = toolResultFor(await rawEvents(boot2.ctx, 'rec-elig-1'), 'el-guess')
@@ -728,6 +731,10 @@ test('L03b4: query+buffer 同 seq 重复去重不双计', async () => {
     sessionId: 'syn-b4', liveBoundary: 0,
     queryResult: { inheritedEventCount: 0, events: streamWith(5, [c, r]) }
   })
+  // 热态必须先接纳该操作；冷恢复才允许没有内存 pending 的历史回执。
+  SYN.engine.ready({ sessionId: 'syn-b4', actorId: 'actor-syn-b4' })
+  await SYN.engine.handleLoad(typeof c.data.arguments === 'string' ? JSON.parse(c.data.arguments) : c.data.arguments,
+    { sessionId: 'syn-b4', actorId: 'actor-syn-b4' }, { operationId: `op_${c.data.callId}` })
   j.onEvent({ ...c })
   j.onEvent({ ...r })
   const outcome = await j.restore()

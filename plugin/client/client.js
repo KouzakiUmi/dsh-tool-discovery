@@ -26,7 +26,7 @@ window.__ModuleLoader__.load({
     var exports = module.exports;
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
     const React = require('react');
-    const { createElement: h, useState, useRef, useSyncExternalStore, useCallback } = React;
+    const { createElement: h, useState, useRef, useEffect, useSyncExternalStore, useCallback } = React;
 
     // ---- 纯逻辑（与 plugin/client/model.mjs 同构） ----------------------------
     const FIXED_ENTRIES = ['tool_list', 'tool_search', 'tool_load'];
@@ -167,6 +167,11 @@ window.__ModuleLoader__.load({
       initialToolsHelp: 'Enabled by default. When disabled, configured initial tools are not injected automatically; tool_load can still load them. Takes effect in a new session or after successful compaction.',
       presetTools: 'Always allow tools specified by the preset',
       presetToolsHelp: 'On by default. Includes only the current bound preset’s registered tools, even when manual injection is off. Does not grant tools from other presets or bypass native permissions. Applies in a new session or after successful compaction.',
+      compactDescriptions: 'Concise DSH default tool descriptions',
+      compactDescriptionsHelp: 'Master switch, off by default. Native mode only; replaces matching official descriptions without changing parameters or execution. Unknown definitions and PTC stay unchanged. Saves without reload; changes apply in new sessions or after successful compaction.',
+      descriptionTools: 'Individual tool description switches',
+      descriptionToolsHelp: 'The original five tools default on under the master switch; additional tools default off. Each switch controls only the description, not tool availability or permission. Settings are captured at the next cache-epoch boundary.',
+      descriptionMasterOff: 'The master switch is off. You can prepare individual choices below, but no new epoch will use concise descriptions until it is enabled.',
       ptcCompat: 'PTC compatibility',
       ptcCompatHelp: 'Off by default. PTC sessions bypass this plugin and keep the host SDK. On: discovery runs inside run_code. The three entries and the current preset’s initial tools are injected into the next run_code SDK, not the model tool list. Takes effect on the next turn.',
       strictEpoch: 'Require trusted epoch records (advanced)',
@@ -204,9 +209,18 @@ window.__ModuleLoader__.load({
       categoryConfig: 'Category navigation copy (JSON)',
       categoryConfigHelp: 'Use an object keyed by category, with title and capabilitySummary. An empty object uses localized defaults. Categories do not grant permissions.',
       framework: 'Trusted framework entries (read-only)',
-      apply: 'Save', invalidJson: 'Enter a JSON object (or null for budget overrides).',
+      apply: 'Save',
       invalidValue: 'Invalid configuration: check known keys, positive integer limits, or category title/capabilitySummary fields.',
       loading: 'Configuration is loading or unavailable.', readOnly: 'This configuration is read-only.', saving: 'Saving…',
+      // 生效时机徽标（FEATURE_EFFECT 驱动；title 提供悬停全文）。
+      fxReload: 'reloads plugin', fxSession: 'new session / compaction', fxTurn: 'next turn',
+      fxReloadTitle: 'Saving this field reloads the plugin; in-memory state may reset.',
+      fxSessionTitle: 'Applies in the next new session, or after a successful compaction; the current session keeps its list.',
+      fxTurnTitle: 'Takes effect on the next turn.',
+      matchCount: (n) => `${n} match${n === 1 ? '' : 'es'}`,
+      jsonInvalidNow: 'Invalid JSON — the saved button is disabled until it parses.',
+      alreadyDefault: 'Already the DSH default list.',
+      clearSearch: 'Clear filter',
     };
     const zh = {
       nav: '工具发现',
@@ -233,6 +247,11 @@ window.__ModuleLoader__.load({
       initialToolsHelp: '默认开启。关闭后不自动注入下方配置的工具，仍可通过 tool_load 加载。在新会话或成功压缩后生效。',
       presetTools: '永远放行 preset 规定的工具',
       presetToolsHelp: '默认开启。保留当前会话实际绑定 preset 登记的工具，即使关闭手动初始注入；不会放行其它 preset 的工具或绕过原生权限。在新会话或成功压缩后采用。',
+      compactDescriptions: 'DSH 默认工具提示词精简',
+      compactDescriptionsHelp: '总开关默认关闭，仅 native 模式生效。替换指纹匹配的官方工具描述，不改参数与执行；未知定义及 PTC 保持原样。保存不重载，在新会话或成功压缩后采用。',
+      descriptionTools: '逐工具描述精简开关',
+      descriptionToolsHelp: '总开关开启时，原有五项默认精简，新增工具默认关闭。可逐项选择；只影响描述，不影响工具是否披露或执行权限。配置在下一缓存周期边界采用。',
+      descriptionMasterOff: '总开关已关闭。仍可预先设置以下选项，但须开启总开关，新周期才会采用精简文案。',
       ptcCompat: 'PTC 模式兼容',
       ptcCompatHelp: '默认关闭。关闭时 PTC 会话不经过本插件，宿主 SDK 保持原样。开启后发现协议在 run_code 内工作：三个入口和当前 preset 的初始工具写入下一轮 run_code SDK，而不是模型可直接调用的工具表。下一轮生效。',
       strictEpoch: '强制可信周期校验（高级）',
@@ -270,9 +289,18 @@ window.__ModuleLoader__.load({
       categoryConfig: '类别导航文案（JSON）',
       categoryConfigHelp: '以类别为键，填写 title 与 capabilitySummary；空对象使用本地化默认值。类别不授予权限。',
       framework: '可信框架保留项（只读）',
-      apply: '保存', invalidJson: '请输入 JSON 对象（预算覆盖也可为 null）。',
+      apply: '保存',
       invalidValue: '配置无效：请检查支持的键、正整数上限、或类别的 title/capabilitySummary 字段。',
       loading: '配置正在加载或暂不可用。', readOnly: '当前配置为只读。', saving: '正在保存…',
+      // 生效时机徽标（FEATURE_EFFECT 驱动；title 提供悬停全文）。
+      fxReload: '保存即重载', fxSession: '新会话/压缩后', fxTurn: '下一轮生效',
+      fxReloadTitle: '保存该字段会重新加载插件，内存状态可能重置。',
+      fxSessionTitle: '在下一个新会话、或一次成功压缩之后生效；当前会话保持它开始时的名单。',
+      fxTurnTitle: '下一轮生效。',
+      matchCount: (n) => `匹配 ${n} 项`,
+      jsonInvalidNow: 'JSON 无效——解析成功前保存按钮保持禁用。',
+      alreadyDefault: '已是 DSH 默认名单。',
+      clearSearch: '清除筛选',
     };
 
     /** 从 describe 镜像里取出本插件这一行。 */
@@ -304,10 +332,25 @@ window.__ModuleLoader__.load({
       } catch { /* 记录失败不影响 UI 呈现 */ }
     }
 
+    // effectKind：何时生效的机器可读类别，驱动标签旁的小徽标（t('fxReload') 等）。
+    //   reload = 保存即重载插件；session = 新会话/成功压缩后；turn = 下一轮。
+    //   null = 无徽标（不该出现，防御性回退）。与 config.mjs 的 volatile 标记一一对应。
+    const FEATURE_EFFECT = {
+      initialToolsEnabled: 'session',
+      alwaysAllowPresetTools: 'session',
+      compactBuiltinToolDescriptions: 'session',
+      ptcCompatibility: 'turn',
+      requireTrustedEpoch: 'reload',
+      requireTrustedEpochForSubagents: 'reload',
+      tolerantLoadProtected: 'reload',
+      respectAlwaysVisible: 'reload',
+    };
+
     function featureChoices(value) {
       return [
         ['initialToolsEnabled', 'initialTools', 'initialToolsHelp', value?.initialToolsEnabled !== false],
         ['alwaysAllowPresetTools', 'presetTools', 'presetToolsHelp', value?.alwaysAllowPresetTools !== false],
+        ['compactBuiltinToolDescriptions', 'compactDescriptions', 'compactDescriptionsHelp', value?.compactBuiltinToolDescriptions === true],
         ['ptcCompatibility', 'ptcCompat', 'ptcCompatHelp', value?.ptcCompatibility === true],
         ['requireTrustedEpoch', 'strictEpoch', 'strictEpochHelp', value?.requireTrustedEpoch === true],
         ['requireTrustedEpochForSubagents', 'childEpoch', 'childEpochHelp', value?.requireTrustedEpochForSubagents === true],
@@ -316,9 +359,26 @@ window.__ModuleLoader__.load({
       ];
     }
 
+    function descriptionToolRows(value, constraints) {
+      const tools = constraints?.builtinDescriptionTools;
+      if (!Array.isArray(tools)) return [];
+      return tools.filter(tool => typeof tool?.name === 'string').map(tool => ({
+        name: tool.name,
+        checked: typeof value?.compactBuiltinToolOverrides?.[tool.name] === 'boolean'
+          ? value.compactBuiltinToolOverrides[tool.name] : tool.defaultEnabled === true,
+      }));
+    }
+
+    function saveDescriptionTool(form, constraints, name, enabled) {
+      if (typeof enabled !== 'boolean' || !Array.isArray(constraints?.builtinDescriptionTools)
+        || !constraints.builtinDescriptionTools.some(tool => tool.name === name)) return Promise.resolve(false);
+      // Write only the touched leaf; never replace sibling switches with a stale map.
+      return form.mutate([{ op: 'set', path: ['compactBuiltinToolOverrides', name], value: enabled }]);
+    }
+
     const BOOLEAN_SETTINGS = featureChoices({}).map(([key]) => key);
     function saveSetting(form, key, value) {
-      if (![...BOOLEAN_SETTINGS, 'alwaysVisible', 'locale', 'budgets', 'categoryConfig'].includes(key)) return Promise.resolve(false);
+      if (![...BOOLEAN_SETTINGS, 'alwaysVisible', 'locale', 'budgets', 'categoryConfig', 'compactBuiltinToolOverrides'].includes(key)) return Promise.resolve(false);
       return form.mutate([{ op: 'set', path: [key], value }]);
     }
 
@@ -370,6 +430,72 @@ window.__ModuleLoader__.load({
     const DANGER = 'var(--dsw-alias-state-business-danger, #dc4c4c)';
     const OK = 'var(--dsw-alias-state-business-success, #2f9e6e)';
 
+    // ---- 交互态样式（一次性 <style> 注入，apply 时挂、dispose 时摘） ------------------------
+    // 内联样式表达不了 :hover / :focus-visible / @media (prefers-reduced-motion)，而裸
+    // opacity/边框反馈又会让面板"点了没反应"。全局类名带 dtd- 前缀，规则只瞄准本面板
+    // 容器（.dtd-panel）内部，不污染宿主其它设置页；深浅色继续走 --dsw-alias-* 令牌。
+    const STYLE_ID = 'dsh-tool-discovery-panel-styles';
+    const PANEL_CSS = `
+.dtd-panel button:not(:disabled):hover, .dtd-panel input[type='search']:not(:disabled):hover,
+.dtd-panel select:not(:disabled):hover, .dtd-panel summary:hover { filter: brightness(1.35); }
+.dtd-panel button:focus-visible, .dtd-panel input:focus-visible, .dtd-panel select:focus-visible,
+.dtd-panel summary:focus-visible, .dtd-panel textarea:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary, #3b82f6);
+  outline-offset: 1px;
+}
+.dtd-panel .dtd-row-select { cursor: pointer; }
+.dtd-panel .dtd-row-select:hover { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #3b82f6) 10%, transparent); }
+@media (prefers-reduced-motion: reduce) {
+  .dtd-panel * { transition: none !important; }
+}
+.dtd-panel .dtd-fx-badge { transition: none; }
+`;
+
+    /**
+     * 幂等注入面板交互态样式；返回清理函数（未注入时为 no-op）。只在有 document 的环境调用。
+     *
+     * 同一 document 下可能有**多个面板实例**同时存活，样式表必须共享：
+     * 用 document 作用域的引用计数（WeakMap）决定谁拥有删除权 ——
+     *   * 最后一个所有者清理时才移除**自己创建**的 <style>；
+     *   * 清理幂等（重复调用只算一次释放）；
+     *   * 外部已存在的同 ID 元素只借用、**永不删除**（不是本函数创建的）。
+     */
+    const STYLE_OWNERS = new WeakMap(); // document -> { el, count, owned }
+
+    function ensurePanelStyles (doc) {
+      if (doc == null || typeof doc.createElement !== 'function') return () => {};
+      const existing = doc.getElementById?.(STYLE_ID) ?? null;
+      let record = STYLE_OWNERS.get(doc);
+      if (record !== undefined && record.el === existing) {
+        record.count += 1;
+      } else if (existing != null) {
+        // 外部已有同 ID 样式：借用，但**不接管删除权**（owned=false ⇒ 永不 remove）。
+        record = { el: existing, count: 1, owned: false };
+        STYLE_OWNERS.set(doc, record);
+      } else {
+        const tag = doc.createElement('style');
+        if (tag == null) return () => {};
+        tag.id = STYLE_ID;
+        tag.textContent = PANEL_CSS;
+        doc.head?.appendChild?.(tag);
+        record = { el: tag, count: 1, owned: true };
+        STYLE_OWNERS.set(doc, record);
+      }
+      const owned = record;
+      let released = false;
+      return () => {
+        if (released) return; // 幂等：重复清理只释放一次
+        released = true;
+        const current = STYLE_OWNERS.get(doc);
+        if (current !== owned) return; // 记录已被别人接管（元素被换掉）→ 不动别人的样式
+        current.count -= 1;
+        if (current.count > 0) return; // 还有所有者在用
+        STYLE_OWNERS.delete(doc);
+        if (!current.owned) return; // 外部元素：不得误删
+        try { current.el.remove(); } catch { /* 已随 DOM 卸载 */ }
+      };
+    }
+
     const S = {
       page: { maxWidth: '760px', display: 'flex', flexDirection: 'column', gap: '20px', color: INK },
       header: { display: 'flex', flexDirection: 'column', gap: '8px' },
@@ -393,11 +519,15 @@ window.__ModuleLoader__.load({
       badge: (on) => ({ alignSelf: 'flex-start', fontSize: '11px', lineHeight: '16px', padding: '1px 8px', borderRadius: '999px', background: 'var(--dsw-alias-fill-tsp-secondary, rgba(128,128,128,.15))', color: on ? 'var(--dsw-alias-state-business-primary, inherit)' : 'var(--dsw-alias-label-tertiary, inherit)' }),
       featRow: (hairline) => ({ display: 'flex', alignItems: 'flex-start', gap: '12px', padding: '10px 0', borderTop: hairline ? `.5px solid ${STROKE}` : 'none' }),
       featText: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '3px' },
+      featHead: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' },
       featLabel: { fontSize: '13px', fontWeight: '500', cursor: 'pointer' },
       featHelp: { margin: 0, fontSize: '12px', lineHeight: '17px', color: INK3 },
+      fxBadge: { flex: 'none', fontSize: '10.5px', lineHeight: '15px', padding: '0 7px', borderRadius: '999px',
+        border: `.5px solid ${STROKE}`, color: INK3, background: 'transparent', whiteSpace: 'nowrap', fontWeight: '400' },
       switchTrack: (checked, disabled) => ({ flex: 'none', width: '36px', height: '20px', marginTop: '1px', padding: 0, border: 'none', borderRadius: '999px', position: 'relative', cursor: disabled ? 'not-allowed' : 'pointer', background: checked ? ACCENT : FILL2, opacity: disabled ? 0.5 : 1, transition: 'background .15s ease' }),
       switchThumb: (checked) => ({ position: 'absolute', top: '2px', left: '2px', width: '16px', height: '16px', borderRadius: '50%', background: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,.35)', transform: checked ? 'translateX(16px)' : 'translateX(0)', transition: 'transform .15s ease' }),
       toolbar: { display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' },
+      matchNote: { flex: 'none', fontSize: '11.5px', color: INK3, whiteSpace: 'nowrap' },
       searchInput: { flex: '1 1 180px', minWidth: 0, padding: '6px 10px', fontSize: '13px', borderRadius: '8px', border: `.5px solid ${STROKE}`, background: 'transparent', color: 'inherit', font: 'inherit' },
       btn: (disabled) => ({ padding: '5px 10px', fontSize: '12px', borderRadius: '8px', border: `.5px solid ${STROKE}`, background: 'transparent', color: INK2, font: 'inherit', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.55 : 1, whiteSpace: 'nowrap' }),
       btnAccent: (disabled) => ({ padding: '5px 12px', fontSize: '12px', borderRadius: '8px', border: `1px solid ${ACCENT}`, background: 'transparent', color: ACCENT, font: 'inherit', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.55 : 1, whiteSpace: 'nowrap' }),
@@ -406,6 +536,7 @@ window.__ModuleLoader__.load({
       caret: (open) => ({ flex: 'none', fontSize: '10px', color: INK3, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .12s ease' }),
       groupCount: { marginLeft: 'auto', fontSize: '11px', fontWeight: '500', color: INK3 },
       toolList: { listStyle: 'none', margin: 0, padding: '2px 0 4px', display: 'flex', flexDirection: 'column', gap: '2px' },
+      // className=dtd-row-select：hover 底色由注入的 <style> 提供（内联样式无 :hover）。
       toolRow: (selected) => ({ display: 'flex', alignItems: 'center', gap: '10px', padding: '5px 8px', borderRadius: '8px', background: selected ? `color-mix(in srgb, ${ACCENT} 8%, transparent)` : 'transparent' }),
       checkbox: { accentColor: ACCENT, width: '14px', height: '14px', margin: 0, flex: 'none' },
       toolLabel: { flex: 1, minWidth: 0, cursor: 'pointer', display: 'flex', alignItems: 'center' },
@@ -437,36 +568,45 @@ window.__ModuleLoader__.load({
 
     function JsonSetting ({ t, name, value, disabled, keys, onSave, draftStore }) {
       const [draft, setDraft] = useState(() => draftStore.read(name, value));
-      const [error, setError] = useState(null);
-      const submit = () => {
-        let parsed;
+      // 实时校验：输入即解析（不等人点保存才报错）。
+      // 语法错**与形状错**（类别/预算必须是对象：null 与 [] 一律非法）都禁用保存，
+      // 并显示 jsonInvalidNow；budgets=null 合法（关闭覆盖），故只有 categoryConfig 拒绝 null。
+      // 形状错与语法错同归为 undefined（JSON.parse 不会产出 undefined，二者不冲突）。
+      const parseDraft = (text) => {
         try {
-          parsed = JSON.parse(draft);
-          if ((parsed === null && name !== 'budgets') || (parsed !== null && (typeof parsed !== 'object' || Array.isArray(parsed)))) throw new Error('shape');
+          const parsed = JSON.parse(text);
+          if ((parsed === null && name !== 'budgets') || (parsed !== null && (typeof parsed !== 'object' || Array.isArray(parsed)))) return undefined;
+          return parsed;
         } catch {
-          setError(t('invalidJson'));
-          return;
+          return undefined;
         }
-        setError(null);
-        onSave(name, parsed);
+      };
+      const parsedNow = parseDraft(draft);
+      const saveBlocked = disabled || parsedNow === undefined;
+      const submit = () => {
+        if (parsedNow === undefined) return; // 双保险：按钮已禁用，这里不重复弹错
+        onSave(name, parsedNow);
       };
       return h('section', { style: S.jsonSection },
         h('label', { htmlFor: `tool-discovery-${name}`, style: S.featLabel }, t(name)),
         h('p', { style: S.featHelp }, t(`${name}Help`)),
         h('code', { style: S.jsonKeys }, (keys ?? []).join(', ')),
         h('textarea', { id: `tool-discovery-${name}`, rows: 6, value: draft, disabled,
-          style: S.textarea,
+          'aria-invalid': parsedNow === undefined ? 'true' : undefined,
+          style: parsedNow === undefined ? { ...S.textarea, borderColor: DANGER } : S.textarea,
           onChange: event => {
             draftStore.write(name, value, event.target.value);
             setDraft(event.target.value);
           } }),
         h('div', null,
-          h('button', { type: 'button', style: S.btnAccent(disabled), disabled, onClick: submit }, t('apply'))),
-        error ? h('p', { role: 'alert', style: S.alertText }, error) : null);
+          h('button', { type: 'button', style: S.btnAccent(saveBlocked), disabled: saveBlocked, onClick: submit }, t('apply'))),
+        parsedNow === undefined
+          ? h('p', { role: 'alert', style: S.alertText }, t('jsonInvalidNow'))
+          : null);
     }
 
     /** 叶子组件：只收 props，不读 ctx。 */
-    function SettingsPanel ({ t, snapshot, error, notice, busy, onToggle, onBulk, onRestore, onFeature, onSetting, draftStore }) {
+    function SettingsPanel ({ t, snapshot, error, notice, busy, onToggle, onBulk, onRestore, onFeature, onDescriptionTool, onSetting, draftStore }) {
       const [query, setQuery] = useState('');
       // 分组折叠状态：默认全部展开；搜索时强制展开（受控渲染，不用 details 避免 open 属性脱同步）。
       const [collapsed, setCollapsed] = useState({});
@@ -483,9 +623,17 @@ window.__ModuleLoader__.load({
         const row = features[key];
         if (row === undefined) return null;
         const [, label, help, checked] = row;
+        const effect = FEATURE_EFFECT[key];
+        // 徽标键名 fxReload/fxSession/fxTurn + 对应 *Title 悬停全文；无类别则不渲染。
+        const badge = effect == null ? null : h('span', {
+          style: S.fxBadge,
+          title: t(`fx${effect[0].toUpperCase()}${effect.slice(1)}Title`),
+        }, t(`fx${effect[0].toUpperCase()}${effect.slice(1)}`));
         return h('div', { key, style: S.featRow(hairline) },
           h('div', { style: S.featText },
-            h('label', { id: `tool-discovery-${key}-label`, htmlFor: `tool-discovery-${key}`, style: S.featLabel }, t(label)),
+            h('div', { style: S.featHead },
+              h('label', { id: `tool-discovery-${key}-label`, htmlFor: `tool-discovery-${key}`, style: S.featLabel }, t(label)),
+              badge),
             h('p', { id: `tool-discovery-${key}-help`, style: S.featHelp }, t(help))),
           h(Switch, {
             id: `tool-discovery-${key}`, checked, disabled,
@@ -495,7 +643,7 @@ window.__ModuleLoader__.load({
           }));
       };
 
-      const toolRow = (row) => h('li', { key: row.name, style: S.toolRow(row.selected) },
+      const toolRow = (row) => h('li', { key: row.name, className: 'dtd-row-select', style: S.toolRow(row.selected) },
         h('input', {
           type: 'checkbox',
           id: `initial-tool-${row.name}`,
@@ -515,7 +663,7 @@ window.__ModuleLoader__.load({
       if (snapshot?.status !== 'ready') banners.push(h('p', { key: 'loading', role: 'status', style: S.banner(INK3) }, t('loading')));
       if (snapshot?.writable === false) banners.push(h('p', { key: 'readonly', role: 'status', style: S.banner(INK3) }, t('readOnly')));
 
-      return h('div', { style: S.page },
+      return h('div', { className: 'dtd-panel', style: S.page },
         h('header', { style: S.header },
           h('h2', { style: S.title }, t('nav')),
           h('p', { style: S.hero }, t('hero')),
@@ -540,7 +688,24 @@ window.__ModuleLoader__.load({
           h('h3', { style: S.cardTitle }, t('features')),
           featureRow('initialToolsEnabled', false),
           featureRow('alwaysAllowPresetTools', true),
+          featureRow('compactBuiltinToolDescriptions', true),
           featureRow('ptcCompatibility', true)),
+
+        h('details', { style: S.card },
+          h('summary', { style: S.aboutSummary }, t('descriptionTools')),
+          h('p', { id: 'description-tools-help', style: S.cardDesc }, t('descriptionToolsHelp')),
+          snapshot?.value?.compactBuiltinToolDescriptions !== true
+            ? h('p', { style: S.note }, t('descriptionMasterOff')) : null,
+          !snapshot?.meta?.constraints?.builtinDescriptionTools
+            ? h('p', { role: 'status', style: S.note }, t('loading')) : null,
+          ...descriptionToolRows(snapshot?.value, snapshot?.meta?.constraints).map((tool, index) => {
+            const id = `concise-tool-${tool.name}`;
+            return h('div', { key: tool.name, style: S.featRow(index > 0) },
+              h('label', { id: `${id}-label`, htmlFor: id, style: S.featLabel }, h('code', null, tool.name)),
+              h(Switch, { id, checked: tool.checked, disabled,
+                labelledBy: `${id}-label`, describedBy: 'description-tools-help',
+                onChange: enabled => onDescriptionTool(tool.name, enabled) }));
+          })),
 
         h('section', { style: S.card },
           h('h3', { style: S.cardTitle }, t('title')),
@@ -561,6 +726,13 @@ window.__ModuleLoader__.load({
               onChange: (event) => setQuery(event.target.value),
               style: S.searchInput,
             }),
+            // 搜索时显示匹配计数与一键清除；空查询不占位。
+            searching ? h('span', { style: S.matchNote }, t('matchCount')(visible.length)) : null,
+            searching ? h('button', {
+              type: 'button',
+              style: S.btn(false),
+              onClick: () => setQuery(''),
+            }, t('clearSearch')) : null,
             h('button', {
               type: 'button',
               style: S.btn(disabled || visible.length === 0),
@@ -573,12 +745,15 @@ window.__ModuleLoader__.load({
               disabled: disabled || visible.length === 0,
               onClick: () => onBulk(visible.map((row) => row.name), false),
             }, t('clearVisible')),
-            h('button', {
-              type: 'button',
-              style: S.btn(disabled || snapshot?.metaAvailable === false),
-              disabled: disabled || snapshot?.metaAvailable === false,
-              onClick: () => { setQuery(''); onRestore(selected); },
-            }, t('restore'))),
+            // 已是默认名单时提示并禁用，避免"点了没反应"。
+            isDefaultSelection(selected, snapshot?.meta?.default)
+              ? h('button', { type: 'button', style: S.btn(true), disabled: true, title: t('alreadyDefault') }, t('restore'))
+              : h('button', {
+                type: 'button',
+                style: S.btn(disabled || snapshot?.metaAvailable === false),
+                disabled: disabled || snapshot?.metaAvailable === false,
+                onClick: () => { setQuery(''); onRestore(selected); },
+              }, t('restore'))),
           h('p', { style: S.fixedLine },
             h('strong', null, `${t('fixed')}: `),
             built.fixed.join(', '),
@@ -690,28 +865,60 @@ window.__ModuleLoader__.load({
         const [notice, setNotice] = useState(null);
         const [busy, setBusy] = useState(false);
         const writing = useRef(false);
+        // 挂载守卫：保存 Promise 未决时组件可能已卸载 —— 卸载后既不得新建定时器，
+        // 也不得再更新组件状态（否则会留下悬挂定时器与对已卸载实例的写入）。
+        const mounted = useRef(true);
+        // 成功横幅的自动消失句柄：新保存、报错或组件卸载都要清掉，避免悬挂回调。
+        const noticeTimer = useRef(null);
+        const clearNoticeTimer = () => {
+          if (noticeTimer.current !== null) {
+            clearTimeout(noticeTimer.current);
+            noticeTimer.current = null;
+          }
+        };
         const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
         /** 一次写入：false 或抛错都是"没被宿主接受"，必须显式呈现。 */
-        const write = useCallback(async (value, key = 'alwaysVisible') => {
+        const write = useCallback(async (value, key = 'alwaysVisible', toolName) => {
           const current = getSnapshot();
+          if (!mounted.current) return false; // 已卸载：不再发起写入
           if (writing.current || current.status !== 'ready' || current.writable === false) return false;
           writing.current = true;
           setBusy(true);
           setError(null);
           setNotice(null);
+          clearNoticeTimer();
           let ok = false;
           try {
-            ok = await saveSetting(form, key, value);
+            ok = toolName === undefined ? await saveSetting(form, key, value)
+              : await saveDescriptionTool(form, current.meta.constraints, toolName, value);
           } catch (reason) {
             logSaveFailure(reason);
           } finally {
             writing.current = false;
-            setBusy(false);
+            if (mounted.current) setBusy(false);
           }
-          if (ok) setNotice(t('saved'));
-          else setError(t('failed'));
+          // 卸载后不再触碰组件状态，也不再新建定时器（成功/失败两条路径都要过这道闸）。
+          if (!mounted.current) return ok;
+          if (ok) {
+            // 成功提示 3 秒后自动消失（失败保留，直到下一次操作）。
+            setNotice(t('saved'));
+            noticeTimer.current = setTimeout(() => {
+              noticeTimer.current = null;
+              if (mounted.current) setNotice(null);
+            }, 3000);
+          } else {
+            setError(t('failed'));
+          }
           return ok;
+        }, []);
+        // 卸载时清定时器并标记未挂载（client 侧无 ctx.dispose effect 可挂，React 卸载钩子负责）。
+        useEffect(() => {
+          mounted.current = true;
+          return () => {
+            mounted.current = false;
+            clearNoticeTimer();
+          };
         }, []);
 
         const onToggle = useCallback((_current, name) => {
@@ -735,6 +942,7 @@ window.__ModuleLoader__.load({
           if (!BOOLEAN_SETTINGS.includes(key) || typeof enabled !== 'boolean') return false;
           return write(enabled, key);
         }, []);
+        const onDescriptionTool = useCallback((name, enabled) => write(enabled, 'compactBuiltinToolOverrides', name), []);
         const onSetting = useCallback((key, value) => {
           if (!validAdvancedSetting(key, value, getSnapshot().meta.constraints)) {
             setNotice(null);
@@ -743,7 +951,7 @@ window.__ModuleLoader__.load({
           }
           return write(value, key);
         }, []);
-        return h(SettingsPanel, { t, snapshot, error, notice, busy, onToggle, onBulk, onRestore, onFeature, onSetting, draftStore });
+        return h(SettingsPanel, { t, snapshot, error, notice, busy, onToggle, onBulk, onRestore, onFeature, onDescriptionTool, onSetting, draftStore });
       };
     }
 
@@ -752,6 +960,11 @@ window.__ModuleLoader__.load({
     function apply (ctx) {
       const t = ctx.locale.bind(NS);
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'tool-discovery: settings dictionaries');
+      // 交互态样式（hover/focus-visible/reduced-motion）一次性注入 <head>；dispose 时移除。
+      // 浏览器外（vm 测试、SSR 探针）没有 document，ensurePanelStyles 自行退化为 no-op。
+      if (typeof document !== 'undefined') {
+        ctx.effect(() => ensurePanelStyles(document), 'tool-discovery: settings panel interaction styles');
+      }
       const Root = createTabRoot(ctx, t);
       ctx.slots.inject(SLOT, () => ctx.slots.register({
         name: SLOT,
@@ -766,8 +979,10 @@ window.__ModuleLoader__.load({
     // 供 vm 内测试取用（不参与渲染）：纯逻辑 + 接缝 + 装配点。
     exports.__test = {
       buildRows, filterRows, toggleName, isDefaultSelection, setMembership, groupRows, featureChoices, saveSetting, validAdvancedSetting,
+      descriptionToolRows, saveDescriptionTool,
       ownView, alwaysVisibleNode, readMeta, createTabRoot, createSnapshotSource, SettingsPanel,
       FIXED_ENTRIES, NS, PLUGIN_TAB_ID, SECTION_ID, SLOT, createDraftStore, S, zh, en,
+      FEATURE_EFFECT, ensurePanelStyles, PANEL_CSS,
     };
 
     exports.apply = apply;

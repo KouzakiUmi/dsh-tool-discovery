@@ -93,6 +93,15 @@ test('PR3: 恢复已决失败（incompatible）→ 立即落定，且只留常�
     '已决失败只留常驻基线（fail closed），不得披露任何已加载项');
 });
 
+test('PR8: missing trusted epoch stays blocked on repeated assemblies', async () => {
+  const runtime = restoringRuntime({ restoring: false, requireTrustedEpoch: true,
+    ledger: { state: 'failed-closed', reason: 'SESSION_FAILED_CLOSED:MISSING_TRUSTED_EPOCH' } });
+  const { listener, agent, incoming } = harness({ runtime, whenReady: async () => ({ mode: 'incompatible' }) });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await assert.rejects(listener(incoming, { agent, scope: agent }, async () => incoming), /MISSING_TRUSTED_EPOCH/);
+  }
+});
+
 test('PR4: incoming 同名重复定义 → INCOMPATIBLE_COMPOSITION（基线段与已加载段同等）', async () => {
   const runtime = restoringRuntime({
     restoring: false,

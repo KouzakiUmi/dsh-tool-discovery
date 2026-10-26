@@ -1,0 +1,1971 @@
+{
+  "core": "0.2.1-rc.3",
+  "source": "https://github.com/deepseek-ai/deepseek-harness",
+  "rows": [
+    {
+      "package": "@deepseek-ai/dsh-tool-cordis",
+      "variant": {},
+      "wire": {
+        "name": "cordis_inspect_list",
+        "description": "List every Cordis Inspect Provider currently known to the Host, including local Host Providers and the latest manifests synchronized from the Client. Each entry includes its platform, purpose, read-only methods, and input/output schemas. Call this Tool before writing or configuring a plugin, then select the provider and method for cordis_inspect_query from its result. Do not guess names or treat an Inspect method as a business Service that Plugin code can call.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-cordis",
+      "variant": {},
+      "wire": {
+        "name": "cordis_inspect_query",
+        "description": "Run a read-only query declared by an Inspect Provider. platform, provider, and method must come from cordis_inspect_list, and input must satisfy that method's schema. Use this Tool before writing plugin code to read exact Service methods, Event modes, plugin Config schemas, Tool schemas, theme tokens, or live Slot trees and props. Host queries run locally. A Client query waits for the first valid page response within the configured timeout; otherwise it reports a Client failure or asks you to reconnect and retry. This Tool cannot invoke business Service methods or modify the runtime.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "platform": {
+              "type": "string",
+              "description": "Runtime platform that owns the Provider.",
+              "enum": [
+                "host",
+                "client"
+              ]
+            },
+            "provider": {
+              "type": "string",
+              "description": "Exact Provider ID returned by cordis_inspect_list."
+            },
+            "method": {
+              "type": "string",
+              "description": "Exact method name declared by the Provider manifest."
+            },
+            "input": {
+              "description": "Optional query input; it must satisfy the method input schema."
+            }
+          },
+          "required": [
+            "platform",
+            "provider",
+            "method"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-schedule",
+      "variant": {},
+      "wire": {
+        "name": "schedule_create",
+        "description": "Create a reminder in the current session that delivers prompt when it becomes due. Supply exactly one timing parameter: after_seconds, at, every_seconds, daily, weekly, or cron. Local times that do not exist in the zone are skipped; repeated local times fire once, at the earlier instant. After downtime, a recurring reminder delivers only its latest missed occurrence. Delivery can repeat after a crash.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "prompt": {
+              "type": "string",
+              "description": "Reminder content to present when the target becomes due."
+            },
+            "title": {
+              "type": "string",
+              "description": "Concise task name in the user's language, at most 120 characters. Name only the core action and subject; keep essential target identifiers such as PR numbers and branch names. Do not include execution frequency (e.g. daily, hourly), scheduled dates/times, time zones, task status, or configuration and execution details (e.g. read-only mode, profile-tag filters), even when embedded in the requested or existing title. Do not append parenthetical notes. Put scheduling information in the timing parameters and execution instructions in prompt."
+            },
+            "after_seconds": {
+              "type": "number",
+              "description": "Delay in whole seconds."
+            },
+            "every_seconds": {
+              "type": "number",
+              "description": "Fixed-rate interval in whole seconds, at least 60, aligned to the creation time; changing it with schedule_update re-aligns it to the save time."
+            },
+            "daily": {
+              "type": "object",
+              "description": "Every day at a local time.",
+              "additionalProperties": false,
+              "properties": {
+                "time": {
+                  "type": "string",
+                  "description": "HH:mm:ss with optional 1-3 fractional digits, for example 23:00:00."
+                },
+                "time_zone": {
+                  "type": "string",
+                  "description": "UTC or IANA Area/Location, for example Asia/Shanghai."
+                }
+              },
+              "required": [
+                "time",
+                "time_zone"
+              ]
+            },
+            "weekly": {
+              "type": "object",
+              "description": "On the given weekdays at a local time.",
+              "additionalProperties": false,
+              "properties": {
+                "time": {
+                  "type": "string",
+                  "description": "HH:mm:ss with optional 1-3 fractional digits, for example 09:00:00."
+                },
+                "time_zone": {
+                  "type": "string",
+                  "description": "UTC or IANA Area/Location, for example Asia/Shanghai."
+                },
+                "weekdays": {
+                  "type": "array",
+                  "description": "ISO weekdays, Monday 1 through Sunday 7, without repetitions.",
+                  "items": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "required": [
+                "time",
+                "time_zone",
+                "weekdays"
+              ]
+            },
+            "cron": {
+              "type": "object",
+              "description": "Five-field Vixie cron expression in a time zone.",
+              "additionalProperties": false,
+              "properties": {
+                "expression": {
+                  "type": "string",
+                  "description": "minute hour day-of-month month day-of-week, for example \"*/15 9-17 * * 1-5\". When both day fields are restricted, a date matches if either one matches."
+                },
+                "time_zone": {
+                  "type": "string",
+                  "description": "UTC or IANA Area/Location, for example Asia/Shanghai."
+                }
+              },
+              "required": [
+                "expression",
+                "time_zone"
+              ]
+            },
+            "at": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "date": {
+                      "type": "string"
+                    },
+                    "time": {
+                      "type": "string"
+                    },
+                    "time_zone": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "date",
+                    "time",
+                    "time_zone"
+                  ]
+                }
+              ],
+              "description": "Absolute target: an RFC 3339 date-time with offset, or a local date, time, and IANA time_zone."
+            }
+          },
+          "required": [
+            "prompt",
+            "title"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-schedule",
+      "variant": {},
+      "wire": {
+        "name": "schedule_list",
+        "description": "List the active reminders in the current session.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-schedule",
+      "variant": {},
+      "wire": {
+        "name": "schedule_delete",
+        "description": "Delete a reminder in the current session, active or inactive. Deletion does not retract a reminder message that is already queued.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Exact schedule id."
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-schedule",
+      "variant": {},
+      "wire": {
+        "name": "schedule_update",
+        "description": "Change a reminder in place, keeping its id. Supply a new title, prompt, or at most one timing parameter; omitted fields keep their stored values. To change a relative delay, create a new reminder.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Schedule id returned by schedule_list."
+            },
+            "title": {
+              "type": "string",
+              "description": "New task name; follow the schedule_create title rules."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "New reminder content."
+            },
+            "every_seconds": {
+              "type": "number",
+              "description": "Fixed-rate interval in whole seconds, at least 60, aligned to the creation time; changing it with schedule_update re-aligns it to the save time."
+            },
+            "daily": {
+              "type": "object",
+              "description": "Every day at a local time.",
+              "additionalProperties": false,
+              "properties": {
+                "time": {
+                  "type": "string",
+                  "description": "HH:mm:ss with optional 1-3 fractional digits, for example 23:00:00."
+                },
+                "time_zone": {
+                  "type": "string",
+                  "description": "UTC or IANA Area/Location, for example Asia/Shanghai."
+                }
+              },
+              "required": [
+                "time",
+                "time_zone"
+              ]
+            },
+            "weekly": {
+              "type": "object",
+              "description": "On the given weekdays at a local time.",
+              "additionalProperties": false,
+              "properties": {
+                "time": {
+                  "type": "string",
+                  "description": "HH:mm:ss with optional 1-3 fractional digits, for example 09:00:00."
+                },
+                "time_zone": {
+                  "type": "string",
+                  "description": "UTC or IANA Area/Location, for example Asia/Shanghai."
+                },
+                "weekdays": {
+                  "type": "array",
+                  "description": "ISO weekdays, Monday 1 through Sunday 7, without repetitions.",
+                  "items": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "required": [
+                "time",
+                "time_zone",
+                "weekdays"
+              ]
+            },
+            "cron": {
+              "type": "object",
+              "description": "Five-field Vixie cron expression in a time zone.",
+              "additionalProperties": false,
+              "properties": {
+                "expression": {
+                  "type": "string",
+                  "description": "minute hour day-of-month month day-of-week, for example \"*/15 9-17 * * 1-5\". When both day fields are restricted, a date matches if either one matches."
+                },
+                "time_zone": {
+                  "type": "string",
+                  "description": "UTC or IANA Area/Location, for example Asia/Shanghai."
+                }
+              },
+              "required": [
+                "expression",
+                "time_zone"
+              ]
+            },
+            "at": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "date": {
+                      "type": "string"
+                    },
+                    "time": {
+                      "type": "string"
+                    },
+                    "time_zone": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "date",
+                    "time",
+                    "time_zone"
+                  ]
+                }
+              ],
+              "description": "Absolute target: an RFC 3339 date-time with offset, or a local date, time, and IANA time_zone."
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-str-replace-editor",
+      "variant": {},
+      "wire": {
+        "name": "str_replace_editor",
+        "description": "Custom editing tool for viewing, creating and editing files\n* State is persistent across command calls and discussions with the user\n* If `path` is a file, `view` displays the result of applying `cat -n`. If `path` is a directory, `view` lists non-hidden files and directories up to 2 levels deep\n* The `create` command cannot be used if the specified `path` already exists as a file\n* If a `command` generates a long output, it will be truncated and marked with `<response clipped>`\n* A null placeholder for a parameter unused by the selected command is treated as omitted. Required parameters still need values; omit `str_replace.new_str` rather than setting it to null when deleting a match\n\nNotes for using the `str_replace` command:\n* The `old_str` parameter should match EXACTLY one or more consecutive lines from the original file. Be mindful of whitespaces!\n* If the `old_str` parameter is not unique in the file, the replacement will not be performed. Make sure to include enough context in `old_str` to make it unique\n* The `new_str` parameter should contain the edited lines that should replace the `old_str`",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "The commands to run. Allowed options are: `view`, `create`, `str_replace`, `insert`.",
+              "enum": [
+                "view",
+                "create",
+                "str_replace",
+                "insert"
+              ]
+            },
+            "path": {
+              "type": "string",
+              "description": "Absolute path to file or directory, e.g. `/repo/file.py` or `/repo`."
+            },
+            "file_text": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Required string parameter of `create` command, with the content of the file to be created. A null placeholder is treated as omitted by commands that do not use this parameter."
+            },
+            "insert_line": {
+              "oneOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Required integer parameter of `insert` command. The `new_str` will be inserted AFTER the line `insert_line` of `path`. A null placeholder is treated as omitted by commands that do not use this parameter."
+            },
+            "new_str": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional string parameter of `str_replace` command containing the new string (if omitted, no string will be added). Required string parameter of `insert` command containing the string to insert. A null placeholder is accepted only by commands that do not use this parameter."
+            },
+            "old_str": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Required string parameter of `str_replace` command containing the string in `path` to replace. A null placeholder is treated as omitted by commands that do not use this parameter."
+            },
+            "view_range": {
+              "oneOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional parameter of `view` command when `path` points to a file. If omitted or null, the full file is shown. If provided, the file will be shown in the indicated line number range, e.g. [11, 12] will show lines 11 and 12. Indexing at 1 to start. Setting `[start_line, -1]` shows all lines from `start_line` to the end of the file."
+            }
+          },
+          "required": [
+            "command",
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-workspace-dependencies",
+      "variant": {},
+      "wire": {
+        "name": "load_workspace_dependencies",
+        "description": "Get absolute paths to bundled Python and library directories, plus bundled Python distribution versions. Node.js and pnpm paths are included when the payload provides them. Python includes numpy, pandas, python-docx, python-pptx, openpyxl, Pillow, lxml, and XlsxWriter. Use these libraries for Office files unless the user or workspace instructions select another environment. When Node.js and pnpm paths are returned, run pnpm with that Node executable and pnpm script path. This does not change PATH or package-manager settings.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-present",
+      "variant": {},
+      "wire": {
+        "name": "present",
+        "description": "Declare existing files as final deliverables for the user. Use it when the user needs a separate file, especially Office documents, spreadsheets, and slide decks; prefer your final response when that suffices. The user opens the current files; their contents are not copied.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "files": {
+              "type": "array",
+              "description": "Usually the 1-2 most important deliverables; at most 4 per call.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Path of an existing regular file. Relative paths use the Session working directory."
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Brief description for the user."
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            }
+          },
+          "required": [
+            "files"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-subagent-control",
+      "variant": {},
+      "wire": {
+        "name": "send_message",
+        "description": "Send a message to an agent. A working agent receives it at its next step; an idle agent starts a new turn with it. Returns delivery confirmation, not the agent's answer.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "agent_id": {
+              "type": "string",
+              "description": "The agent id of your direct continuable child, or your direct parent when you are a resident continuable child."
+            },
+            "message": {
+              "type": "string",
+              "description": "The message to deliver to the agent."
+            }
+          },
+          "required": [
+            "agent_id",
+            "message"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-subagent-control",
+      "variant": {},
+      "wire": {
+        "name": "interrupt_agent",
+        "description": "Ask a subagent to stop its current work. This call returns without waiting for it to stop. You can continue a local direct child's conversation later with send_message. External executions stop permanently and cannot receive follow-ups. Subagents it started will keep running.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "agent_id": {
+              "type": "string",
+              "description": "The id of an agent created under you: your direct child or a deeper descendant."
+            }
+          },
+          "required": [
+            "agent_id"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-todo",
+      "variant": {
+        "allowParallelInProgress": true
+      },
+      "wire": {
+        "name": "todo_write",
+        "description": "Record and update a task list to plan multi-step work and show progress; skip it for trivial single-step tasks. Add one todo per concrete step before you start. While work remains, keep the todos being worked on `in_progress`, several only when work runs in parallel. Mark each todo `completed` as soon as it is done.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "todos": {
+              "type": "array",
+              "description": "The COMPLETE task list, replacing any previous list.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "content": {
+                    "type": "string",
+                    "description": "What the task is — a short imperative line."
+                  },
+                  "status": {
+                    "type": "string",
+                    "description": "pending (not started) | in_progress (now) | completed (done).",
+                    "enum": [
+                      "pending",
+                      "in_progress",
+                      "completed"
+                    ]
+                  }
+                },
+                "required": [
+                  "content",
+                  "status"
+                ]
+              }
+            }
+          },
+          "required": [
+            "todos"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-todo",
+      "variant": {
+        "allowParallelInProgress": false
+      },
+      "wire": {
+        "name": "todo_write",
+        "description": "Record and update a task list to plan multi-step work and show progress; skip it for trivial single-step tasks. Add one todo per concrete step before you start. While work remains, keep exactly one todo `in_progress`. Mark each todo `completed` as soon as it is done.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "todos": {
+              "type": "array",
+              "description": "The COMPLETE task list, replacing any previous list.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "content": {
+                    "type": "string",
+                    "description": "What the task is — a short imperative line."
+                  },
+                  "status": {
+                    "type": "string",
+                    "description": "pending (not started) | in_progress (now) | completed (done).",
+                    "enum": [
+                      "pending",
+                      "in_progress",
+                      "completed"
+                    ]
+                  }
+                },
+                "required": [
+                  "content",
+                  "status"
+                ]
+              }
+            }
+          },
+          "required": [
+            "todos"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-ralph",
+      "variant": {},
+      "wire": {
+        "name": "ralph",
+        "description": "Run a foreground fresh-agent Ralph loop toward one immutable objective. Use only when the direct human explicitly asks for Ralph or fresh-agent iteration. Each round opens a new child with no parent conversation or prior child session; the shared workspace is long-term memory, and only a bounded structured report crosses rounds. The call returns when a worker reports completion or a concrete blocker, or at the round limit. Ordinary long-running same-session work belongs to goal tools.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "objective": {
+              "type": "string",
+              "description": "The immutable completion objective for every fresh Ralph round."
+            },
+            "maxRounds": {
+              "type": "number",
+              "description": "Optional positive safe-integer round cap, bounded by the deployment ceiling."
+            }
+          },
+          "required": [
+            "objective"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-session-query",
+      "variant": {},
+      "wire": {
+        "name": "session_search",
+        "description": "Search prior sessions in the caller workspace and return the strongest matching event from each session.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Literal full-text query over prior session history."
+            },
+            "session_ids": {
+              "type": "array",
+              "description": "Optional session ids to include.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "created_at_from": {
+              "type": "string",
+              "description": "Inclusive timezone-qualified ISO 8601 creation-time lower bound."
+            },
+            "created_at_to": {
+              "type": "string",
+              "description": "Inclusive timezone-qualified ISO 8601 creation-time upper bound."
+            },
+            "parent_session_ids": {
+              "type": "array",
+              "description": "Optional direct parent session ids.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "include_root_sessions": {
+              "type": "boolean",
+              "description": "Include sessions with no parent in the parent filter."
+            },
+            "availability": {
+              "type": "array",
+              "description": "Require at least one selected source availability.",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "live",
+                  "persisted"
+                ]
+              }
+            },
+            "event_seq_from": {
+              "type": "integer",
+              "description": "Inclusive event sequence lower bound."
+            },
+            "event_seq_to": {
+              "type": "integer",
+              "description": "Inclusive event sequence upper bound."
+            },
+            "event_time_from": {
+              "type": "string",
+              "description": "Inclusive timezone-qualified ISO 8601 event-time lower bound."
+            },
+            "event_time_to": {
+              "type": "string",
+              "description": "Inclusive timezone-qualified ISO 8601 event-time upper bound."
+            },
+            "event_types": {
+              "type": "array",
+              "description": "Event types to include.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "event_surfaces": {
+              "type": "array",
+              "description": "Event surfaces to include.",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "current",
+                  "shadowed",
+                  "log-only"
+                ]
+              }
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-session-query",
+      "variant": {},
+      "wire": {
+        "name": "session_event_search",
+        "description": "Search prior events in one authorized session; the current session excludes the step performing this call.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "type": "string",
+              "description": "Target session id. Omit for the current session."
+            },
+            "query": {
+              "type": "string",
+              "description": "Literal full-text query over the target session."
+            },
+            "seq_from": {
+              "type": "integer",
+              "description": "Inclusive event sequence lower bound."
+            },
+            "seq_to": {
+              "type": "integer",
+              "description": "Inclusive event sequence upper bound."
+            },
+            "time_from": {
+              "type": "string",
+              "description": "Inclusive timezone-qualified ISO 8601 event-time lower bound."
+            },
+            "time_to": {
+              "type": "string",
+              "description": "Inclusive timezone-qualified ISO 8601 event-time upper bound."
+            },
+            "event_types": {
+              "type": "array",
+              "description": "Event types to include.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "surfaces": {
+              "type": "array",
+              "description": "Event surfaces to include.",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "current",
+                  "shadowed",
+                  "log-only"
+                ]
+              }
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-session-query",
+      "variant": {},
+      "wire": {
+        "name": "session_trace",
+        "description": "Read the authorized session lineage around one session, including complete visible ancestor and descendant relationships.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "type": "string",
+              "description": "Target session id. Omit for the current session."
+            }
+          }
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-session-query",
+      "variant": {},
+      "wire": {
+        "name": "session_event_trace",
+        "description": "Read every direct replacement and relationship to a cited source event for one event in an authorized session.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "type": "string",
+              "description": "Target session id. Omit for the current session."
+            },
+            "seq": {
+              "type": "integer",
+              "description": "Target event sequence number."
+            }
+          },
+          "required": [
+            "seq"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-session-query",
+      "variant": {},
+      "wire": {
+        "name": "session_event_read",
+        "description": "Read one full unabridged event and optional neighboring raw-event summaries from an authorized session.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "type": "string",
+              "description": "Target session id. Omit for the current session."
+            },
+            "seq": {
+              "type": "integer",
+              "description": "Target event sequence number."
+            },
+            "before": {
+              "type": "integer",
+              "description": "Number of preceding raw events to summarize. Omit for none."
+            },
+            "after": {
+              "type": "integer",
+              "description": "Number of following raw events to summarize. Omit for none."
+            }
+          },
+          "required": [
+            "seq"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-ask-user",
+      "variant": {
+        "mode": "legacy"
+      },
+      "wire": {
+        "name": "ask_user_question",
+        "description": "Ask the user a concise question when you need confirmation, a choice, or missing information before proceeding.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "questions": {
+              "type": "array",
+              "description": "Questions to ask the user before continuing.",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "Stable id for this question; echoed in the answer."
+                  },
+                  "question": {
+                    "type": "string",
+                    "description": "The specific question to ask the user."
+                  },
+                  "header": {
+                    "type": "string",
+                    "description": "Optional short heading for the question, such as \"Confirm\" or \"Choose Mode\"."
+                  },
+                  "options": {
+                    "type": "array",
+                    "description": "Optional choices to show the user. If you recommend one, put it first and append \"(Recommended)\" to that label.",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {
+                        "label": {
+                          "type": "string",
+                          "description": "Short user-facing option label."
+                        },
+                        "description": {
+                          "type": "string",
+                          "description": "One sentence explaining the tradeoff or impact."
+                        }
+                      },
+                      "required": [
+                        "label"
+                      ]
+                    }
+                  },
+                  "multi_select": {
+                    "type": "boolean",
+                    "description": "Whether the user may select more than one option. Defaults to false."
+                  }
+                },
+                "required": [
+                  "id",
+                  "question"
+                ]
+              }
+            }
+          },
+          "required": [
+            "questions"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-ask-user",
+      "variant": {
+        "mode": "timed",
+        "timeout": 120
+      },
+      "wire": {
+        "name": "ask_user_question",
+        "description": "Ask brief, direct, self-contained questions about missing information, preferences, or decisions. Use user-facing terms; assume no knowledge of background work or internal names. Use distinct stable question IDs. A submitted skipped question is an answer item with empty selected and no custom; pending instead means no answer batch arrived before the timeout and the user can still answer.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "questions": {
+              "type": "array",
+              "description": "Questions to ask the user.",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "Stable id for this question; echoed in the answer."
+                  },
+                  "question": {
+                    "type": "string",
+                    "description": "The specific question to ask the user."
+                  },
+                  "header": {
+                    "type": "string",
+                    "description": "Optional short heading for the question, such as \"Confirm\" or \"Choose Mode\"."
+                  },
+                  "options": {
+                    "type": "array",
+                    "description": "Optional choices to show the user. If you recommend one, put it first and append \"(Recommended)\" to that label.",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {
+                        "label": {
+                          "type": "string",
+                          "description": "Short user-facing option label."
+                        },
+                        "description": {
+                          "type": "string",
+                          "description": "One sentence explaining the tradeoff or impact."
+                        }
+                      },
+                      "required": [
+                        "label"
+                      ]
+                    }
+                  },
+                  "multi_select": {
+                    "type": "boolean",
+                    "description": "Whether the user may select more than one option. Defaults to false."
+                  }
+                },
+                "required": [
+                  "id",
+                  "question"
+                ]
+              }
+            },
+            "timeout": {
+              "type": "integer",
+              "description": "Wait seconds for the entire batch (default 120); omit unless the user specifies a duration. Use -1 only when an answer is required before proceeding."
+            }
+          },
+          "required": [
+            "questions"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-jobs",
+      "variant": {},
+      "wire": {
+        "name": "job_output",
+        "description": "Read a background job: output since the previous read for stream jobs, or the result of a finished final-output job.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "job_id": {
+              "type": "string",
+              "description": "Job id returned by the tool that started the background work."
+            },
+            "wait": {
+              "type": "boolean",
+              "description": "Block until the job finishes or the timeout expires; a timed-out wait leaves the job running. Defaults to false."
+            },
+            "timeout_ms": {
+              "type": "number",
+              "description": "Max wait in milliseconds with wait: true. Defaults to and is capped by configuration."
+            }
+          },
+          "required": [
+            "job_id"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-jobs",
+      "variant": {},
+      "wire": {
+        "name": "job_list",
+        "description": "List your background jobs (running and finished) with their ids, kinds, and statuses.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-jobs",
+      "variant": {},
+      "wire": {
+        "name": "job_kill",
+        "description": "Request cancellation of a running background job.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "job_id": {
+              "type": "string",
+              "description": "Job id returned by the tool that started the background work."
+            },
+            "reason": {
+              "type": "string",
+              "description": "Optional short reason, recorded in the log and forwarded to the job."
+            }
+          },
+          "required": [
+            "job_id"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-skill",
+      "variant": {},
+      "wire": {
+        "name": "skill",
+        "description": "Load the full instructions for a skill. Call it before acting on a task that names or clearly matches a skill in the session skill catalog.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The exact skill name from the available skills list."
+            }
+          },
+          "required": [
+            "name"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-fs-search",
+      "variant": {
+        "sampleOverCapGlobResults": false
+      },
+      "wire": {
+        "name": "glob",
+        "description": "Find files, not directories, whose paths match a glob pattern, including hidden and ignored files. Returns up to 100 paths in modification-time order; a larger result keeps the first paths and reports where the complete list was saved.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "description": "Glob pattern to match file paths against (e.g. \"**/*.ts\", \"src/**/*.test.js\"). A pattern with no \"/\" matches the basename at any depth, so \"*\" and \"*.ts\" both search the whole tree; include a separator to anchor the depth."
+            },
+            "path": {
+              "type": "string",
+              "description": "Directory to search in. Defaults to the session workspace; a relative path resolves against it."
+            }
+          },
+          "required": [
+            "pattern"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-fs-search",
+      "variant": {
+        "sampleOverCapGlobResults": false
+      },
+      "wire": {
+        "name": "grep",
+        "description": "Search file contents with a ripgrep regular expression. Returns matching lines with line numbers, grouped by file. Returns up to 250 matches; a larger result reports where the complete match list was saved.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "description": "Regular expression to search for (ripgrep syntax)."
+            },
+            "path": {
+              "type": "string",
+              "description": "File or directory to search. Defaults to the session workspace; a relative path resolves against it."
+            },
+            "include": {
+              "type": "string",
+              "description": "One glob filter for which files to search (e.g. \"*.ts\", \"*.{js,jsx}\"). Not a list; negation is not supported."
+            }
+          },
+          "required": [
+            "pattern"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-fs-search",
+      "variant": {
+        "sampleOverCapGlobResults": true
+      },
+      "wire": {
+        "name": "glob",
+        "description": "Find files, not directories, whose paths match a glob pattern, including hidden and ignored files. Returns up to 100 paths in modification-time order; a larger result is sampled across top-level entries and reports where the complete list was saved.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "description": "Glob pattern to match file paths against (e.g. \"**/*.ts\", \"src/**/*.test.js\"). A pattern with no \"/\" matches the basename at any depth, so \"*\" and \"*.ts\" both search the whole tree; include a separator to anchor the depth."
+            },
+            "path": {
+              "type": "string",
+              "description": "Directory to search in. Defaults to the session workspace; a relative path resolves against it."
+            }
+          },
+          "required": [
+            "pattern"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-terminal",
+      "variant": {
+        "enableRunInBackground": false
+      },
+      "wire": {
+        "name": "terminal_open",
+        "description": "Create a persistent, owner-isolated terminal session from a registered backend type. Use this for shell or REPL state that must survive across tool calls.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "description": "Registered terminal backend type, usually \"shell\"."
+            },
+            "name": {
+              "type": "string",
+              "description": "Optional owner-local display name such as \"main\" or \"gdb\"."
+            },
+            "cwd": {
+              "type": "string",
+              "description": "Initial working directory, relative to the Session current directory when not absolute."
+            }
+          },
+          "required": [
+            "type"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-terminal",
+      "variant": {
+        "enableRunInBackground": false
+      },
+      "wire": {
+        "name": "terminal_send",
+        "description": "Send text to a persistent terminal. By default Enter is submitted and the call waits for a prompt, stdin wait, output silence, timeout, or session exit.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string",
+              "description": "Terminal session id returned by terminal_open or terminal_list."
+            },
+            "text": {
+              "type": "string",
+              "description": "UTF-8 text to write to the terminal."
+            },
+            "submit": {
+              "type": "boolean",
+              "description": "Submit Enter after text (default true). Set false for control characters or incomplete REPL input."
+            }
+          },
+          "required": [
+            "sessionId",
+            "text"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-terminal",
+      "variant": {
+        "enableRunInBackground": false
+      },
+      "wire": {
+        "name": "terminal_read",
+        "description": "Read a bounded page of retained output from a persistent terminal without sending input.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string",
+              "description": "Terminal session id."
+            },
+            "offset": {
+              "type": "number",
+              "description": "Newest-relative line offset (default 0)."
+            },
+            "count": {
+              "type": "number",
+              "description": "Requested line count (default 500; backend caps apply)."
+            }
+          },
+          "required": [
+            "sessionId"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-terminal",
+      "variant": {
+        "enableRunInBackground": false
+      },
+      "wire": {
+        "name": "terminal_signal",
+        "description": "Send an allowed signal to the current foreground process group of a persistent terminal.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string",
+              "description": "Terminal session id."
+            },
+            "signal": {
+              "type": "string",
+              "description": "Signal to deliver. Shell-targeted SIGKILL is rejected; use terminal_close.",
+              "enum": [
+                "SIGINT",
+                "SIGTERM",
+                "SIGKILL",
+                "SIGTSTP",
+                "SIGHUP"
+              ]
+            }
+          },
+          "required": [
+            "sessionId",
+            "signal"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-terminal",
+      "variant": {
+        "enableRunInBackground": false
+      },
+      "wire": {
+        "name": "terminal_close",
+        "description": "Close one persistent terminal and wait until its captured owned process tree is gone.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string",
+              "description": "Terminal session id."
+            }
+          },
+          "required": [
+            "sessionId"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-terminal",
+      "variant": {
+        "enableRunInBackground": false
+      },
+      "wire": {
+        "name": "terminal_list",
+        "description": "List persistent terminal sessions owned by the current agent.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-terminal",
+      "variant": {
+        "enableRunInBackground": true
+      },
+      "wire": {
+        "name": "terminal_send",
+        "description": "Send text to a persistent terminal. By default Enter is submitted and the call waits for a prompt, stdin wait, output silence, timeout, or session exit. Background mode returns a job id for job_output/job_kill.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string",
+              "description": "Terminal session id returned by terminal_open or terminal_list."
+            },
+            "text": {
+              "type": "string",
+              "description": "UTF-8 text to write to the terminal."
+            },
+            "submit": {
+              "type": "boolean",
+              "description": "Submit Enter after text (default true). Set false for control characters or incomplete REPL input."
+            },
+            "run_in_background": {
+              "type": "boolean",
+              "description": "Return a job id immediately; collect with job_output or stop with job_kill."
+            }
+          },
+          "required": [
+            "sessionId",
+            "text"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-working-directory",
+      "variant": {},
+      "wire": {
+        "name": "working_directory",
+        "description": "Read the current working directory, or change it with cd. Relative paths use the current directory. Existing shells and running processes keep their own directories.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "cd": {
+              "type": "string",
+              "description": "Existing directory to enter. Omit to read the current directory."
+            }
+          }
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-bash-persistent",
+      "variant": {},
+      "wire": {
+        "name": "bash",
+        "description": "Run commands in a persistent bash shell. State, including the current directory and exported environment variables, persists across calls for this agent.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "The bash command to run. Relative path is preferred in the command."
+            }
+          },
+          "required": [
+            "command"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-pwsh-persistent",
+      "variant": {},
+      "wire": {
+        "name": "pwsh",
+        "description": "Run commands in a persistent PowerShell shell. State, including the current directory and exported environment variables, persists across calls for this agent.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "The PowerShell command to run. Relative path is preferred in the command."
+            }
+          },
+          "required": [
+            "command"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-subagent",
+      "variant": {
+        "inherits": false,
+        "continuable": false,
+        "selectable": false,
+        "defaults": false
+      },
+      "wire": {
+        "name": "subagent",
+        "description": "Delegate a self-contained task to a subagent (a separate agent that works in its own context) to offload focused, independent work — research, a scoped implementation, an analysis — so it does not consume this conversation's context. The subagent returns its result, not its intermediate steps. This tool starts an independently managed subagent and immediately returns its id. The runtime notifies you when it finishes. The completion notice includes its final answer. This backend does not accept follow-up messages.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": "string",
+              "description": "Initial child working directory. Relative paths use your current directory; omitted inherits it. Later directory changes in either agent are independent."
+            },
+            "description": {
+              "type": "string",
+              "description": "A short (3-5 word) description of the delegated task, for display."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "The complete, self-contained task for the subagent. It does not share this conversation's context, so include everything it needs."
+            }
+          },
+          "required": [
+            "description",
+            "prompt"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-subagent",
+      "variant": {
+        "inherits": false,
+        "continuable": false,
+        "selectable": true,
+        "defaults": false
+      },
+      "wire": {
+        "name": "list_subagent_models",
+        "description": "Discover LLM routes for subagents without changing the current Agent. Call with no arguments to list registered providers, with `provider` to list its advertised models, or with `provider` and `model` to inspect that exact model and its reasoning efforts. Catalog membership is advisory: an adapter may accept an unlisted model id. Use the returned ids with a delegation tool's `provider`, `model`, and `reasoning_effort` fields.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "description": "Registered LLM provider id. Omit to list providers."
+            },
+            "model": {
+              "type": "string",
+              "description": "Exact model id to inspect. Requires provider; omit to list that provider's advertised models."
+            }
+          }
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-subagent",
+      "variant": {
+        "inherits": false,
+        "continuable": false,
+        "selectable": true,
+        "defaults": false
+      },
+      "wire": {
+        "name": "subagent",
+        "description": "Delegate a self-contained task to a subagent (a separate agent that works in its own context) to offload focused, independent work — research, a scoped implementation, an analysis — so it does not consume this conversation's context. The subagent returns its result, not its intermediate steps. This tool starts an independently managed subagent and immediately returns its id. The runtime notifies you when it finishes. The completion notice includes its final answer. This backend does not accept follow-up messages. Child LLM selection is optional. Omit `provider`, `model`, and `reasoning_effort` to use configured child defaults and inherit compatible missing values from the parent Agent. Supply `provider` and `model` together after using `list_subagent_models` to inspect advertised routes and efforts. Changing the effective route without naming an effort uses the selected model's default effort.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": "string",
+              "description": "Initial child working directory. Relative paths use your current directory; omitted inherits it. Later directory changes in either agent are independent."
+            },
+            "description": {
+              "type": "string",
+              "description": "A short (3-5 word) description of the delegated task, for display."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "The complete, self-contained task for the subagent. It does not share this conversation's context, so include everything it needs."
+            },
+            "provider": {
+              "type": "string",
+              "description": "LLM provider route for the child. Supply together with model; omit both to use configured child defaults or inherit the parent route."
+            },
+            "model": {
+              "type": "string",
+              "description": "Model id interpreted by provider. Supply together with provider; omit both to use configured child defaults or inherit the parent route."
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "description": "Adapter-owned reasoning effort for the effective child route. Omit to inherit a compatible configured/parent effort or use a newly selected model's default."
+            }
+          },
+          "required": [
+            "description",
+            "prompt"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-subagent",
+      "variant": {
+        "inherits": false,
+        "continuable": false,
+        "selectable": true,
+        "defaults": true
+      },
+      "wire": {
+        "name": "subagent",
+        "description": "Delegate a self-contained task to a subagent (a separate agent that works in its own context) to offload focused, independent work — research, a scoped implementation, an analysis — so it does not consume this conversation's context. The subagent returns its result, not its intermediate steps. This tool starts an independently managed subagent and immediately returns its id. The runtime notifies you when it finishes. The completion notice includes its final answer. This backend does not accept follow-up messages. Child LLM selection is optional. Omit `provider`, `model`, and `reasoning_effort` to use configured child defaults and this provider's route defaults. Supply `provider` and `model` together after using `list_subagent_models` to inspect advertised routes and efforts. Changing the effective route without naming an effort uses the selected model's default effort.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": "string",
+              "description": "Initial child working directory. Relative paths use your current directory; omitted inherits it. Later directory changes in either agent are independent."
+            },
+            "description": {
+              "type": "string",
+              "description": "A short (3-5 word) description of the delegated task, for display."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "The complete, self-contained task for the subagent. It does not share this conversation's context, so include everything it needs."
+            },
+            "provider": {
+              "type": "string",
+              "description": "LLM provider route for the child. Supply together with model; omit both to use configured child defaults or this provider's route defaults."
+            },
+            "model": {
+              "type": "string",
+              "description": "Model id interpreted by provider. Supply together with provider; omit both to use configured child defaults or this provider's route defaults."
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "description": "Adapter-owned reasoning effort for the effective child route. Omit to use a compatible configured effort or the selected model's default."
+            }
+          },
+          "required": [
+            "description",
+            "prompt"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-subagent",
+      "variant": {
+        "inherits": false,
+        "continuable": true,
+        "selectable": false,
+        "defaults": false
+      },
+      "wire": {
+        "name": "subagent",
+        "description": "Delegate a self-contained task to a subagent (a separate agent that works in its own context) to offload focused, independent work — research, a scoped implementation, an analysis — so it does not consume this conversation's context. The subagent returns its result, not its intermediate steps. This tool starts an independently managed subagent and immediately returns its id. The runtime notifies you when it finishes. The child reports results with `send_message`; use `send_message` to steer it while running or continue its conversation after it finishes.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": "string",
+              "description": "Initial child working directory. Relative paths use your current directory; omitted inherits it. Later directory changes in either agent are independent."
+            },
+            "description": {
+              "type": "string",
+              "description": "A short (3-5 word) description of the delegated task, for display."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "The complete, self-contained task for the subagent. It does not share this conversation's context, so include everything it needs."
+            }
+          },
+          "required": [
+            "description",
+            "prompt"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-subagent",
+      "variant": {
+        "inherits": false,
+        "continuable": true,
+        "selectable": true,
+        "defaults": false
+      },
+      "wire": {
+        "name": "subagent",
+        "description": "Delegate a self-contained task to a subagent (a separate agent that works in its own context) to offload focused, independent work — research, a scoped implementation, an analysis — so it does not consume this conversation's context. The subagent returns its result, not its intermediate steps. This tool starts an independently managed subagent and immediately returns its id. The runtime notifies you when it finishes. The child reports results with `send_message`; use `send_message` to steer it while running or continue its conversation after it finishes. Child LLM selection is optional. Omit `provider`, `model`, and `reasoning_effort` to use configured child defaults and inherit compatible missing values from the parent Agent. Supply `provider` and `model` together after using `list_subagent_models` to inspect advertised routes and efforts. Changing the effective route without naming an effort uses the selected model's default effort.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": "string",
+              "description": "Initial child working directory. Relative paths use your current directory; omitted inherits it. Later directory changes in either agent are independent."
+            },
+            "description": {
+              "type": "string",
+              "description": "A short (3-5 word) description of the delegated task, for display."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "The complete, self-contained task for the subagent. It does not share this conversation's context, so include everything it needs."
+            },
+            "provider": {
+              "type": "string",
+              "description": "LLM provider route for the child. Supply together with model; omit both to use configured child defaults or inherit the parent route."
+            },
+            "model": {
+              "type": "string",
+              "description": "Model id interpreted by provider. Supply together with provider; omit both to use configured child defaults or inherit the parent route."
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "description": "Adapter-owned reasoning effort for the effective child route. Omit to inherit a compatible configured/parent effort or use a newly selected model's default."
+            }
+          },
+          "required": [
+            "description",
+            "prompt"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-subagent",
+      "variant": {
+        "inherits": false,
+        "continuable": true,
+        "selectable": true,
+        "defaults": true
+      },
+      "wire": {
+        "name": "subagent",
+        "description": "Delegate a self-contained task to a subagent (a separate agent that works in its own context) to offload focused, independent work — research, a scoped implementation, an analysis — so it does not consume this conversation's context. The subagent returns its result, not its intermediate steps. This tool starts an independently managed subagent and immediately returns its id. The runtime notifies you when it finishes. The child reports results with `send_message`; use `send_message` to steer it while running or continue its conversation after it finishes. Child LLM selection is optional. Omit `provider`, `model`, and `reasoning_effort` to use configured child defaults and this provider's route defaults. Supply `provider` and `model` together after using `list_subagent_models` to inspect advertised routes and efforts. Changing the effective route without naming an effort uses the selected model's default effort.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": "string",
+              "description": "Initial child working directory. Relative paths use your current directory; omitted inherits it. Later directory changes in either agent are independent."
+            },
+            "description": {
+              "type": "string",
+              "description": "A short (3-5 word) description of the delegated task, for display."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "The complete, self-contained task for the subagent. It does not share this conversation's context, so include everything it needs."
+            },
+            "provider": {
+              "type": "string",
+              "description": "LLM provider route for the child. Supply together with model; omit both to use configured child defaults or this provider's route defaults."
+            },
+            "model": {
+              "type": "string",
+              "description": "Model id interpreted by provider. Supply together with provider; omit both to use configured child defaults or this provider's route defaults."
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "description": "Adapter-owned reasoning effort for the effective child route. Omit to use a compatible configured effort or the selected model's default."
+            }
+          },
+          "required": [
+            "description",
+            "prompt"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-subagent",
+      "variant": {
+        "inherits": true,
+        "continuable": false,
+        "selectable": false,
+        "defaults": false
+      },
+      "wire": {
+        "name": "subagent_fork",
+        "description": "Delegate a task to a subagent that inherits this conversation: a child agent seeded with all completed turns so far (it does not see the current in-flight turn). Use this when the subtask builds on this conversation's context — a follow-up analysis, a review, a continuation — without consuming this conversation's context for the work itself. You receive its result, not its intermediate steps. This tool starts an independently managed subagent and immediately returns its id. The runtime notifies you when it finishes. The completion notice includes its final answer. This backend does not accept follow-up messages.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": "string",
+              "description": "Initial child working directory. Relative paths use your current directory; omitted inherits it. Later directory changes in either agent are independent."
+            },
+            "description": {
+              "type": "string",
+              "description": "A short (3-5 word) description of the delegated task, for display."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "The task for the subagent. It already sees this conversation's completed turns, so build on them freely and state only what is new."
+            }
+          },
+          "required": [
+            "description",
+            "prompt"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-subagent",
+      "variant": {
+        "inherits": true,
+        "continuable": false,
+        "selectable": true,
+        "defaults": false
+      },
+      "wire": {
+        "name": "subagent_fork",
+        "description": "Delegate a task to a subagent that inherits this conversation: a child agent seeded with all completed turns so far (it does not see the current in-flight turn). Use this when the subtask builds on this conversation's context — a follow-up analysis, a review, a continuation — without consuming this conversation's context for the work itself. You receive its result, not its intermediate steps. This tool starts an independently managed subagent and immediately returns its id. The runtime notifies you when it finishes. The completion notice includes its final answer. This backend does not accept follow-up messages. Child LLM selection is optional. Omit `provider`, `model`, and `reasoning_effort` to use configured child defaults and inherit compatible missing values from the parent Agent. Supply `provider` and `model` together after using `list_subagent_models` to inspect advertised routes and efforts. Changing the effective route without naming an effort uses the selected model's default effort. Changing the route can prevent provider-side reuse of the inherited conversation prefix.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": "string",
+              "description": "Initial child working directory. Relative paths use your current directory; omitted inherits it. Later directory changes in either agent are independent."
+            },
+            "description": {
+              "type": "string",
+              "description": "A short (3-5 word) description of the delegated task, for display."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "The task for the subagent. It already sees this conversation's completed turns, so build on them freely and state only what is new."
+            },
+            "provider": {
+              "type": "string",
+              "description": "LLM provider route for the child. Supply together with model; omit both to use configured child defaults or inherit the parent route."
+            },
+            "model": {
+              "type": "string",
+              "description": "Model id interpreted by provider. Supply together with provider; omit both to use configured child defaults or inherit the parent route."
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "description": "Adapter-owned reasoning effort for the effective child route. Omit to inherit a compatible configured/parent effort or use a newly selected model's default."
+            }
+          },
+          "required": [
+            "description",
+            "prompt"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-subagent",
+      "variant": {
+        "inherits": true,
+        "continuable": false,
+        "selectable": true,
+        "defaults": true
+      },
+      "wire": {
+        "name": "subagent_fork",
+        "description": "Delegate a task to a subagent that inherits this conversation: a child agent seeded with all completed turns so far (it does not see the current in-flight turn). Use this when the subtask builds on this conversation's context — a follow-up analysis, a review, a continuation — without consuming this conversation's context for the work itself. You receive its result, not its intermediate steps. This tool starts an independently managed subagent and immediately returns its id. The runtime notifies you when it finishes. The completion notice includes its final answer. This backend does not accept follow-up messages. Child LLM selection is optional. Omit `provider`, `model`, and `reasoning_effort` to use configured child defaults and this provider's route defaults. Supply `provider` and `model` together after using `list_subagent_models` to inspect advertised routes and efforts. Changing the effective route without naming an effort uses the selected model's default effort. Changing the route can prevent provider-side reuse of the inherited conversation prefix.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": "string",
+              "description": "Initial child working directory. Relative paths use your current directory; omitted inherits it. Later directory changes in either agent are independent."
+            },
+            "description": {
+              "type": "string",
+              "description": "A short (3-5 word) description of the delegated task, for display."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "The task for the subagent. It already sees this conversation's completed turns, so build on them freely and state only what is new."
+            },
+            "provider": {
+              "type": "string",
+              "description": "LLM provider route for the child. Supply together with model; omit both to use configured child defaults or this provider's route defaults."
+            },
+            "model": {
+              "type": "string",
+              "description": "Model id interpreted by provider. Supply together with provider; omit both to use configured child defaults or this provider's route defaults."
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "description": "Adapter-owned reasoning effort for the effective child route. Omit to use a compatible configured effort or the selected model's default."
+            }
+          },
+          "required": [
+            "description",
+            "prompt"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-subagent",
+      "variant": {
+        "inherits": true,
+        "continuable": true,
+        "selectable": false,
+        "defaults": false
+      },
+      "wire": {
+        "name": "subagent_fork",
+        "description": "Delegate a task to a subagent that inherits this conversation: a child agent seeded with all completed turns so far (it does not see the current in-flight turn). Use this when the subtask builds on this conversation's context — a follow-up analysis, a review, a continuation — without consuming this conversation's context for the work itself. You receive its result, not its intermediate steps. This tool starts an independently managed subagent and immediately returns its id. The runtime notifies you when it finishes. The child reports results with `send_message`; use `send_message` to steer it while running or continue its conversation after it finishes.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": "string",
+              "description": "Initial child working directory. Relative paths use your current directory; omitted inherits it. Later directory changes in either agent are independent."
+            },
+            "description": {
+              "type": "string",
+              "description": "A short (3-5 word) description of the delegated task, for display."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "The task for the subagent. It already sees this conversation's completed turns, so build on them freely and state only what is new."
+            }
+          },
+          "required": [
+            "description",
+            "prompt"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-subagent",
+      "variant": {
+        "inherits": true,
+        "continuable": true,
+        "selectable": true,
+        "defaults": false
+      },
+      "wire": {
+        "name": "subagent_fork",
+        "description": "Delegate a task to a subagent that inherits this conversation: a child agent seeded with all completed turns so far (it does not see the current in-flight turn). Use this when the subtask builds on this conversation's context — a follow-up analysis, a review, a continuation — without consuming this conversation's context for the work itself. You receive its result, not its intermediate steps. This tool starts an independently managed subagent and immediately returns its id. The runtime notifies you when it finishes. The child reports results with `send_message`; use `send_message` to steer it while running or continue its conversation after it finishes. Child LLM selection is optional. Omit `provider`, `model`, and `reasoning_effort` to use configured child defaults and inherit compatible missing values from the parent Agent. Supply `provider` and `model` together after using `list_subagent_models` to inspect advertised routes and efforts. Changing the effective route without naming an effort uses the selected model's default effort. Changing the route can prevent provider-side reuse of the inherited conversation prefix.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": "string",
+              "description": "Initial child working directory. Relative paths use your current directory; omitted inherits it. Later directory changes in either agent are independent."
+            },
+            "description": {
+              "type": "string",
+              "description": "A short (3-5 word) description of the delegated task, for display."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "The task for the subagent. It already sees this conversation's completed turns, so build on them freely and state only what is new."
+            },
+            "provider": {
+              "type": "string",
+              "description": "LLM provider route for the child. Supply together with model; omit both to use configured child defaults or inherit the parent route."
+            },
+            "model": {
+              "type": "string",
+              "description": "Model id interpreted by provider. Supply together with provider; omit both to use configured child defaults or inherit the parent route."
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "description": "Adapter-owned reasoning effort for the effective child route. Omit to inherit a compatible configured/parent effort or use a newly selected model's default."
+            }
+          },
+          "required": [
+            "description",
+            "prompt"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-tool-subagent",
+      "variant": {
+        "inherits": true,
+        "continuable": true,
+        "selectable": true,
+        "defaults": true
+      },
+      "wire": {
+        "name": "subagent_fork",
+        "description": "Delegate a task to a subagent that inherits this conversation: a child agent seeded with all completed turns so far (it does not see the current in-flight turn). Use this when the subtask builds on this conversation's context — a follow-up analysis, a review, a continuation — without consuming this conversation's context for the work itself. You receive its result, not its intermediate steps. This tool starts an independently managed subagent and immediately returns its id. The runtime notifies you when it finishes. The child reports results with `send_message`; use `send_message` to steer it while running or continue its conversation after it finishes. Child LLM selection is optional. Omit `provider`, `model`, and `reasoning_effort` to use configured child defaults and this provider's route defaults. Supply `provider` and `model` together after using `list_subagent_models` to inspect advertised routes and efforts. Changing the effective route without naming an effort uses the selected model's default effort. Changing the route can prevent provider-side reuse of the inherited conversation prefix.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": "string",
+              "description": "Initial child working directory. Relative paths use your current directory; omitted inherits it. Later directory changes in either agent are independent."
+            },
+            "description": {
+              "type": "string",
+              "description": "A short (3-5 word) description of the delegated task, for display."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "The task for the subagent. It already sees this conversation's completed turns, so build on them freely and state only what is new."
+            },
+            "provider": {
+              "type": "string",
+              "description": "LLM provider route for the child. Supply together with model; omit both to use configured child defaults or this provider's route defaults."
+            },
+            "model": {
+              "type": "string",
+              "description": "Model id interpreted by provider. Supply together with provider; omit both to use configured child defaults or this provider's route defaults."
+            },
+            "reasoning_effort": {
+              "type": "string",
+              "description": "Adapter-owned reasoning effort for the effective child route. Omit to use a compatible configured effort or the selected model's default."
+            }
+          },
+          "required": [
+            "description",
+            "prompt"
+          ]
+        }
+      }
+    },
+    {
+      "package": "@deepseek-ai/dsh-plan-mode",
+      "variant": {},
+      "wire": {
+        "name": "exit_plan_mode",
+        "description": "Use only in plan mode. Present your plan for the user's review and, on approval, leave plan mode. The user may approve (carry out the plan from your next step) or keep planning — their feedback comes back in the tool result; revise and present again.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "plan": {
+              "type": "string",
+              "description": "The complete plan, as markdown, starting with a # heading that names it."
+            }
+          },
+          "required": [
+            "plan"
+          ]
+        }
+      }
+    }
+  ]
+}

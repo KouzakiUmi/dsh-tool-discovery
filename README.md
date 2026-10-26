@@ -176,6 +176,8 @@ Node 项目可通过 `npm install dsh-tool-discovery` 从 npm 安装。本节上
   // "alwaysVisible": ["read", "grep"],  // 整项省略即保持 DSH 默认名单
   "initialToolsEnabled": true,  // 可关闭手动初始注入，不删除已配置名单
   "alwaysAllowPresetTools": true, // 保留当前实际绑定的 preset 所登记工具
+  "compactBuiltinToolDescriptions": false, // 描述精简总开关，仅 native；不重载，周期边界采用
+  "compactBuiltinToolOverrides": {}, // 逐工具布尔开关；原五项沿用，新支持的工具默认关闭
   "ptcCompatibility": false, // 默认旁路 PTC；开启后发现进入下一轮 run_code SDK
   "requireTrustedEpoch": false, // 高级严格校验，默认不阻断存量会话
   "requireTrustedEpochForSubagents": false, // 仅主严格开关也开启时对子代理强制校验
@@ -193,6 +195,14 @@ preset 保留是独立来源：`alwaysAllowPresetTools` 开启时，当前实际
 的工具会与手动名单合并。若只需要三个发现入口，应设 `alwaysAllowPresetTools: false`，并设
 `initialToolsEnabled: false`，或同时设 `alwaysVisible: []` 与 `respectAlwaysVisible: true`（显式框架保留仍可能贡献工具）。三个入口不可删除。
 设置页全局目录中存在某工具，不意味着它会被授予所有会话。
+
+### 可选：DSH 默认工具提示词精简
+
+`compactBuiltinToolDescriptions` 总开关默认关闭。当前支持 **28 个工具、53 种已核验定义变体**，每个工具在设置页都有独立开关。`compactBuiltinToolOverrides` 是工具名到布尔值的映射：原 `bash`、`pwsh`、`workflow`、`read_image`、`create_goal` 五项未配置时延续总开关行为；新增工具默认关闭，例如 `{ "subagent_fork": true, "pwsh": false }` 可启用子代理描述精简并单独关闭 PowerShell 精简。
+
+仅在 native 模式下替换**完整原始定义指纹匹配**的工具顶层描述，不改参数、参数说明、执行函数、审批或沙箱。未知变体和未核验的第三方覆盖保留原文。
+
+保存此开关**不重载插件**，在新会话或成功压缩后采用。当前周期继续使用原来披露的文案；冷恢复也不因开关/语言变化重写已有定义。它不精简全局规则或 MCP 提示词，也不改变初始工具名单。适配版本、短版本标记、恢复与验证边界见[详细设计](<plugin/docs/13-builtin-descriptions.md>)。
 
 ### 设置页：工具发现主页
 

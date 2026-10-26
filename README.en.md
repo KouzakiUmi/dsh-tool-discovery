@@ -207,6 +207,8 @@ surface:
   // "alwaysVisible": ["read", "grep"],  // omit entirely to keep the DSH defaults
   "initialToolsEnabled": true,  // optional manual initial injection; preserves the configured list
   "alwaysAllowPresetTools": true, // retain tools declared by the current bound preset
+  "compactBuiltinToolDescriptions": false, // native-only master switch; no reload, epoch-boundary adoption
+  "compactBuiltinToolOverrides": {}, // per-tool booleans; original five keep their defaults, additions default off
   "ptcCompatibility": false, // PTC bypass by default; opt in to discovery in the next run_code SDK
   "requireTrustedEpoch": false, // opt-in strict durable epoch verification
   "requireTrustedEpochForSubagents": false, // also enforce on children only if strict is on
@@ -226,6 +228,14 @@ To start with only the three discovery entries, set `alwaysAllowPresetTools: fal
 `initialToolsEnabled: false`, or both `alwaysVisible: []` and `respectAlwaysVisible: true` (unless explicit framework retention also applies).
 The three entries cannot be removed. Names that are not native-visible in the current agent are
 not granted merely because the settings catalog contains them.
+
+### Optional concise DSH default tool descriptions
+
+The master switch `compactBuiltinToolDescriptions` is off by default. There are now **28 individually selectable tools / 53 verified definition variants**. `compactBuiltinToolOverrides` maps supported names to booleans: the original five (`bash`, `pwsh`, `workflow`, `read_image`, `create_goal`) retain their defaults under the master switch; additional tools default off. For example, `{ "subagent_fork": true, "pwsh": false }` enables concise delegation wording and disables concise PowerShell wording.
+
+Native mode replaces only top-level descriptions of **exactly fingerprint-matched** definitions. Parameters, parameter descriptions, execution, approvals and sandboxing remain unchanged; unknown or unverified customized variants retain their original text.
+
+Saving this volatile switch **does not reload the plugin**. New sessions and successful compaction boundaries adopt it; existing epochs and cold recovery preserve the previously disclosed copy. It does not shorten global instructions or MCP prompts, or change the initial tool list. See the [design and compatibility boundaries](<plugin/docs/13-builtin-descriptions.md>).
 
 ### Settings page: the Tool discovery home
 

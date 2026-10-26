@@ -908,6 +908,10 @@ export function createJournal(deps) {
           settleCompactionEndQuiet(event);
         }
       }
+      const epochEvents = ownEvents.filter((event) => event.seq > lastSuccessCompactionEndSeq);
+      // Presentation choice must precede receipt/digest replay. This callback cannot
+      // grant eligibility: the catalog still comes exclusively from the live registry.
+      deps.onRestorePresentation?.(epochEvents);
       const pairs = foldPairs(ownEvents).filter((p) => p.seq > lastSuccessCompactionEndSeq);
       // 先恢复独立披露账本：即使当前定义导致历史 selection 被拒，旧 wire 仍须保留。
       // PTC 的 SDK 快照不是 native header.tools，本轮不从 run_code 头推断其冻结内容。

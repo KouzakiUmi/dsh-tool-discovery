@@ -21,6 +21,7 @@
 // Schema 由调用方注入（工厂 deps.Schema），生产默认按裸包名动态 import —— 与
 // defineTool 同一形状，因此工作区（无 node_modules）也不会因本模块而无法加载。
 import { CORE_TOOL_NAMES } from '../../domain/core-tools.mjs';
+import { BUILTIN_DESCRIPTION_TOOLS } from './builtin-description-options.mjs';
 import { ENTRY_TOOL_NAMES, DEFAULT_BUDGETS, OPTIONAL_LIMIT_KEYS, CONTROLLED_CATEGORIES } from '../../domain/constants.mjs';
 
 /** meta key：设置面板读取的当前工具目录。 */
@@ -68,6 +69,7 @@ export function buildConfig(Schema) {
   alwaysVisible.meta = { ...alwaysVisible.meta, settingConstraints: {
     budgetKeys: Object.keys(DEFAULT_BUDGETS), optionalLimitKeys: [...OPTIONAL_LIMIT_KEYS],
     categoryKeys: [...CONTROLLED_CATEGORIES],
+    builtinDescriptionTools: BUILTIN_DESCRIPTION_TOOLS.map(tool => ({ ...tool })),
   } };
   return Schema.object({
     alwaysVisible,
@@ -79,6 +81,14 @@ export function buildConfig(Schema) {
       .default(true)
       .volatile()
       .description('Always include tools registered by the current bound preset, even when manual initial injection is disabled. Applies at a new session or successful compaction; native permissions and eligibility remain enforced.'),
+    compactBuiltinToolDescriptions: Schema.boolean()
+      .default(false)
+      .volatile()
+      .description('Off by default. Replace fingerprint-matched official tool descriptions with reviewed concise copy in native mode; parameters and execution stay unchanged. Saved without reload; applies in new sessions or after successful compaction. Unknown definitions and PTC stay unchanged.'),
+    compactBuiltinToolOverrides: Schema.dict(Schema.boolean(), Schema.union(BUILTIN_DESCRIPTION_TOOLS.map(tool => tool.name)))
+      .default({})
+      .volatile()
+      .description('Per-tool concise-description switches, gated by compactBuiltinToolDescriptions. Omitted original five tools retain their enabled default; newly supported tools default off. Changes apply only in a new session or after successful compaction, without reloading.'),
     ptcCompatibility: Schema.boolean()
       .default(false)
       .volatile()

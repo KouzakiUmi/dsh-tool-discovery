@@ -838,6 +838,245 @@ test('LS-U15 周期边界 adopt 落定前名单不得提前入 runtime，superse
 });
 
 // ---------------------------------------------------------------------------
+// LS-U17：第一次 adopt 仍在途时的**自动**压缩没有 command/done 迁移回调，
+// 必须仍以后一次边界发起 adopt，并由 revision 淘汰旧写。否则 journal 已进入新 epoch，
+// 旧写却会把上一周期名单恢复成 trusted，且当前 epoch 永远没有 durable 记录。
+// ---------------------------------------------------------------------------
+test('LS-U17 adopt 在途时再自动压缩必须跟到最新 epoch 与边界名单', async (t) => {
+  const id = 's_settle_auto_during_adopt';
+  const session = { id, seq: 0, inheritedEventCount: 0 };
+  const store = perCallOpenGatedStore();
+  const logs = [];
+  let generation = 0;
+  const lc = makeLifecycle({
+    store, query: undefined, logs,
+    getAlwaysVisible: () => (generation === 0 ? [...CONFIG_NAMES] : generation === 1 ? ['boundary_a'] : ['boundary_b']),
+  });
+  t.after(() => lc.dispose());
+
+  lc.ensureRuntime(session, { id: `agent-${id}` });
+  await lc.whenReady(id);
+  assert.equal(lc.baselineOf(id).state, BASELINE_STATE.TRUSTED, '前置：bootstrap 已 trusted');
+
+  const putA = store.gatePut();
+  generation = 1;
+  for (const event of userCompactionChain(0, 'cmp-user', 'cmd-user')) lc.onSessionEvent(session, event);
+  await until(() => store.putCalls === 2, '第一次 adopt 的 put 进入在途');
+  const runtime = runtimeOf(lc, id);
+
+  const putB = store.gatePut();
+  generation = 2;
+  for (const event of [
+    { seq: 5, type: 'compaction/start', data: { compactionId: 'cmp-auto', turn: 1 } },
+    { seq: 6, type: 'compaction/summary', data: { compactionId: 'cmp-auto', turn: 1 } },
+    { seq: 7, type: 'compaction/end', data: { compactionId: 'cmp-auto', turn: 1 } },
+  ]) lc.onSessionEvent(session, event);
+  await until(() => store.putCalls === 3, '自动边界也必须发起最新 adopt，不得只留 pendingUserEpoch');
+  assert.equal(lc.baselineOf(id).epochId, 'cmp-auto@7');
+  assert.equal(runtime.journal.currentEpoch().epochId, 'cmp-auto@7');
+  assert.equal(runtime.pendingUserEpoch, null);
+  assert.deepEqual(runtime.alwaysNames, [...CONFIG_NAMES], '最新写落定前仍不得提前换名单');
+
+  let barrierSettled = false;
+  const barrier = lc.awaitEpochRecord(id).then((value) => { barrierSettled = true; return value; });
+  await drain();
+  assert.equal(barrierSettled, false, '最新自动周期写在途时屏障不得放行');
+
+  putA.resolve();
+  await drain();
+  assert.equal(barrierSettled, false, '旧写完成不代表当前 epoch 已落定');
+  assert.equal(lc.baselineOf(id).state, BASELINE_STATE.PENDING);
+  assert.equal(lc.baselineOf(id).epochId, 'cmp-auto@7');
+  assert.deepEqual(runtime.alwaysNames, [...CONFIG_NAMES], '被 supersede 的旧写不得恢复旧名单');
+
+  putB.resolve();
+  const outcome = await barrier;
+  assert.deepEqual(outcome, { state: BASELINE_STATE.TRUSTED, reason: null });
+  assert.equal(lc.baselineOf(id).epochId, 'cmp-auto@7');
+  assert.equal(runtime.journal.currentEpoch().epochId, 'cmp-auto@7');
+  assert.deepEqual(runtime.alwaysNames, ['boundary_b']);
+  const record = [...store.map.values()].find((item) => item.epochId === 'cmp-auto@7');
+  assert.equal(record.trigger, 'auto');
+  assert.deepEqual(record.names, ['boundary_b']);
+  assert.deepEqual(blockedLogs(logs), [], '健康的连续边界不得被误判为 baseline-blocked');
+});
+
+// legacy 只有纯读或缺失终态、没有任何已授权写在途时，自动压缩仍不得自行迁移。
+// hasAuthorizedEpochWrite 不能把这类会话误判成「已有可信周期的会话」。
+test('LS-U18 legacy 无授权写在途时自动压缩仍不得迁移', async (t) => {
+  const id = 's_settle_legacy_auto';
+  const { session } = legacyFixture(id);
+  const store = perCallOpenGatedStore();
+  const logs = [];
+  const lc = makeLifecycle({ store, query: legacyFixture(id).query, logs });
+  t.after(() => lc.dispose());
+  lc.ensureRuntime(session, { id: `agent-${id}` });
+  const restored = await lc.whenReady(id);
+  assert.equal(restored.mode, 'incompatible');
+  assert.equal(lc.baselineOf(id).state, BASELINE_STATE.BLOCKED);
+  assert.equal(store.putCalls, 0, '前置：legacy 只有纯读，没有任何授权写');
+
+  for (const event of [
+    { seq: 2, type: 'compaction/start', data: { compactionId: 'cmp-legacy-auto', turn: 1 } },
+    { seq: 3, type: 'compaction/summary', data: { compactionId: 'cmp-legacy-auto', turn: 1 } },
+    { seq: 4, type: 'compaction/end', data: { compactionId: 'cmp-legacy-auto', turn: 1 } },
+  ]) lc.onSessionEvent(session, event);
+  await drain();
+  assert.equal(store.putCalls, 0, '自动边界不得为 legacy 自行写记录');
+  assert.equal(store.map.size, 0);
+  assert.equal(lc.baselineOf(id).state, BASELINE_STATE.BLOCKED);
+  assert.deepEqual(runtimeOf(lc, id).alwaysNames, []);
+  await assert.rejects(lc.awaitEpochRecord(id), /MISSING_TRUSTED_EPOCH/);
+});
+
+// 初次 load 尚未结束时，新会话/空 own fork 可能已捕获成功边界。恢复必须写该边界，
+// 而不是回到 initial；pendingUserEpoch 一旦由授权写取代，迟到 done 不得再回写。
+test('LS-U19 初始 load 窗口的自动边界按当前 epoch 落定且执行面 ready', async (t) => {
+  const id = 's_settle_load_auto';
+  const session = { id, seq: 0, inheritedEventCount: 0 };
+  const store = perCallOpenGatedStore();
+  const logs = [];
+  const lc = makeLifecycle({ store, query: undefined, logs });
+  t.after(() => lc.dispose());
+  const loadOpen = store.gateOpen();
+  const put = store.gatePut();
+  lc.ensureRuntime(session, { id: `agent-${id}` });
+  await until(() => store.openCalls === 1, '初始 load 进入 ensureOpen');
+
+  for (const event of [
+    { seq: 0, type: 'compaction/start', data: { compactionId: 'cmp-load-auto', turn: 1 } },
+    { seq: 1, type: 'compaction/summary', data: { compactionId: 'cmp-load-auto', turn: 1 } },
+    { seq: 2, type: 'compaction/end', data: { compactionId: 'cmp-load-auto', turn: 1 } },
+  ]) lc.onSessionEvent(session, event);
+  const runtime = runtimeOf(lc, id);
+  assert.equal(runtime.journal.currentEpoch().epochId, 'cmp-load-auto@2');
+  assert.equal(store.putCalls, 0, 'load 尚未放行前不得开始写');
+
+  loadOpen.resolve();
+  await until(() => store.putCalls === 1, '恢复必须为已捕获的自动边界发起写');
+  assert.equal(lc.baselineOf(id).epochId, 'cmp-load-auto@2');
+  assert.equal(runtime.pendingUserEpoch, null, '授权写启动后不得保留旧迁移快照');
+  put.resolve();
+  const restored = await lc.whenReady(id);
+  assert.equal(restored.mode, 'ready');
+  assert.deepEqual(await lc.awaitEpochRecord(id), { state: BASELINE_STATE.TRUSTED, reason: null });
+  assert.equal(runtime.engine.getState(runtime.scope).mode, 'ready');
+  assert.deepEqual(runtime.alwaysNames, [...BOUNDARY_NAMES]);
+  const record = [...store.map.values()].find((item) => item.epochId === 'cmp-load-auto@2');
+  assert.equal(record.trigger, 'auto');
+  assert.deepEqual(blockedLogs(logs), []);
+});
+
+test('LS-U20 授权写取代 pendingUserEpoch 后迟到 done 不得回写旧 epoch', async (t) => {
+  const id = 's_settle_stale_done';
+  const session = { id, seq: 0, inheritedEventCount: 0 };
+  const store = perCallOpenGatedStore();
+  const logs = [];
+  let latest = false;
+  const lc = makeLifecycle({ store, query: undefined, logs,
+    getAlwaysVisible: () => latest ? ['boundary_auto'] : ['boundary_user'] });
+  t.after(() => lc.dispose());
+  const loadOpen = store.gateOpen();
+  const putA = store.gatePut();
+  lc.ensureRuntime(session, { id: `agent-${id}` });
+  await until(() => store.openCalls === 1, '初始 load 进入 ensureOpen');
+
+  for (const event of userCompactionChain(0, 'cmp-user', 'cmd-user').slice(0, 4)) lc.onSessionEvent(session, event);
+  const runtime = runtimeOf(lc, id);
+  assert.equal(runtime.pendingUserEpoch.compactionId, 'cmp-user');
+  loadOpen.resolve();
+  await until(() => store.putCalls === 1, '初次迁移写进入在途');
+  assert.equal(runtime.pendingUserEpoch, null, '授权写启动即清理旧快照');
+
+  const putB = store.gatePut();
+  latest = true;
+  for (const event of [
+    { seq: 4, type: 'compaction/start', data: { compactionId: 'cmp-auto', turn: 1 } },
+    { seq: 5, type: 'compaction/summary', data: { compactionId: 'cmp-auto', turn: 1 } },
+    { seq: 6, type: 'compaction/end', data: { compactionId: 'cmp-auto', turn: 1 } },
+  ]) lc.onSessionEvent(session, event);
+  await until(() => store.putCalls === 2, '后续自动边界写进入在途');
+  assert.equal(lc.baselineOf(id).epochId, 'cmp-auto@6');
+
+  lc.onSessionEvent(session, { seq: 7, type: 'command/done',
+    data: { commandId: 'cmd-user', kind: 'success', sourceEventSeq: 2 } });
+  await drain();
+  assert.equal(store.putCalls, 2, '迟到 done 不得再发起旧 epoch 写');
+  assert.equal(lc.baselineOf(id).epochId, 'cmp-auto@6');
+
+  putA.resolve();
+  await drain();
+  putB.resolve();
+  await until(() => lc.baselineOf(id).state === BASELINE_STATE.TRUSTED, '最新自动写落定');
+  assert.deepEqual(await lc.awaitEpochRecord(id), { state: BASELINE_STATE.TRUSTED, reason: null });
+  assert.equal(runtime.engine.getState(runtime.scope).mode, 'ready');
+  assert.deepEqual(runtime.alwaysNames, ['boundary_auto']);
+  assert.deepEqual(blockedLogs(logs), []);
+});
+
+test('LS-U21 FAILED_CLOSED 不得借在途旧写由自动压缩重新授权', async (t) => {
+  const id = 's_settle_failed_closed_auto';
+  const session = { id, seq: 0, inheritedEventCount: 0 };
+  const store = perCallOpenGatedStore();
+  const logs = [];
+  const lc = makeLifecycle({ store, query: undefined, logs });
+  t.after(() => lc.dispose());
+  lc.ensureRuntime(session, { id: `agent-${id}` });
+  await lc.whenReady(id);
+  const runtime = runtimeOf(lc, id);
+
+  const put = store.gatePut();
+  for (const event of userCompactionChain(0, 'cmp-pending', 'cmd-pending')) lc.onSessionEvent(session, event);
+  await until(() => store.putCalls === 2, '授权写在途');
+  runtime.ledger.failClosed('injected-failure');
+  runtime.engine.failClosed(runtime.scope);
+  for (const event of [
+    { seq: 5, type: 'compaction/start', data: { compactionId: 'cmp-after-failure', turn: 1 } },
+    { seq: 6, type: 'compaction/summary', data: { compactionId: 'cmp-after-failure', turn: 1 } },
+    { seq: 7, type: 'compaction/end', data: { compactionId: 'cmp-after-failure', turn: 1 } },
+  ]) lc.onSessionEvent(session, event);
+  await drain();
+  assert.equal(store.putCalls, 2, 'FAILED_CLOSED 不得发起自动周期写');
+  assert.equal(lc.baselineOf(id).state, BASELINE_STATE.FAILED_CLOSED);
+  put.resolve();
+  await drain();
+  assert.equal(lc.baselineOf(id).state, BASELINE_STATE.FAILED_CLOSED);
+  assert.equal(runtime.engine.getState(runtime.scope).mode, 'incompatible');
+});
+
+test('LS-U22 epoch 分叉同时撤销账本与执行面，仅完整用户迁移可恢复', async (t) => {
+  const id = 's_settle_divergence_recovery';
+  const session = { id, seq: 0, inheritedEventCount: 0 };
+  const store = perCallOpenGatedStore();
+  const logs = [];
+  const lc = makeLifecycle({ store, query: undefined, logs });
+  t.after(() => lc.dispose());
+  lc.ensureRuntime(session, { id: `agent-${id}` });
+  await lc.whenReady(id);
+  const runtime = runtimeOf(lc, id);
+
+  // 故障注入：账本 trusted 的身份与 journal 当前周期不一致。
+  await runtime.ledger.adopt({ identity: { epochId: 'stale@99', compactionEndSeq: 99 },
+    names: [...BOUNDARY_NAMES], trigger: 'manual' });
+  await assert.rejects(lc.awaitEpochRecord(id), /MISSING_TRUSTED_EPOCH/);
+  assert.equal(lc.baselineOf(id).state, BASELINE_STATE.FAILED_CLOSED);
+  assert.equal(runtime.engine.getState(runtime.scope).mode, 'incompatible');
+  assert.deepEqual(runtime.alwaysNames, []);
+
+  // 首次拒绝不得消费阻断状态：后续 pre-step 仍须保持零请求。
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await assert.rejects(lc.awaitEpochRecord(id), /MISSING_TRUSTED_EPOCH/);
+  }
+
+  for (const event of userCompactionChain(0, 'cmp-recovery', 'cmd-recovery')) lc.onSessionEvent(session, event);
+  await until(() => lc.baselineOf(id).state === BASELINE_STATE.TRUSTED, '完整用户迁移后恢复');
+  assert.equal(lc.baselineOf(id).epochId, 'cmp-recovery@3');
+  assert.deepEqual(await lc.awaitEpochRecord(id), { state: BASELINE_STATE.TRUSTED, reason: null });
+  assert.equal(runtime.engine.getState(runtime.scope).mode, 'ready');
+  assert.deepEqual(runtime.alwaysNames, [...BOUNDARY_NAMES]);
+});
+
+// ---------------------------------------------------------------------------
 // LS-U16（respectAlwaysVisible 活读取）：lifecycle 必须优先读 deps 注入的活读取器
 // （index.mjs 提供，优先读 fiber 上的 volatile 配置），而不是 validateConfig 拍平
 // 后的布尔快照。三条路径共用"view 返回含核心工具的可见集合"这一 fixture，使

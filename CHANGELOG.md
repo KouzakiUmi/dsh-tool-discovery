@@ -28,6 +28,20 @@ what is verified, what is unverified, and what this version refuses to support �
 The entries below are post-v0.4.4 source changes. Green main builds publish `build-<sha>` assets
 independently; those assets do not imply a new npm release.
 
+### Per-tool concise descriptions (v2)
+
+- Extend reviewed coverage to 28 tool names / 53 exact definition variants, including delegation capabilities, persistent shells, file search/editing, inspection, planning, reminders and terminals.
+- Add `compactBuiltinToolOverrides` and individual settings switches. The original five retain their prior defaults under the master switch; newly supported tools default off. Validate dictionary keys and update only the touched setting leaf.
+- Freeze the selected set in a bounded v2 bitmask and retain v1 replay with the original templates/variants only. Both master and per-tool changes wait for a new session or successful compaction without remounting.
+- Add full-fingerprint, per-tool isolation, v1/v2 recovery, real-host switch/compaction and official-fixture conformance tests. Parameters and execution are unchanged.
+
+### Optional concise built-in descriptions
+
+- Add `compactBuiltinToolDescriptions` (off by default, native only). Reviewed English/Chinese copy covers exact official definition fingerprints for bash, pwsh, workflow, read_image and create_goal; unmatched or customized definitions keep their original text.
+- Preserve parameter schemas, tool execution and host permissions. Source identity remains part of the binding identity; displayed digests, receipts, budgets and frozen wire stay consistent.
+- Save the volatile toggle without remounting. Adopt it in new sessions or after successful compaction; a small control-entry revision marker restores the current epoch's presentation policy without new storage or custom session events.
+- Add portable and real-host/mock-provider regression coverage, including source fixtures checked against Core 0.2.1-rc.3. No blanket compatibility or model-behavior equivalence is claimed.
+
 ## [0.4.4] — 2026-10-24 — hot-path performance and lexical search ranking
 
 Performance and search-quality batch merged in PR #21: per-request digest and

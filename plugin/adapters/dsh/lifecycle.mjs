@@ -20,6 +20,7 @@ import { createJournal, normalizeInheritedBoundary } from './journal.mjs';
 import { resolveAlwaysVisible } from './config.mjs';
 import { requiresTrustedEpoch } from './epoch-policy.mjs';
 import { createNamesDriftObserver } from './names-drift.mjs';
+import { createBuiltinDescriptionPolicy } from './builtin-descriptions.mjs';
 import {
   BASELINE_STATE, TRUSTED_EPOCH_REASONS, createEpochLedger, trustedEpochBlockedError,
 } from './trusted-epoch.mjs';
@@ -154,6 +155,22 @@ export function createLifecycle(deps) {
     return [...candidates];
   }
 
+  function currentCompactDescriptions() {
+    const value = deps.getCompactBuiltinToolDescriptions?.() ?? config.compactBuiltinToolDescriptions;
+    return (typeof value?.get === 'function' ? value.get() : value) === true;
+  }
+
+  const currentDescriptionOverrides = () => deps.getBuiltinDescriptionOverrides?.() ?? config.compactBuiltinToolOverrides;
+
+  function descriptionBindings(runtime, bindings) {
+    return runtime.nativePresentation ? runtime.descriptions.bindings(bindings) : bindings;
+  }
+
+  function refreshDescriptionCatalog(runtime) {
+    const view = registry.bindingsFor(runtime.agentScope);
+    runtime.engine.refreshCatalog(descriptionBindings(runtime, view.bindings));
+  }
+
   /** 把一份**已确认可信**的名单装进 runtime（runtime + engine 同步换）。 */
   function adoptNames(runtime, names) {
     runtime.alwaysNames = [...names];
@@ -163,6 +180,9 @@ export function createLifecycle(deps) {
 
   /** 基线不可授权：清空常驻名单并 fail closed —— 断点一定在"名单为空"之后。 */
   function blockBaseline(runtime, reason) {
+    // 若账本仍显示 trusted，仅清 runtime 会留下「屏障放行、执行面却 incompatible」的
+    // 分裂状态。同步撤销账本授权；后续只能经完整用户迁移重新建立可信周期。
+    if (runtime.ledger.state === BASELINE_STATE.TRUSTED) runtime.ledger.failClosed(reason);
     adoptNames(runtime, []);
     runtime.engine.failClosed(runtime.scope);
     log('lifecycle:baseline-blocked', {
@@ -221,10 +241,24 @@ export function createLifecycle(deps) {
       assertActive();
       // 读**当下**的状态，不复用任何先前捕获的快照。
       const state = runtime.ledger.state;
-      if (state === BASELINE_STATE.BLOCKED) throw trustedEpochBlockedError(runtime.ledger.reason);
+      if (state === BASELINE_STATE.BLOCKED
+        || (state === BASELINE_STATE.FAILED_CLOSED
+          && runtime.ledger.reason === `SESSION_FAILED_CLOSED:${TRUSTED_EPOCH_REASONS.MISSING}`)) {
+        throw trustedEpochBlockedError(runtime.ledger.reason);
+      }
       if (state === BASELINE_STATE.PENDING) {
         // 仍在途：不得发请求（没有超时兜底，等落定或宿主取消）。
         throw trustedEpochBlockedError('TRUSTED_EPOCH_PENDING');
+      }
+      const journalEpoch = runtime.journal.currentEpoch();
+      const ledgerEpoch = runtime.ledger.identity;
+      if (state === BASELINE_STATE.TRUSTED
+        && (journalEpoch.epochId !== ledgerEpoch.epochId
+          || journalEpoch.compactionEndSeq !== ledgerEpoch.compactionEndSeq)) {
+        // trusted 必须属于 journal 的当前周期。旧写的迟到完成不得冒充新周期授权；
+        // 这种分叉表示当前 epoch 没有可信记录，按 missing fail closed，而不是放行。
+        blockBaseline(runtime, TRUSTED_EPOCH_REASONS.MISSING);
+        throw trustedEpochBlockedError(TRUSTED_EPOCH_REASONS.MISSING);
       }
       if (runtime.pendingProjectionError !== undefined && runtime.pendingProjectionError !== null) {
         const error = runtime.pendingProjectionError;
@@ -260,6 +294,10 @@ export function createLifecycle(deps) {
    *          userInitiated:boolean}} info
    */
   function onEpochBoundary(runtime, info) {
+    // journal has already cleared the old epoch; capture the toggle synchronously,
+    // before optional storage writes yield, and rebuild displayed identities together.
+    runtime.descriptions.reset(currentCompactDescriptions(), config.locale, currentDescriptionOverrides());
+    refreshDescriptionCatalog(runtime);
     const names = currentAlwaysNames(runtime.agentScope);
     if (!runtime.restoring) reportNamesDrift(runtime, 'epoch-boundary', names);
     runtime.initialToolsEnabled = currentInitialToolsEnabled();
@@ -271,9 +309,15 @@ export function createLifecycle(deps) {
       if (typeof runtime.refreshPendingProjection === 'function') runtime.refreshPendingProjection();
       return;
     }
-    const wasTrusted = runtime.ledger.state === BASELINE_STATE.TRUSTED;
+    // PENDING 不等于 legacy：已授权的 begin/adopt 写也可能仍在途。inFlight 只跟写、
+    // 不跟 load，因此「已 trusted 或 pending 且已有授权写在途」的会话必须在每个成功边界
+    // 继续 adopt。FAILED_CLOSED / BLOCKED 不得借在途旧写重新获得自动推进资格。
+    // 后一次 adopt 推进 revision 并取代前一次；若把它塞进 pendingUserEpoch，自动压缩
+    // 就永远不会落盘，前一次旧写完成后还会被误当成当前 epoch 的授权。
+    const hasAuthorizedEpochWrite = runtime.ledger.state === BASELINE_STATE.TRUSTED
+      || (runtime.ledger.state === BASELINE_STATE.PENDING && runtime.ledger.inFlight);
 
-    if (!wasTrusted) {
+    if (!hasAuthorizedEpochWrite) {
       // 老会话迁移：名单**先不入 runtime**。授权必须来自那份落盘的记录，
       // 否则一个 STORAGE_UNAVAILABLE 的会话也会因为"刚成功压缩"而拿到常驻名单。
       // 用户命令链的最后一环（command/done success）还没到时，这里只把待迁移的
@@ -288,13 +332,15 @@ export function createLifecycle(deps) {
       return;
     }
 
-    // 已可信会话的既定契约：成功压缩即重开周期、换此刻配置、清 selected/frozen、
-    // 并刷新那份**尚未发送**的投影。
+    // 已可信（或已有授权写在途）会话的既定契约：成功压缩即重开周期、换此刻配置、
+    // 清 selected/frozen，并刷新那份**尚未发送**的投影。
     //
     // 名单与 onUserCompactionComplete 同一写法：**先落盘、后入 runtime**。在 adopt
     // 落定之前同步 adoptNames 的话，一次被判 superseded（随后直接 return）的 adopt
     // 会把尚未落盘的新名单残留在 alwaysNameSet 与 engine 里。等待窗口内基线是
     // PENDING，门禁本就拒绝一切非入口调用 —— 旧名单留在 runtime 上不构成授权。
+    // 已有授权写覆盖旧的待迁移快照；之后迟到的 command/done 不得回写旧 epoch。
+    runtime.pendingUserEpoch = null;
     runtime.ledger.adopt({ identity: info.identity, names, trigger }).then((outcome) => {
       // **无论 put 成功与否都要先看基线状态**：写失败时 outcome.ok 为 false，
       // 若在这里直接 return，刚换上去的名单就会留在 alwaysNameSet 里 ——
@@ -396,7 +442,12 @@ export function createLifecycle(deps) {
     // engine 先按当前配置建一次；可信基线落定后会**整体替换**它（trusted 或 blocked）。
     const bootstrapNames = currentAlwaysNames(scope);
     const strictEpoch = requiresTrustedEpoch(config, ctx.get?.('agents'), scope);
-    const engine = createDiscoveryEngine(engineConfigFor(scope, sessionId, view.bindings, bootstrapNames));
+    const nativePresentation = deps.collapsedPresentation?.(scope) !== true;
+    const descriptions = createBuiltinDescriptionPolicy({
+      enabled: currentCompactDescriptions(), locale: config.locale, overrides: currentDescriptionOverrides(), log,
+    });
+    const bindings = nativePresentation ? descriptions.bindings(view.bindings) : view.bindings;
+    const engine = createDiscoveryEngine(engineConfigFor(scope, sessionId, bindings, bootstrapNames));
     registry.remember(view.scopeKey, view.bindings);
     const discoveryScope = { sessionId, actorId: String(scope.id) };
     const ledger = createEpochLedger({
@@ -425,6 +476,11 @@ export function createLifecycle(deps) {
       onEpochReset: (info) => onEpochBoundary(runtime, info),
       onUserCompactionComplete: (info) => onUserCompactionComplete(runtime, info),
       onRequestHeader: () => { runtime.refreshPendingProjection = null; },
+      onRestorePresentation: (events) => {
+        if (!runtime.nativePresentation) return;
+        runtime.descriptions.restore(events);
+        refreshDescriptionCatalog(runtime);
+      },
       reportBypass: (details) => {
         runtime.compositionBypass = details;
         log('lifecycle:composition-bypass', details);
@@ -439,6 +495,8 @@ export function createLifecycle(deps) {
       engine,
       journal,
       ledger,
+      descriptions,
+      nativePresentation,
       requireTrustedEpoch: strictEpoch,
       // 周期快照：volatile 开关不能在周期中途改变 guard 自证行为。
       initialToolsEnabled: currentInitialToolsEnabled(),
@@ -707,14 +765,15 @@ export function createLifecycle(deps) {
         });
         return { done: true, outcome: { mode: 'incompatible', reason: TRUSTED_EPOCH_REASONS.MISSING } };
       }
-      // 确有资格 → **在本同步块内启动** `begin()`，并把它自己的 promise 交外层等待。
-      // 资格判定与初始记录的同步启动/名单捕获之间**不得有 await 间隙**：若这里只交出
-      // `{done:false}` 这个资格快照、外层再 `await` 之后才 `begin()`，那段间隙里抵达的
-      // live 用户 `/compact`（它的 adopt 会推进 revision 并捕获自己的边界名单）就会被这条
-      // 过期的初始记录 supersede 掉 —— 手动迁移被回退成 `initial` + 当时的当前配置名单。
-      // 「决定同步 + 启动同步」在这里是**同一件事**；启动之后把 promise 交出去，等待
-      // （可能被更晚的 adopt supersede）仍由外层与下面那段跟随负责。
-      return { done: false, begun: runtime.ledger.begin(currentAlwaysNames(runtime.agentScope), 'initial') };
+      // 确有资格 → 在本同步块内启动写。若 load 窗口里已经捕获了成功边界，
+      // 必须写该边界而不是仍旧写 initial；否则 journal 已前进，账本却会停在 initial。
+      // 资格判定与启动之间不得有 await，且启动即清除旧快照，避免迟到的 command/done 回写。
+      const pending = runtime.pendingUserEpoch;
+      runtime.pendingUserEpoch = null;
+      const begun = pending !== null
+        ? runtime.ledger.adopt({ identity: pending.identity, names: pending.names, trigger: pending.trigger })
+        : runtime.ledger.begin(currentAlwaysNames(runtime.agentScope), 'initial');
+      return { done: false, begun };
     }, true);
     if (gate.done) return gate.outcome;
     // 建立初始记录的那次写的落定：可能已被更晚的 adopt 取代，那不是失败。
@@ -762,7 +821,7 @@ export function createLifecycle(deps) {
       const view = registry.bindingsFor(runtime.agentScope);
       const diff = registry.diffAgainst(runtime.agentScope, view.bindings);
       registry.remember(view.scopeKey, view.bindings);
-      const outcome = runtime.engine.refreshCatalog(view.bindings);
+      const outcome = runtime.engine.refreshCatalog(descriptionBindings(runtime, view.bindings));
       for (const toolId of diff.removed) runtime.engine.invalidate(toolId, 'tool-removed');
       log('lifecycle:registry-refreshed', {
         sessionId: runtime.scope.sessionId,
@@ -795,6 +854,12 @@ export function createLifecycle(deps) {
     sessions,
     assertActive,
     waitForActive,
+    setPresentationMode(runtime, mode) {
+      const native = mode === 'native';
+      if (runtime.nativePresentation === native) return;
+      runtime.nativePresentation = native;
+      refreshDescriptionCatalog(runtime);
+    },
     ensureRuntime,
     onSessionEvent,
     onRegistryChange,

@@ -24,6 +24,7 @@ import { createGuard } from './guard.mjs';
 import { createLifecycle } from './lifecycle.mjs';
 import { createProjection } from './projection.mjs';
 import { createPtcDisclosure } from './ptc-sdk.mjs';
+import { resolveBuiltinDescriptionOverrides } from './builtin-description-options.mjs';
 import { createRegistryAdapter } from './registry.mjs';
 import { buildConfig, INITIAL_TOOL_CHOICES, publishToolChoices, resolveAlwaysVisible } from './config.mjs';
 import { globalToolInventory, presetToolNamesOf } from './tool-inventory.mjs';
@@ -240,16 +241,26 @@ export function validateConfig(raw) {
     ? config.alwaysAllowPresetTools.get() : config.alwaysAllowPresetTools;
   const ptcCompatibility = typeof config.ptcCompatibility?.get === 'function'
     ? config.ptcCompatibility.get() : config.ptcCompatibility;
-  for (const [key, value] of Object.entries({ initialToolsEnabled, alwaysAllowPresetTools, ptcCompatibility, requireTrustedEpoch: config.requireTrustedEpoch,
+  const compactBuiltinToolDescriptions = typeof config.compactBuiltinToolDescriptions?.get === 'function'
+    ? config.compactBuiltinToolDescriptions.get() : config.compactBuiltinToolDescriptions;
+  for (const [key, value] of Object.entries({ initialToolsEnabled, alwaysAllowPresetTools, ptcCompatibility, compactBuiltinToolDescriptions, requireTrustedEpoch: config.requireTrustedEpoch,
     requireTrustedEpochForSubagents: config.requireTrustedEpochForSubagents })) {
     if (value !== undefined && typeof value !== 'boolean') {
       throw new DomainError('INCOMPATIBLE_COMPOSITION', `${key} must be a boolean.`);
     }
   }
+  let compactBuiltinToolOverrides;
+  try {
+    compactBuiltinToolOverrides = resolveBuiltinDescriptionOverrides(config.compactBuiltinToolOverrides);
+  } catch (error) {
+    throw new DomainError('INCOMPATIBLE_COMPOSITION', error.message);
+  }
   return {
     initialToolsEnabled: initialToolsEnabled !== false,
     alwaysAllowPresetTools: alwaysAllowPresetTools !== false,
     ptcCompatibility: ptcCompatibility === true,
+    compactBuiltinToolDescriptions: compactBuiltinToolDescriptions === true,
+    compactBuiltinToolOverrides,
     requireTrustedEpoch: config.requireTrustedEpoch === true,
     requireTrustedEpochForSubagents: config.requireTrustedEpochForSubagents === true,
     categoryConfig,
@@ -525,6 +536,12 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
         getInitialToolsEnabled,
         getRespectAlwaysVisible,
         getPresetTools,
+        getCompactBuiltinToolDescriptions: () => {
+          const value = ctx.fiber?.config?.compactBuiltinToolDescriptions ?? config.compactBuiltinToolDescriptions;
+          return (typeof value?.get === 'function' ? value.get() : value) === true;
+        },
+        getBuiltinDescriptionOverrides: () => resolveBuiltinDescriptionOverrides(
+          ctx.fiber?.config?.compactBuiltinToolOverrides ?? config.compactBuiltinToolOverrides),
         onRuntimeCreated,
         trustedEpoch: trustedEpoch,
         collapsedPresentation: (agent) => {
