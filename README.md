@@ -16,7 +16,7 @@
 
 ---
 
-> 本文对应 manifest `0.4.4` 的主线构建源码。后续修复以 `build-<sha>` 区分，不代表已包含在 npm `0.4.4` 正式版中。现行参数、状态与边界集中在[当前实现契约](plugin/docs/00-current-contract.md)，旧冻结稿与实验记录按其日期阅读。下列功能预览以 native 路径为主；PTC 默认旁路，显式兼容仍有 SDK 冻结缺口。
+> 本文对应 manifest `0.5.0` 的主线构建源码。后续修复以 `build-<sha>` 区分，不代表已包含在 npm `0.5.0` 正式版中。现行参数、状态与边界集中在[当前实现契约](plugin/docs/00-current-contract.md)，旧冻结稿与实验记录按其日期阅读。下列功能预览以 native 路径为主；PTC 默认旁路，显式兼容仍有 SDK 冻结缺口。
 
 ## 功能预览
 
@@ -340,7 +340,7 @@ DSH profile；但会在被 Git 忽略的 `plugin/fixtures/tmp/` 下创建临时�
 
 ## 获取源码
 
-本分支的源码版本为 **`0.4.4`**。npm 是否已发布及其 provenance 应以
+本分支的源码版本为 **`0.5.0`**。npm 是否已发布及其 provenance 应以
 [registry](https://www.npmjs.com/package/dsh-tool-discovery) 为准，GitHub 构建版存在本身不证明 npm 已发布。
 某次下载究竟带哪个版本，以 tarball 内清单为准，不假设 `main`、Release 名与本文始终一致。
 

@@ -16,7 +16,7 @@
 
 ---
 
-> This README describes the source tree with manifest `0.4.4`. Subsequent fixes are distinguished by `build-<sha>` snapshots, not implied to be present in the npm `0.4.4` release. The [current contract](plugin/docs/00-current-contract.md) consolidates current parameters, state and boundaries; frozen drafts and experiments remain dated history. The preview below primarily describes native mode. PTC bypasses discovery by default; opt-in compatibility still lacks SDK freezing.
+> This README describes the source tree with manifest `0.5.0`. Subsequent fixes are distinguished by `build-<sha>` snapshots, not implied to be present in the npm `0.5.0` release. The [current contract](plugin/docs/00-current-contract.md) consolidates current parameters, state and boundaries; frozen drafts and experiments remain dated history. The preview below primarily describes native mode. PTC bypasses discovery by default; opt-in compatibility still lacks SDK freezing.
 
 ## Feature preview
 
@@ -402,7 +402,7 @@ stands.
 
 ## Get the source
 
-The source version on this branch is **`0.4.4`**. npm publication and provenance must be checked in
+The source version on this branch is **`0.5.0`**. npm publication and provenance must be checked in
 [the registry](https://www.npmjs.com/package/dsh-tool-discovery); a GitHub build release alone does
 not establish npm availability. Which version a download carries is decided by its tarball manifest,
 not by assuming that `main`, the release name and this document always agree.

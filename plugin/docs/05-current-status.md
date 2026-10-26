@@ -1,6 +1,6 @@
 # 05 · 当前状态
 
-更新日期：**2026-10-24**（Asia/Hong_Kong）。对应源码 manifest `0.4.4`，整合 PR #21（`d1aa807`）的热路径性能与检索排序批次；本批以 `v0.4.4` 标签驱动正式版本，npm 发布状态以 registry 为准。
+更新日期：**2026-10-26**（Asia/Hong_Kong）。对应源码 manifest `0.5.0`，包含逐工具描述精简、设置界面与生命周期修复；本批以 `v0.5.0` 标签驱动正式版本，npm 发布状态以 registry 为准。
 现行行为见 [00 当前实现契约](<00-current-contract.md>)，验收判据见 [03](<03-implementation-and-acceptance.md>)。
 本文不登记未经重新核验的远端最新发布、STORE 收录或在线安装状态。
 
@@ -10,18 +10,34 @@
 旧文件中的“本轮”“当前宿主”“未发布”“待合并”仅在其取证时点成立，不自动滚动到今天。
 历史记录保留在 [04](<04-runtime-evidence.md>)、[06](<06-rewrite-changelog.md>)、[07](<07-lifecycle-recovery-coverage.md>)、[08](<08-trusted-epoch-baselines.md>)、[10](<10-store-compatibility.md>)、[11](<11-code-review-findings.md>) 与私有证据中。
 
-**版本坐标**：本源码 manifest 为 `0.4.4`。npm 发布与 provenance 以 registry 为准；GitHub Release/tarball 不能替代 npm 发布证明。每个绿色 main 构建会产出 `build-<sha>` 资产，正式语义版本由 `v<version>` 标签驱动；本次打 `v0.4.4` 标签，npm 是否随之发布须单独核对 registry。
+**版本坐标**：本源码 manifest 为 `0.5.0`。npm 发布与 provenance 以 registry 为准；GitHub Release/tarball 不能替代 npm 发布证明。每个绿色 main 构建会产出 `build-<sha>` 资产，正式语义版本由 `v<version>` 标签驱动；本次准备 `v0.5.0` 标签，npm 是否随之发布须单独核对 registry。
 上游记录的 2026-10-06 重建前历史（`2a1f9c0`、`257ddc0` 等）已淘汰，不作为本批证据来源。
 
 ### 0.1 版本与兼容
 
-- 包版本：`0.4.4`；协议版本：`2`。不要把包版本当 Core 版本。
+- 包版本：`0.5.0`；协议版本：`2`。不要把包版本当 Core 版本。
 - manifest 的 Core peer 准入范围为 `>=0.2.1-alpha.1`；显式兼容声明仍只将 alpha.1、alpha.2 标为 `compatible`，`0.2.0-rc.2` 为 `unknown`。未列出的新版本不据此变成“已测”。
 - `schemastery` peer 仍是 `3.18.5-alpha.1`；不能把所有 peer 都描述成同一开放 Core 范围。
-- 当前文档核对没有重新读取宿主安装版本；[04](<04-runtime-evidence.md>) 的 alpha.1 现场与 [10](<10-store-compatibility.md>) 的 alpha.2 实验均是历史坐标。
+- 本次组合测试核实公共安装的 DSH 服务为 `0.2.1-rc.3`；不据此扩大 manifest 的兼容声明。[04](<04-runtime-evidence.md>) 的 alpha.1 现场与 [10](<10-store-compatibility.md>) 的 alpha.2 实验均是历史坐标。
 - 整合的 PR #18 后续修复保留有序 wire 独立副本、getter/toJSON 内容变化拒绝、逐项字节累计及末页节省判定。字节上限约束响应构造，不约束索引评分/排序的全部计算量。其历史 549 项结果见 0.3，不冒充本轮宿主验收。
 
 ### 0.2 本次运行证据
+
+2026-10-26，Node **v24.13.0**。产品代码对应 `16208ccd924d1671f5e6450346dab7cdab4dd9ae`，发布准备仅更新版本与文档。
+
+| 本次实际执行 | 退出码 | 结果与边界 |
+|---|---|---|
+| 全量 unit，包括 client/settings | 0 | **642 pass / 0 fail / 0 skip**；客户端使用真实 React/reconciler 与 schemastery，非浏览器 DOM 验收 |
+| 全部 `gate-*.test.mjs` composition | 0 | **153 pass / 0 fail / 0 skip**；公共 DSH 服务 `0.2.1-rc.3`、真实 Loader、mock provider 与私有临时会话存储，不调用真实模型 |
+| 仓库一致性与 `git diff --check` | 0 | 包身份、双语文档和相对链接通过 |
+| `npm pack --ignore-scripts --dry-run --json` | 0 | 校验文件范围与描述策略、Host/Client/domain 入口；发布后仍需核验实际分发资产 |
+| 有界独立源码与测试设计复核 | — | 原严格周期持续阻断、翻译键及组合测试时点问题已闭环；不替代浏览器、真实 provider 或全版本验收 |
+
+质量数据集仍有 H037/H044 的三个类别期望误标，validator 为 20 PASS / 1 FAIL；未修改冻结标签，不据此发布搜索评分。真实 provider、模型行为等价性、token/TTFT、在线 GUI、安装与完整 HMR 均未在本次验收。
+
+### 0.2.1 历史运行证据（2026-10-24）
+
+以下“本轮/本次”仅指此历史批次，不覆盖上面的 0.5.0 运行结果。
 
 2026-10-24 整合 PR #21（`d1aa807`）热路径性能与检索排序批次并准备 `v0.4.4`。Node **v24.13.0**。上一批（2026-10-21，`fcdb348`×`c1709d3` 整合）的证据移入 0.3 节的历史口径，不在本轮重复宣称。
 
@@ -73,7 +89,7 @@
 | 面 | 当前实现与证据边界 |
 |---|---|
 | 三入口、目录、分类、词法搜索、版本与预算 | 已实现，有 portable 回归；检索指标尚未达成可发布评分 |
-| native 披露、guard、canonical 恢复 | 已实现；早期真实 Loader 证据按历史版本保留；本轮未重新做宿主集成 |
+| native 披露、guard、canonical 恢复 | 已实现；本次真实 Loader/mock provider 组合测试通过，范围见 0.2 |
 | 状态一致性修复 | 同名 schema 冲突、独立旧 wire 恢复、结果提交次序、技能下发和完整成功外壳预算已进入源码及回归 |
 | trusted-epoch | 已实现的**可选功能**，主/子开关默认关闭；不是“还没有实现”，也未完成全 feature 验收 |
 | 设置页 | 已实现，有 VM/配置面/历史 DOM 证据；当前 GUI 未验收 |
@@ -94,9 +110,9 @@
 1. **PTC SDK 逐字冻结、稳定追加和跨重启冻结**：当前实现仍按当前 `sdkSchemas` 重新渲染；执行守卫不能代替披露一致性。
 2. **真实 provider wire、token、TTFT 与任务净收益**：没有可据此发布的 A/B/C 指标。历史域内微基准不代表端到端时延。
 3. **检索质量**：类别词不得独立命中的门禁已修；Recall@K、误命中率与模型正确选择率仍未完成。私有 validator 的历史结果为 20 PASS / 1 FAIL（H037/H044 类别期望误标），不是产品搜索评分。
-4. **当前目标宿主的完整重验**：host-bound unit、Loader composition、真实子代理/worker、完整 prompt 组合、跨 scope 压力与浏览器自然操作未在本轮运行。
+4. **当前目标宿主的完整重验**：host-bound unit 和 Loader/mock provider composition 已运行；真实模型/程序 worker、完整 prompt 组合压力与浏览器自然操作仍未覆盖，不能把公共安装测试当成在线桌面 Profile 已验收。
 5. **持久化与切换**：crash/fsync、无停顿热替换原子绑定、完整 HMR 压力仍不能从正常恢复或成功压缩用例外推。
-6. **trusted-epoch 残余**：历史定义的新会话/迁移契约窗口及有限审查未覆盖项仍见 [08](<08-trusted-epoch-baselines.md>)；本轮没有修改其授权实现或宣布旧债务全闭合。
+6. **trusted-epoch 残余**：本次修复周期分叉后的持续阻断并验证完整用户迁移恢复；历史定义的新会话/迁移契约窗口及有限审查未覆盖项仍见 [08](<08-trusted-epoch-baselines.md>)，不宣布其它旧债务全闭合。
 
 ## 4. 明确不提供的行为
 

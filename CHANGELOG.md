@@ -25,8 +25,15 @@ what is verified, what is unverified, and what this version refuses to support �
 
 ## [Unreleased]
 
-The entries below are post-v0.4.4 source changes. Green main builds publish `build-<sha>` assets
-independently; those assets do not imply a new npm release.
+## [0.5.0] — 2026-10-26 — per-tool concise descriptions and lifecycle hardening
+
+### Discovery and settings fixes
+
+- Require a still-admitted same-session operation for new live canonical commits; cancelled, reset and destroyed operations cannot be replayed through the live path. Cold history continues through the dedicated restore path.
+- Keep missing trusted-epoch records blocked across repeated assembly and pre-step attempts after an epoch identity divergence; a complete user migration restores the session.
+- Protect pending receipt snapshots from mutation and paginate the full category collection instead of truncating it.
+- Fix localized settings badge tooltips and preserve the existing settings save and disposal behavior.
+- Align composition regressions with live admission, frozen-wire/execute separation and durable epoch barriers; preserve rejection, zero-request and successful-use controls.
 
 ### Per-tool concise descriptions (v2)
 
