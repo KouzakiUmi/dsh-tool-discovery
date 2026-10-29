@@ -545,3 +545,31 @@ test('引擎配置非法时返回结构化 DomainError，不得以 ReferenceErro
   }
 });
 
+
+test('F03c 未决 load 的目标名可由 engine 查出（候选路径的 canonical input 只有 ref）', async () => {
+  const { engine } = await makeEngine();
+  const c = searchOnce(engine, SCOPE_A).data.candidates[0];
+  const opId = nextOpId();
+  const res = await engine.handleLoad({ candidates: [{ ref: c.ref, revision: c.revision }] }, SCOPE_A, { operationId: opId });
+  assert.equal(res.response.ok, true);
+  // guard 要区分“同响应内 load 完立刻调用”和“从未加载”，但 canonical input 里没有名字，
+  // 名字只能来自接纳时的解析结果。
+  assert.deepEqual([...engine.pendingLoadTargetNames(SCOPE_A)], [c.name]);
+  assert.deepEqual([...engine.pendingLoadTargetNames(SCOPE_B)], [], '未决目标名按会话隔离');
+
+  engine.applyCanonicalPair({
+    seq: 1,
+    call: { operationId: opId, tool: 'tool_load', input: { candidates: [{ ref: c.ref, revision: c.revision }] } },
+    result: { isError: false, ok: true, payload: res.response.data.receipt },
+  }, SCOPE_A);
+  assert.deepEqual([...engine.pendingLoadTargetNames(SCOPE_A)], [], '折叠后不再算在途');
+
+  const other = searchOnce(engine, SCOPE_A).data.candidates.find((x) => x.name !== c.name);
+  const op2 = nextOpId();
+  const res2 = await engine.handleLoad(
+    { candidates: [{ ref: (other ?? c).ref, revision: (other ?? c).revision }] }, SCOPE_A, { operationId: op2 },
+  );
+  assert.equal(res2.response.ok, true);
+  engine.cancelOperation(op2);
+  assert.deepEqual([...engine.pendingLoadTargetNames(SCOPE_A)], [], '取消后同样收口');
+});

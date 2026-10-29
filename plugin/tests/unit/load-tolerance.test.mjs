@@ -62,3 +62,23 @@ test('LT3: 无论 tolerantLoadProtected 开关如何，三入口项与框架保�
   assert.equal(fwRes.response.ok, false, '框架保留工具绝对不可加载');
   assert.equal(fwRes.response.error.code, 'INVALID_ARGS');
 });
+
+test('LT4: 空 candidates 占位不阻断 names 路径（协议层与折叠层同一口径）', async () => {
+  const { engine } = await makeEngine({
+    engineConfig: { alwaysToolNames: ['read_file'] },
+  });
+  const input = { candidates: [], names: ['read_file'] };
+  const opId = nextOpId();
+  const res = await engine.handleLoad(input, SCOPE_A, { operationId: opId });
+  assert.equal(res.response.ok, true, '空数组是占位写法，不是互斥冲突');
+  assert.equal(res.response.data.receipt.selectionSource, 'name');
+
+  // 折叠必须接受同一份输入：deriveInputPath 不能把空数组当成"已提供候选路径"
+  const out = engine.applyCanonicalPair({
+    seq: 1,
+    call: { operationId: opId, tool: 'tool_load', input },
+    result: { isError: false, ok: true, payload: res.response.data.receipt },
+  }, SCOPE_A);
+  assert.equal(out.applied, true, '空数组占位不得让回执被折叠判据拒绝');
+  assert.equal(engine.getState(SCOPE_A).selected.size, 1);
+});

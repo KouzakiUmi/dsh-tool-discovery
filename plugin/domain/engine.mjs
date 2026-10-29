@@ -599,7 +599,9 @@ export function createDiscoveryEngine(config) {
         rechecked.set(snap.toolId, cur);
       }
 
-      const selectionSource = /** @type {'candidate'|'name'} */ (req.candidates ? 'candidate' : 'name');
+      // 按**键是否给出**判路径，不用真值：空数组在协议层已按"未提供"处理，真值判断会把
+      // `candidates: []` 误当候选路径，回执的 selectionSource 与折叠侧重算结果对不上。
+      const selectionSource = /** @type {'candidate'|'name'} */ (req.candidates !== undefined ? 'candidate' : 'name');
       const receipt = {
         kind: 'tool-discovery.selection',
         version: PROTOCOL_VERSION,
@@ -729,6 +731,35 @@ export function createDiscoveryEngine(config) {
       if (!op) return false;
       // 删除接纳即释放预算；无 pending 的迟到回执不能成为新提交。
       return pending.delete(operationId);
+    },
+
+    /**
+     * 本会话尚未折叠（回执还没到/还没配对）的 tool_load 目标名，names 与 candidates
+     * 两条路径给同一份结果。
+     *
+     * candidates 路径的 canonical input 只有 `{ref, revision}`，工具名是 engine 在接纳时
+     * 解析出来的；它已经在期望回执快照里，而快照与 `pending` 同生共灭。所以这里直接读
+     * 快照，不另存一份 operationId → 名字的映射 —— 多一份状态就多一条会漏清理的路径。
+     * 只回答**调用方认定仍在途**的那些操作（`operationIds` 为 undefined 时回答全部未决项）：
+     * engine 的未决项可以在没有 canonical 折叠的情况下存在（例如 PTC 子调用的回执由
+     * journal 自行消费），调用方用它自己那份"还没落地"的登记做交集，才不会把已经结算的
+     * load 永久说成"即将生效"。
+     * @param {any} scope 与 engine 其它查询同一入参形状（只读 sessionId）
+     * @param {ReadonlySet<string>} [operationIds]
+     * @returns {Set<string>}
+     */
+    pendingLoadTargetNames(scope, operationIds) {
+      const sessionId = scope?.sessionId;
+      const only = operationIds instanceof Set ? operationIds : null;
+      const names = new Set();
+      for (const [operationId, op] of pending) {
+        if (op.sessionId !== sessionId || op.action !== 'load') continue;
+        if (only !== null && !only.has(operationId)) continue;
+        for (const s of op.expectedReceipt?.selected ?? []) {
+          if (typeof s?.name === 'string' && s.name.length > 0) names.add(s.name);
+        }
+      }
+      return names;
     },
 
     // ---- 曝光 / guard ---------------------------------------------------

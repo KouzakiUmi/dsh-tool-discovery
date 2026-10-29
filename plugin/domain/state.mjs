@@ -160,20 +160,18 @@ export function deriveInputPath(input) {
     }
     return { ok: true, source: /** @type {any} */ ('name'), action };
   }
-  const hasCandidates = input.candidates !== undefined;
-  const hasNames = input.names !== undefined;
+  // 与 validateLoadRequest 同一口径：空数组不算提供输入路径。协议层已按 names 放行的
+  // `{ candidates: [], names: [...] }` 若在这里被当成混用，回执会被拒、selection 静默不生效。
+  const hasCandidates = Array.isArray(input.candidates) && input.candidates.length > 0;
+  const hasNames = Array.isArray(input.names) && input.names.length > 0;
   if (hasCandidates && hasNames) return { ok: false, reason: 'mixed-input-paths' };
-  if (!hasCandidates && !hasNames) return { ok: false, reason: 'no-input-path' };
-  if (hasCandidates) {
-    if (!Array.isArray(input.candidates) || input.candidates.length === 0) {
-      return { ok: false, reason: 'candidates-empty' };
-    }
-    return { ok: true, source: /** @type {any} */ ('candidate'), action };
+  if (!hasCandidates && !hasNames) {
+    // 区分“给了但为空/类型不对”与“完全没给”，保留日志可定位性。
+    if (input.candidates !== undefined) return { ok: false, reason: 'candidates-empty' };
+    if (input.names !== undefined) return { ok: false, reason: 'names-empty' };
+    return { ok: false, reason: 'no-input-path' };
   }
-  if (!Array.isArray(input.names) || input.names.length === 0) {
-    return { ok: false, reason: 'names-empty' };
-  }
-  return { ok: true, source: /** @type {any} */ ('name'), action };
+  return { ok: true, source: /** @type {any} */ (hasCandidates ? 'candidate' : 'name'), action };
 }
 
 /**

@@ -43,6 +43,10 @@ test('deriveInputPath 从 canonical call 重算路径', () => {
   assert.equal(deriveInputPath({}).ok, false, 'load 缺输入路径不是合法 canonical call');
   assert.equal(deriveInputPath({ action: 'load' }).reason, 'no-input-path');
   assert.equal(deriveInputPath({ action: 'unload', toolIds: [] }).ok, false);
+  // 空数组与协议层同一口径：不算提供了这条路径，否则协议已放行的调用会在这里被当成混用
+  assert.deepEqual(deriveInputPath({ candidates: [], names: ['a'] }), { ok: true, source: 'name', action: 'load' });
+  assert.deepEqual(deriveInputPath({ names: [], candidates: [{ ref: 'c', revision: 'r' }] }), { ok: true, source: 'candidate', action: 'load' });
+  assert.equal(deriveInputPath({ candidates: [], names: [] }).reason, 'candidates-empty');
 });
 
 test('parseReceiptShape 拒绝错 kind/版本/字段类型', () => {

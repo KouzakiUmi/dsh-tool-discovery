@@ -154,9 +154,10 @@ function disclosuresFromHistory(events, pairs) {
       let req;
       try { req = validateLoadRequest(pair.call.input); } catch { continue; }
       const receipt = parsed.receipt;
-      if (receipt.selectionSource !== (req.names ? 'name' : 'candidate')) continue;
+      // 与 validateLoadRequest / deriveInputPath 同一口径：按键存在性判路径，不用真值。
+      if (receipt.selectionSource !== (req.names !== undefined ? 'name' : 'candidate')) continue;
       if (receipt.selected.length > (req.names ?? req.candidates).length) continue;
-      if (req.names && receipt.selected.some((s) => !req.names.includes(s.name))) continue;
+      if (req.names !== undefined && receipt.selected.some((s) => !req.names.includes(s.name))) continue;
       for (const rec of receipt.selected) {
         let versions = selected.get(rec.name);
         if (!versions) { versions = new Map(); selected.set(rec.name, versions); }
@@ -1062,9 +1063,17 @@ export function createJournal(deps) {
       if (Array.isArray(input?.names)) {
         for (const n of input.names) if (typeof n === 'string') names.add(n);
       }
-      if (Array.isArray(input?.candidates)) {
-        for (const c of input.candidates) if (typeof c?.name === 'string') names.add(c.name);
-      }
+      // candidates 路径的 canonical input 只有 `{ref, revision}`，没有工具名 —— 名字是
+      // engine 接纳时解析出来的。过去这里读 `c.name`（该字段不存在），于是"同响应里
+      // load(candidates) 后立刻调用"被报成从未加载（TOOL_NOT_LOADED），与事实相反。
+      // 目标名统一从 engine 的未决回执快照取，两条路径同一口径。
+    }
+    if (typeof engine.pendingLoadTargetNames === 'function') {
+      // 与 engine 的未决项取交集：只算本 journal 仍认为在途的那几条 call。
+      // engine 侧也可能留着不会被折叠的未决项（PTC 子调用的回执由 journal 自己消费），
+      // 不取交集就会把已经结算的 load 永久报成"即将生效"。
+      const operationIds = new Set([...liveCalls.values()].map((call) => `op_${call.callId}`));
+      for (const n of engine.pendingLoadTargetNames(scope, operationIds)) names.add(n);
     }
     return names;
   }

@@ -53,6 +53,57 @@ test('list:categories 只允许 view/cursor/limit', () => {
   assert.throws(() => validateListRequest({ view: 'categories', category: 'files' }, B), (e) => e.code === 'INVALID_ARGS');
 });
 
+test('list:state 不接受的键在类型检查之前就拒绝（合法值/非法值同一条指引）', () => {
+  const text = domainText;
+  const msg = (raw) => {
+    try { validateListRequest(raw, B); return ''; } catch (e) { return e.message; }
+  };
+  // 先跑类型检查会让同一字段得到互相矛盾的两条指引：limit:3 说"未知字段"，limit:0 说"必须正整数"
+  assert.equal(msg({ view: 'state', limit: 3 }), text.format(['unknownField'], { field: 'limit' }));
+  assert.equal(msg({ view: 'state', limit: 0 }), text.format(['unknownField'], { field: 'limit' }));
+  assert.equal(msg({ view: 'state', cursor: 'p_x' }), text.t(['detail', 'stateViewRejectsCursor']));
+  assert.equal(msg({ view: 'state', cursor: null }), text.t(['detail', 'stateViewRejectsCursor']));
+  assert.equal(msg({ view: 'state', category: '' }), text.t(['detail', 'stateViewRejectsCategory']));
+});
+
+test('list:categories 拒绝已知键 category 时用专用文案，不误报未知字段', () => {
+  const text = domainText;
+  assert.throws(
+    () => validateListRequest({ view: 'categories', category: 'files' }, B),
+    (e) => e.message === text.t(['detail', 'categoriesViewRejectsCategory']),
+  );
+});
+
+test('list:cursor 空串与类型错误分别报', () => {
+  const text = domainText;
+  assert.throws(
+    () => validateListRequest({ view: 'available', category: 'files', cursor: '' }, B),
+    (e) => e.message === text.t(['detail', 'cursorEmpty']),
+  );
+  assert.throws(
+    () => validateListRequest({ view: 'available', category: 'files', cursor: 5 }, B),
+    (e) => e.message === text.t(['detail', 'cursorNotString']),
+  );
+});
+
+test('search:纯空白 query 与空串同义，报 queryRequired', () => {
+  const text = domainText;
+  for (const q of ['   ', '\n\t']) {
+    assert.throws(
+      () => validateSearchRequest({ category: 'all', query: q }, B),
+      (e) => e.message === text.t(['detail', 'queryRequired']),
+      JSON.stringify(q),
+    );
+  }
+  // 首尾空白不改变查询含义：归一后再交给检索，协议与打分只看同一份
+  assert.equal(validateSearchRequest({ category: 'all', query: ' glob ' }, B).query, 'glob');
+});
+
+test('load:纯空白 names/ref 在协议层拒绝，不落到"工具不存在"', () => {
+  assert.throws(() => validateLoadRequest({ names: [' '] }, B), (e) => e.code === 'INVALID_ARGS');
+  assert.throws(() => validateLoadRequest({ candidates: [{ ref: '  ' }] }, B), (e) => e.code === 'INVALID_ARGS');
+});
+
 test('list:默认关闭 limit 硬上限,但显式配置上限后仍拒绝越界', () => {
   // 默认：硬上限关闭 → 模型可以要更大的页，但默认输出策略仍是 20
   assert.equal(validateListRequest({ view: 'available', category: 'files' }, B).limit, 20);
@@ -111,6 +162,22 @@ test('load:candidates 与 names 必须二选一(F18)', () => {
   assert.equal(c.candidates.length, 1);
 });
 
+test('load:空数组按未提供处理，不构成互斥冲突', () => {
+  // 模型常把候选路径留成空数组占位，真正的输入只有 names
+  const byNames = validateLoadRequest({ candidates: [], names: ['x'] }, B);
+  assert.deepEqual(byNames, { action: 'load', names: ['x'] });
+  const byCandidates = validateLoadRequest({ candidates: [{ ref: 'c1' }], names: [] }, B);
+  assert.deepEqual(byCandidates, { action: 'load', candidates: [{ ref: 'c1' }] });
+  // 两边都空等于都没给：仍拒绝，但按"缺少输入路径"而不是"两项互斥"
+  for (const raw of [{ candidates: [], names: [] }, { candidates: [] }, { names: [] }]) {
+    assert.throws(() => validateLoadRequest(raw, B), (e) => e.code === 'INVALID_ARGS', JSON.stringify(raw));
+  }
+  // "空即忽略"不掩盖真正的字段类型错误（含另一边给空数组的情况）
+  for (const raw of [{ candidates: 'x' }, { names: 'x' }, { candidates: null }, { names: null }, { candidates: [], names: 'x' }, { names: [], candidates: {} }]) {
+    assert.throws(() => validateLoadRequest(raw, B), (e) => e.code === 'INVALID_ARGS', JSON.stringify(raw));
+  }
+});
+
 test('load:数组非空;批次上限默认关闭、显式配置为 4 时生效', () => {
   const five = Array.from({ length: 5 }, (_, i) => ({ ref: `c${i}`, revision: 'r' }));
   // 默认关闭 → 5 个一批放行
@@ -118,7 +185,7 @@ test('load:数组非空;批次上限默认关闭、显式配置为 4 时生效',
   // 显式配置上限后照旧拒绝
   assert.throws(() => validateLoadRequest({ candidates: five }, CAPPED), (e) => e.code === 'INVALID_ARGS');
   assert.throws(() => validateLoadRequest({ names: Array.from({ length: 5 }, (_, i) => `n${i}`) }, CAPPED), (e) => e.code === 'INVALID_ARGS');
-  // 空数组始终拒绝（这不是限额问题）
+  // 空数组本身不构成输入路径，仍拒绝；理由与批次上限无关
   assert.throws(() => validateLoadRequest({ names: [] }, B), (e) => e.code === 'INVALID_ARGS');
   assert.throws(() => validateLoadRequest({ candidates: [] }, B), (e) => e.code === 'INVALID_ARGS');
 });

@@ -56,8 +56,11 @@ interface ToolLoadRequest {
 - `list` `view=available|loaded`：`category` 必填；`limit` 默认 20、最大 20。
 - `list` `view=categories`：只允许 `view` / `cursor` / `limit`；分页返回类别卡片，不返回普通工具名。
 - `list` `view=state`：只允许 `view`；返回本会话 `selected` / `advertised` / `invalidated` 与预算，不枚举未加载目录。
+- `list` 的视图专属拒绝先于取值校验：`state` 的 `category`/`cursor`/`limit`、`categories` 的 `category` 都是已知键，一律报"此视图不接受该字段"，不会先被"必须是正整数/字符串"截走——否则同一字段的合法值与非法值给出互相矛盾的指引。`cursor: ""` 单独报"不能是空字符串"，不与类型错误共用文案。
 - `search` 没有 action 字段；`query` 超过 `maxQueryCodePoints`（512）直接拒绝。
-- `load`：`candidates` 与 `names` **必须且只能提供一项**；数组非空，上限 4。
+- `search` 的 `query` 先按首尾空白归一：纯空白与 `""` 同义，报 `queryRequired`。放行会让检索以成功外壳返回空候选，模型看到的是"没找到工具"而不是"查询无效"。
+- `load`：`candidates` 与 `names` **必须且只能提供一项**；实际参与判定的只有非空数组——空数组按“未提供”处理，不构成互斥冲突（两者都空仍按“缺少输入路径”拒绝）；上限 4。
+- `load` 的 `names` 元素与候选 `ref` 同口径：纯空白与空串同义，在协议层按字段畸形拒绝（`namesNotStrings` / `candidateNeedsRefRevision`），不落到执行层的"工具/候选不存在"。带首尾空格的非空名称不 trim 后接受——精确名称就是精确名称。
 - 候选的 `revision` 可选：缺省、`null` 与空串都表示“未给出”，由 `ref` 绑定的版本推导；数字、对象、数组、布尔仍是参数错误。
 - **版本权威始终是 `ref`**：它绑定签发当时的 revision，因此工具此后变化仍以 `STALE_CANDIDATE` 拒绝，不会因为省略 `revision` 就被加载成新定义。
 - `unload`：必须有非空 `toolIds`，不接受 `candidates` / `names`；上限为活跃工具上限。

@@ -79,22 +79,30 @@ export function validateListRequest(raw, budgets = DEFAULT_BUDGETS) {
   if (typeof view !== 'string' || !LIST_VIEWS.includes(view)) {
     throw new DomainError('INVALID_ARGS', t(['detail', 'unknownView']));
   }
+
+  if (view === 'state') {
+    // 顺序固定：本视图不接受的**已知键**，一律先说"这个视图不接受它"，再谈值好不好。
+    // 反过来（先跑类型检查）会让同一字段得到互相矛盾的指引 —— `limit:3` 说"未知字段"
+    // （删掉它），`limit:0` 却说"必须是正整数"（改成 3），模型照着改完仍被拒。
+    // category / cursor 是已知键，报 unknownField 会把"这个视图不接受它"误述成
+    // "这个字段不存在"；limit 沿用既有的 unknownField 文案（已由契约与测试锁定）。
+    if (o.category !== undefined) throw new DomainError('INVALID_ARGS', t(['detail', 'stateViewRejectsCategory']));
+    if (o.cursor !== undefined) throw new DomainError('INVALID_ARGS', t(['detail', 'stateViewRejectsCursor']));
+    if (o.limit !== undefined) throw new DomainError('INVALID_ARGS', fmt(['unknownField'], { field: 'limit' }));
+    assertOnlyKeys(o, ['view']);
+    return { view, limit: normalizeLimit(undefined, budgets.defaultListLimit, budgets.maxListLimit) };
+  }
+
   const limit = normalizeLimit(o.limit, budgets.defaultListLimit, budgets.maxListLimit);
   const cursor = o.cursor;
   if (cursor !== undefined && !isNonEmptyString(cursor)) {
-    throw new DomainError('INVALID_ARGS', t(['detail', 'cursorNotString']));
-  }
-
-  if (view === 'state') {
-    // 先给这两条**专用**错误机会：category / cursor 是已知键，报 unknownField 会把
-    // "这个视图不接受它" 误述成 "这个字段不存在"。其余键的判定顺序与结果不变。
-    if (o.category !== undefined) throw new DomainError('INVALID_ARGS', t(['detail', 'stateViewRejectsCategory']));
-    if (o.cursor !== undefined) throw new DomainError('INVALID_ARGS', t(['detail', 'stateViewRejectsCursor']));
-    assertOnlyKeys(o, ['view']);
-    return { view, limit };
+    // `''` 是字符串，报"必须是字符串"等于给错方向；它与 null/数字是两回事。
+    throw new DomainError('INVALID_ARGS', cursor === '' ? t(['detail', 'cursorEmpty']) : t(['detail', 'cursorNotString']));
   }
 
   if (view === 'categories') {
+    // category 同样是已知键：与 state 视图同一口径，别把"此视图不接受"说成"未知字段"。
+    if (o.category !== undefined) throw new DomainError('INVALID_ARGS', t(['detail', 'categoriesViewRejectsCategory']));
     assertOnlyKeys(o, ['view', 'cursor', 'limit']);
     return { view, cursor, limit };
   }
@@ -118,7 +126,10 @@ export function validateSearchRequest(raw, budgets = DEFAULT_BUDGETS) {
   assertOnlyKeys(o, ['category', 'query', 'limit']);
   const category = o.category;
   if (!isNonEmptyString(category)) throw new DomainError('INVALID_ARGS', t(['detail', 'categoryRequired']));
-  const query = o.query;
+  // 纯空白不是一次真正的检索：与空串同义，必须报 queryRequired。放行会让 search 以
+  // ok:true 返回空候选，模型看到的是"没找到工具"而不是"query 无效"，于是去换类别
+  // 或放弃工具，而不是重写 query。
+  const query = typeof o.query === 'string' ? o.query.trim() : o.query;
   if (!isNonEmptyString(query)) throw new DomainError('INVALID_ARGS', t(['detail', 'queryRequired']));
   const codePoints = Array.from(query).length;
   if (budgets.maxQueryCodePoints !== null && codePoints > budgets.maxQueryCodePoints) {
@@ -162,8 +173,17 @@ export function validateLoadRequest(raw, budgets = DEFAULT_BUDGETS) {
   }
 
   if (o.toolIds !== undefined) throw new DomainError('INVALID_ARGS', t(['detail', 'loadRejectsToolIds']));
-  const hasCandidates = o.candidates !== undefined;
-  const hasNames = o.names !== undefined;
+  // 空数组不表达"提供了哪一条输入路径"：模型常留一个 `candidates: []` 占位再给 names，
+  // 把空数组也算作已提供，互斥判定就会把合法调用判成 both，模型换个写法也逃不出同一个错。
+  // 类型错误仍单独拦下——空数组只是没内容，字符串/对象才是不合法的字段类型。
+  if (o.candidates !== undefined && !Array.isArray(o.candidates)) {
+    throw new DomainError('INVALID_ARGS', t(['detail', 'candidatesNotArray']));
+  }
+  if (o.names !== undefined && !Array.isArray(o.names)) {
+    throw new DomainError('INVALID_ARGS', t(['detail', 'namesNotArray']));
+  }
+  const hasCandidates = Array.isArray(o.candidates) && o.candidates.length > 0;
+  const hasNames = Array.isArray(o.names) && o.names.length > 0;
   if (hasCandidates && hasNames) {
     throw new DomainError('INVALID_ARGS', t(['detail', 'candidatesNamesExclusive']));
   }
@@ -173,7 +193,6 @@ export function validateLoadRequest(raw, budgets = DEFAULT_BUDGETS) {
 
   if (hasCandidates) {
     const arr = o.candidates;
-    if (!Array.isArray(arr) || arr.length === 0) throw new DomainError('INVALID_ARGS', t(['detail', 'candidatesNotArray']));
     if (budgets.maxLoadBatch !== null && arr.length > budgets.maxLoadBatch) throw new DomainError('INVALID_ARGS', t(['detail', 'candidatesOverBatch']));
     /** @type {Array<{ref:string,revision?:string}>} */
     const out = [];
@@ -184,6 +203,11 @@ export function validateLoadRequest(raw, budgets = DEFAULT_BUDGETS) {
       assertNoForbiddenFields(item);
       assertOnlyKeys(item, ['ref', 'revision']);
       if (!isNonEmptyString(item.ref)) {
+        throw new DomainError('INVALID_ARGS', t(['detail', 'candidateNeedsRefRevision']));
+      }
+      // 纯空白 ref 与空串同义：等执行层再说"CANDIDATE_UNAVAILABLE"，模型会以为 ref
+      // 过期或工具被删（然后原样重试），而不是"这次请求的字段是畸形的"。
+      if (item.ref.trim().length === 0) {
         throw new DomainError('INVALID_ARGS', t(['detail', 'candidateNeedsRefRevision']));
       }
       // 可选字段的"未给出"有三种写法:键缺失、null、''。模型对可选字段最常见的就是
@@ -206,10 +230,12 @@ export function validateLoadRequest(raw, budgets = DEFAULT_BUDGETS) {
   }
 
   const names = o.names;
-  if (!Array.isArray(names) || names.length === 0) throw new DomainError('INVALID_ARGS', t(['detail', 'namesNotArray']));
   if (budgets.maxLoadBatch !== null && names.length > budgets.maxLoadBatch) throw new DomainError('INVALID_ARGS', t(['detail', 'namesOverBatch']));
   for (const n of names) {
     if (!isNonEmptyString(n)) throw new DomainError('INVALID_ARGS', t(['detail', 'namesNotStrings']));
+    // 同上：空白名字不可能匹配任何工具，但报 TOOL_UNAVAILABLE 会把"字段畸形"
+    // 说成"工具消失了"。带首尾空格的非空名字**不**在这里 trim 后接受，精确名就是精确名。
+    if (n.trim().length === 0) throw new DomainError('INVALID_ARGS', t(['detail', 'namesNotStrings']));
   }
   return { action: 'load', names: Array.from(new Set(names)) };
 }

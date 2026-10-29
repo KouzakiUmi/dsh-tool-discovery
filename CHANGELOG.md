@@ -25,6 +25,14 @@ what is verified, what is unverified, and what this version refuses to support �
 
 ## [Unreleased]
 
+### Request-shape fixes
+
+- Treat an empty `candidates` / `names` array as "not provided" in `tool_load`: `{"candidates": [], "names": [...]}` no longer fails with the mutually exclusive error, and neither does the mirrored form. Two empty arrays still fail as a missing input path. Field types are still checked, so a non-array value is not hidden by the tolerance.
+- Derive the selection path from key presence instead of truthiness in the live commit path and history replay, so the empty-array rule cannot make a receipt disagree with the fold that consumes it.
+- Reject whitespace-only `query`, `names` entries and candidate `ref` values as the empty string they are. A blank query used to succeed with an empty candidate list, which is indistinguishable from "no tool matches"; a blank name used to fail later as `TOOL_UNAVAILABLE`, pointing the model at a deleted tool instead of a malformed field.
+- Report a known field that a view does not accept as "this view does not accept it" before validating its value: `{view:"state", limit:0}` and `{view:"state", limit:3}` no longer give contradictory guidance, `categories` + `category` no longer reads as an unknown field, and an empty `cursor` no longer claims to be a type error.
+- Fix in-flight `tool_load` detection on the candidate path. The canonical input carries only `{ref, revision}`, so the guard saw no pending target and answered `TOOL_NOT_LOADED` for a tool that was about to take effect. Pending target names now come from the engine's admitted receipt snapshot, intersected with the journal's still-unsettled calls so a settled PTC sub-call cannot stay "about to take effect" forever.
+
 ## [0.5.0] — 2026-10-26 — per-tool concise descriptions and lifecycle hardening
 
 ### Discovery and settings fixes

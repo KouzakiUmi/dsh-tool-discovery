@@ -484,3 +484,25 @@ test('JB-U14 PTC 子调用结算只在快照里时，恢复后不得残留在途
   assert.deepEqual([...journal.pendingLoadNames()], [],
     '快照里已结算的 PTC 子调用不得永久停留在"即将生效"（修复前这里残留 glob）');
 });
+
+test('JB-U7 候选路径的在途 load 目标名由 engine 提供（canonical input 只有 ref）', async () => {
+  // 候选路径的 tool/call 参数形状是 `{candidates:[{ref, revision}]}`，**没有**工具名：
+  // 名字只有 engine 在接纳时解析得出。journal 过去从 `c.name` 读该字段（永远不存在），
+  // 于是同响应里 load(candidates) 后立刻调用会被 guard 报成"从未加载"。
+  const { engine } = await makeEngine({ bindings: sampleBindings() });
+  const scope = { sessionId: 'sess_jb_u7', actorId: 'actor_jb_u7' };
+  const journal = createJournal({
+    ctx: {}, session: { inheritedEventCount: 0 }, scope, engine,
+    query: { readSession: async () => ({ inheritedEventCount: 0, events: [] }) },
+    log: () => {},
+  });
+  const candidate = engine.handleSearch({ category: 'files', query: 'glob' }, scope).data.candidates[0];
+  const input = { candidates: [{ ref: candidate.ref, revision: candidate.revision }] };
+  journal.onEvent({
+    seq: 1, type: 'tool/call', data: { name: 'tool_load', callId: 'cand-1', arguments: JSON.stringify(input) },
+  });
+  const loaded = await engine.handleLoad(input, scope, { operationId: 'op_cand-1' });
+  assert.equal(loaded.response.ok, true, `前置：候选 load 必须成功：${JSON.stringify(loaded.response.error)}`);
+  assert.deepEqual([...journal.pendingLoadNames()], [candidate.name],
+    'journal 必须从 engine 的未决回执快照拿到目标名');
+});
