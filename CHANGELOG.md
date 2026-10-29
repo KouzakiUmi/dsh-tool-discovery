@@ -25,6 +25,8 @@ what is verified, what is unverified, and what this version refuses to support �
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-10-30 — request-shape validation unification
+
 ### Request-shape fixes
 
 - Treat an empty `candidates` / `names` array as "not provided" in `tool_load`: `{"candidates": [], "names": [...]}` no longer fails with the mutually exclusive error, and neither does the mirrored form. Two empty arrays still fail as a missing input path. Field types are still checked, so a non-array value is not hidden by the tolerance.
