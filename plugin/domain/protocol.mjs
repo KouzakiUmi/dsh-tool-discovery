@@ -99,6 +99,14 @@ export function validateListRequest(raw, budgets = DEFAULT_BUDGETS) {
     // `''` 是字符串，报"必须是字符串"等于给错方向；它与 null/数字是两回事。
     throw new DomainError('INVALID_ARGS', cursor === '' ? t(['detail', 'cursorEmpty']) : t(['detail', 'cursorNotString']));
   }
+  // 纯空白 cursor 与空串同义：cursor 是本插件签发的不透明分页 token（`p_` + 随机字节），
+  // 永远不含空白。放行会让它落到下游 CURSOR_UNAVAILABLE（"分页游标已失效，请从首页
+  // 重新浏览"），把"这次请求的字段是畸形的"说成"分页过期了"——模型据此重新从首页翻页，
+  // 而真正要改的是这个字段。与本批 query/names/ref 的纯空白裁定同一口径；带首尾空格的
+  // 非空 cursor 不在此 trim 后接受——不透明 token 就是不透明 token。
+  if (cursor !== undefined && cursor.trim().length === 0) {
+    throw new DomainError('INVALID_ARGS', t(['detail', 'cursorEmpty']));
+  }
 
   if (view === 'categories') {
     // category 同样是已知键：与 state 视图同一口径，别把"此视图不接受"说成"未知字段"。

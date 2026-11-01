@@ -86,6 +86,29 @@ test('list:cursor 空串与类型错误分别报', () => {
   );
 });
 
+test('list:纯空白 cursor 与空串同义，报 cursorEmpty（不落到下游的"游标已失效"）', () => {
+  const text = domainText;
+  // 纯空白 cursor 放行会命中下游 CURSOR_UNAVAILABLE（"分页游标已失效，请从首页
+  // 重新浏览"）：把"字段畸形"误述成"分页过期"，模型据此重新从首页翻页而不是改字段。
+  for (const c of ['   ', '\n\t']) {
+    assert.throws(
+      () => validateListRequest({ view: 'available', category: 'files', cursor: c }, B),
+      (e) => e.message === text.t(['detail', 'cursorEmpty']),
+      JSON.stringify(c),
+    );
+    assert.throws(
+      () => validateListRequest({ view: 'categories', cursor: c }, B),
+      (e) => e.message === text.t(['detail', 'cursorEmpty']),
+      JSON.stringify(c),
+    );
+  }
+  // 带首尾空格的非空 cursor 不 trim 后接受——不透明 token 就是不透明 token。
+  assert.equal(
+    validateListRequest({ view: 'available', category: 'files', cursor: ' p_x ' }, B).cursor,
+    ' p_x ',
+  );
+});
+
 test('search:纯空白 query 与空串同义，报 queryRequired', () => {
   const text = domainText;
   for (const q of ['   ', '\n\t']) {

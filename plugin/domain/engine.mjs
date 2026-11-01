@@ -599,8 +599,10 @@ export function createDiscoveryEngine(config) {
         rechecked.set(snap.toolId, cur);
       }
 
-      // 按**键是否给出**判路径，不用真值：空数组在协议层已按"未提供"处理，真值判断会把
-      // `candidates: []` 误当候选路径，回执的 selectionSource 与折叠侧重算结果对不上。
+      // req 已经过 validateLoadRequest 归一化：到这里 candidates 只可能是非空数组或
+      // 缺省键，真值判断与键在判断在**本调用点**等价。保留键在写法是为了与折叠侧
+      // deriveInputPath 的口径叙述保持一致——那边面对的是未归一的原始 canonical
+      // input，空数组在那里必须按"未提供"处理，回执的 selectionSource 才能与重算对上。
       const selectionSource = /** @type {'candidate'|'name'} */ (req.candidates !== undefined ? 'candidate' : 'name');
       const receipt = {
         kind: 'tool-discovery.selection',

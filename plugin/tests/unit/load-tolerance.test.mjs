@@ -82,3 +82,22 @@ test('LT4: 空 candidates 占位不阻断 names 路径（协议层与折叠层�
   assert.equal(out.applied, true, '空数组占位不得让回执被折叠判据拒绝');
   assert.equal(engine.getState(SCOPE_A).selected.size, 1);
 });
+
+test('LT5: 空 names 占位不阻断 candidates 路径（LT4 的镜像方向）', async () => {
+  const { engine } = await makeEngine({});
+  const candidate = engine.handleSearch({ category: 'files', query: 'glob' }, SCOPE_A).data.candidates[0];
+  assert.ok(candidate !== undefined, '前置：必须能检索到候选');
+  const input = { candidates: [{ ref: candidate.ref, revision: candidate.revision }], names: [] };
+  const opId = nextOpId();
+  const res = await engine.handleLoad(input, SCOPE_A, { operationId: opId });
+  assert.equal(res.response.ok, true, '空 names 是占位写法，不是互斥冲突');
+  assert.equal(res.response.data.receipt.selectionSource, 'candidate');
+
+  const out = engine.applyCanonicalPair({
+    seq: 1,
+    call: { operationId: opId, tool: 'tool_load', input },
+    result: { isError: false, ok: true, payload: res.response.data.receipt },
+  }, SCOPE_A);
+  assert.equal(out.applied, true, '空数组占位不得让回执被折叠判据拒绝');
+  assert.equal(engine.getState(SCOPE_A).selected.size, 1);
+});

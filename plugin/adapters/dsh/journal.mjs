@@ -1056,24 +1056,30 @@ export function createJournal(deps) {
    * 模型在同一响应里 load 完立刻猜测调用是常见写法，而折叠要等 tool/result
    * 才发生。没有这个查询，guard 会把这种「即将生效」误判为「从未加载」，
    * 报出与事实相反的 TOOL_NOT_LOADED，模型据此重试或改走错误路径。
+   *
+   * 目标名**只**来自 engine 的未决回执快照（names 与 candidates 两条路径同一
+   * 口径），不从原始 input 猜：canonical input 的 names 只是模型提交的字符串，
+   * engine 可能整批拒绝（如含 TOOL_UNAVAILABLE 的名字），那样的 load 根本没有
+   * 未决项，必须落回「从未加载」而不是谎称「即将生效」；candidates 路径的
+   * canonical input 更是只有 `{ref, revision}`，名字只有 engine 接纳时解析得出。
    */
   function pendingLoadNames() {
     const names = new Set();
+    // 与 engine 的未决项取交集：只回答本 journal 仍在途的那几条 call。两侧登记
+    // 可能不同步（事件乱序、恢复重放、宿主其它入口发起的 load），交集保证只把
+    // 两边都认作在途的 load 报为「即将生效」——宁可少报（落回 TOOL_NOT_LOADED，
+    // 模型重试一次），也不多报（虚报即将生效，与事实相反）。
+    const operationIds = new Set([...liveCalls.values()].map((call) => `op_${call.callId}`));
+    if (typeof engine.pendingLoadTargetNames === 'function') {
+      for (const n of engine.pendingLoadTargetNames(scope, operationIds)) names.add(n);
+      return names;
+    }
+    // 兼容没有该查询的旧 engine：只有 names 路径可从 input 还原，candidates 路径
+    // 在该回退下无法提供目标名（与修复前行为一致，仅限注入旧 engine 的场景）。
     for (const { input } of liveCalls.values()) {
       if (Array.isArray(input?.names)) {
         for (const n of input.names) if (typeof n === 'string') names.add(n);
       }
-      // candidates 路径的 canonical input 只有 `{ref, revision}`，没有工具名 —— 名字是
-      // engine 接纳时解析出来的。过去这里读 `c.name`（该字段不存在），于是"同响应里
-      // load(candidates) 后立刻调用"被报成从未加载（TOOL_NOT_LOADED），与事实相反。
-      // 目标名统一从 engine 的未决回执快照取，两条路径同一口径。
-    }
-    if (typeof engine.pendingLoadTargetNames === 'function') {
-      // 与 engine 的未决项取交集：只算本 journal 仍认为在途的那几条 call。
-      // engine 侧也可能留着不会被折叠的未决项（PTC 子调用的回执由 journal 自己消费），
-      // 不取交集就会把已经结算的 load 永久报成"即将生效"。
-      const operationIds = new Set([...liveCalls.values()].map((call) => `op_${call.callId}`));
-      for (const n of engine.pendingLoadTargetNames(scope, operationIds)) names.add(n);
     }
     return names;
   }

@@ -506,3 +506,26 @@ test('JB-U7 候选路径的在途 load 目标名由 engine 提供（canonical in
   assert.deepEqual([...journal.pendingLoadNames()], [candidate.name],
     'journal 必须从 engine 的未决回执快照拿到目标名');
 });
+
+test('JB-U15 被 engine 拒绝的 names load 不得被报作"即将生效"', async () => {
+  // names 路径的 canonical input 里确实带着字符串名字，但那只是**模型提交的内容**：
+  // engine 整批拒绝（TOOL_UNAVAILABLE）时根本没有未决回执，此时若照抄 input.names，
+  // guard 会把一次从未生效的 load 说成"即将生效"，与事实相反——真正的指引应该是
+  // "从未加载"。目标名只认 engine 的接纳快照，两条路径同一口径。
+  const { engine } = await makeEngine({ bindings: sampleBindings() });
+  const scope = { sessionId: 'sess_jb_u15', actorId: 'actor_jb_u15' };
+  const journal = createJournal({
+    ctx: {}, session: { inheritedEventCount: 0 }, scope, engine,
+    query: { readSession: async () => ({ inheritedEventCount: 0, events: [] }) },
+    log: () => {},
+  });
+  const input = { names: ['no_such_tool_at_all'] };
+  journal.onEvent({
+    seq: 1, type: 'tool/call', data: { name: 'tool_load', callId: 'rej-1', arguments: JSON.stringify(input) },
+  });
+  const loaded = await engine.handleLoad(input, scope, { operationId: 'op_rej-1' });
+  assert.equal(loaded.response.ok, false, '前置：不存在的名字必须被 engine 拒绝');
+  assert.equal(engine.getPendingSize(), 0, '前置：被拒的 load 不得留下未决回执');
+  assert.deepEqual([...journal.pendingLoadNames()], [],
+    '被整批拒绝的 load 没有任何"即将生效"的资格——不得从 input.names 虚报');
+});

@@ -56,7 +56,7 @@ interface ToolLoadRequest {
 - `list` `view=available|loaded`：`category` 必填；`limit` 默认 20、最大 20。
 - `list` `view=categories`：只允许 `view` / `cursor` / `limit`；分页返回类别卡片，不返回普通工具名。
 - `list` `view=state`：只允许 `view`；返回本会话 `selected` / `advertised` / `invalidated` 与预算，不枚举未加载目录。
-- `list` 的视图专属拒绝先于取值校验：`state` 的 `category`/`cursor`/`limit`、`categories` 的 `category` 都是已知键，一律报"此视图不接受该字段"，不会先被"必须是正整数/字符串"截走——否则同一字段的合法值与非法值给出互相矛盾的指引。`cursor: ""` 单独报"不能是空字符串"，不与类型错误共用文案。
+- `list` 的视图专属拒绝先于取值校验：`state` 的 `category`/`cursor`/`limit`、`categories` 的 `category` 都是已知键，一律报"此视图不接受该字段"，不会先被"必须是正整数/字符串"截走——否则同一字段的合法值与非法值给出互相矛盾的指引。`cursor: ""` 与纯空白 cursor 同义，单独报"不能是空字符串"，不与类型错误共用文案，也不落到下游的"分页游标已失效"（那会把字段畸形误述成分页过期）。带首尾空格的非空 cursor 不 trim 后接受——不透明 token 就是不透明 token。
 - `search` 没有 action 字段；`query` 超过 `maxQueryCodePoints`（512）直接拒绝。
 - `search` 的 `query` 先按首尾空白归一：纯空白与 `""` 同义，报 `queryRequired`。放行会让检索以成功外壳返回空候选，模型看到的是"没找到工具"而不是"查询无效"。
 - `load`：`candidates` 与 `names` **必须且只能提供一项**；实际参与判定的只有非空数组——空数组按“未提供”处理，不构成互斥冲突（两者都空仍按“缺少输入路径”拒绝）；上限 4。
