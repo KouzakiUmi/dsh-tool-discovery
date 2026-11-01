@@ -25,7 +25,7 @@ what is verified, what is unverified, and what this version refuses to support �
 
 ## [Unreleased]
 
-## [0.5.1] — 2026-10-30 — request-shape validation unification
+## [0.5.1] — 2026-11-01 — request-shape validation unification
 
 ### Request-shape fixes
 
