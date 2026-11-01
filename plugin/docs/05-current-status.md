@@ -1,6 +1,6 @@
 # 05 · 当前状态
 
-更新日期：**2026-10-30**（Asia/Hong_Kong）。对应源码 manifest `0.5.1`，统一 tool_load / tool_search / tool_list 的请求形状判定口径并修复候选路径在途检测；本批以 `v0.5.1` 标签驱动正式版本，npm 发布状态以 registry 为准。
+更新日期：**2026-11-01**（Asia/Hong_Kong）。对应源码 manifest `0.5.1`，统一 tool_load / tool_search / tool_list 的请求形状判定口径，修复候选与 names 两条路径的在途检测，并在协议层拒绝纯空白 cursor；本批以 `v0.5.1` 标签驱动正式版本，npm 发布状态以 registry 为准。
 现行行为见 [00 当前实现契约](<00-current-contract.md>)，验收判据见 [03](<03-implementation-and-acceptance.md>)。
 本文不登记未经重新核验的远端最新发布、STORE 收录或在线安装状态。
 
@@ -23,17 +23,17 @@
 
 ### 0.2 本次运行证据
 
-2026-10-30，Node **v24.13.0**。产品代码对应修复提交 `ac37bbc`，发布准备仅更新版本与文档。本机 DSH NEXT 旧默认锚点已不存在，`DSH_INSTALL_ROOT` 分别指向两棵已核实安装：单测的宿主绑定文件用全局 `@deepseek-harness-tui` 安装树（react / reconciler / schemastery 齐备），组合测试用全局 `@deepseek-ai/dsh` CLI 安装树（含 Core 全量依赖）。
+2026-11-01，Node **v24.13.0**。产品代码对应修复提交 `23e61a5`（在 `ac37bbc` 请求形状统一之上补在途 load 口径与纯空白 cursor），发布准备仅更新版本与文档。本机全局 npm 树中的两棵 DSH 安装已于 10-30 被清空，旧锚点不可复用；本次 `DSH_INSTALL_ROOT` 指向从桌面壳 `app.asar` 解包的 `dsh/` 子树（Core 全量依赖与原生 unpacked 模块齐备，desktop `0.2.1-rc.5`），react / react-reconciler / scheduler 由本机 npm 缓存离线装入同一锚点。
 
 | 本次实际执行 | 退出码 | 结果与边界 |
 |---|---|---|
-| 全量 unit，包括 client/settings | 0 | **651 pass / 0 fail / 0 skip**；客户端使用真实 React/reconciler 与 schemastery，非浏览器 DOM 验收 |
-| 全部 `gate-*.test.mjs` composition | 0 | **153 pass / 0 fail / 0 skip**；真实 Loader、mock provider 与测试自有临时存储，不调用真实模型 |
+| 全量 unit，包括 client/settings | 0 | **654 pass / 0 fail / 0 skip**（含本批新增 3 条回归钉）；客户端使用真实 React 19.2.8/reconciler 0.32.0 与 schemastery，非浏览器 DOM 验收 |
+| 全部 `gate-*.test.mjs` composition | 0 | **151 pass / 0 fail / 2 skip**；2 条 BCD 指纹测试按设计仅在 `dsh-tools 0.2.1-rc.3` 执行，锚点为 rc.5 时跳过（fixture 冻结在 rc.3，不重标）；真实 Loader、mock provider 与测试自有临时存储，不调用真实模型 |
 | 仓库一致性与 `git diff --check` | 0 | 包身份、双语文档和相对链接通过 |
-| `npm pack --ignore-scripts --dry-run --json` | 0 | 43 文件 / 673 KB，载荷只含声明的 files 范围；发布后仍需核验实际分发资产 |
+| `npm pack --ignore-scripts --dry-run --json` | 0 | 43 文件，解包 674,635 字节（tarball 235,081 字节），载荷只含声明的 files 范围；发布后仍需核验实际分发资产 |
 | 质量数据集 validator | 1 | 20 PASS / 1 FAIL，唯一 FAIL 仍是已记录的 H037/H044 类别期望误标（见 0.3 与 Known issues），非本批新增 |
 
-质量数据集未修改冻结标签，不据此发布搜索评分。真实 provider、模型行为等价性、token/TTFT、在线 GUI、安装与完整 HMR 均未在本次验收。宿主绑定两文件的通过依赖环境锚点覆盖，不是"默认锚点开箱即绿"。
+质量数据集未修改冻结标签，不据此发布搜索评分。真实 provider、模型行为等价性、token/TTFT、在线 GUI、安装与完整 HMR 均未在本次验收。宿主绑定两文件的通过依赖解包锚点与缓存离线安装，不是"默认锚点开箱即绿"；解包锚点是本机临时产物，不随仓库分发。
 
 ### 0.2.1 历史运行证据（2026-10-26）
 
