@@ -21,6 +21,36 @@ export function dshModule (specifier) {
   return pathToFileURL(requireFromAnchor.resolve(specifier)).href
 }
 
+/** 该安装内是否存在可解析的包（只做解析探测，不 import、不抛错）。 */
+export function hasDshModule (specifier) {
+  try {
+    requireFromAnchor.resolve(specifier)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 工具侧宿主能力（两版兼容）。
+ *
+ *   * `defineTool` 一直由 `@deepseek-ai/dsh-tools` 提供；
+ *   * PTC SDK 渲染器（renderToolsSdk / renderToolsSdkPy）在 0.2.2 迁到
+ *     `@deepseek-ai/dsh-tool-executor-ptc`，旧宿主仍在 dsh-tools 上，且新包在旧宿主
+ *     不存在 —— 因此先取 dsh-tools 的导出，缺哪个再按包存在性去新包补。
+ */
+export async function dshToolCapabilities () {
+  const tools = await import(dshModule('@deepseek-ai/dsh-tools'))
+  let { renderToolsSdk, renderToolsSdkPy } = tools
+  if ((typeof renderToolsSdk !== 'function' || typeof renderToolsSdkPy !== 'function')
+    && hasDshModule('@deepseek-ai/dsh-tool-executor-ptc')) {
+    const ptc = await import(dshModule('@deepseek-ai/dsh-tool-executor-ptc'))
+    if (typeof renderToolsSdk !== 'function') renderToolsSdk = ptc.renderToolsSdk
+    if (typeof renderToolsSdkPy !== 'function') renderToolsSdkPy = ptc.renderToolsSdkPy
+  }
+  return { defineTool: tools.defineTool, renderToolsSdk, renderToolsSdkPy }
+}
+
 /** 读取安装内包的 package.json（版本取证用）。 */
 export function dshPackageJson (specifier) {
   const modulePath = fileURLToPath(dshModule(specifier))

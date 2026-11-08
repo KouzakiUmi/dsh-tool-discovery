@@ -408,12 +408,13 @@ test('C-U11: 可选功能默认值与 Config 一致，保存只修改指定字�
   assert.equal(config.dict.requireTrustedEpoch.meta.default, false)
   assert.equal(config.dict.initialToolsEnabled.meta.default, true)
   assert.equal(config.dict.alwaysAllowPresetTools.meta.default, true)
+  assert.equal(config.dict.gateOwnScopeTools.meta.default, true)
   assert.equal(config.dict.requireTrustedEpochForSubagents.meta.default, false)
   assert.notEqual(config.dict.requireTrustedEpochForSubagents.meta.volatile, true)
   const states = Object.fromEntries(t.featureChoices({}).map(([key, _label, _help, checked]) => [key, checked]))
   assert.equal(config.dict.ptcCompatibility.meta.default, false)
   assert.equal(config.dict.compactBuiltinToolDescriptions.meta.default, false)
-  assert.deepEqual(states, { initialToolsEnabled: true, alwaysAllowPresetTools: true, compactBuiltinToolDescriptions: false, ptcCompatibility: false, requireTrustedEpoch: false, requireTrustedEpochForSubagents: false, tolerantLoadProtected: true, respectAlwaysVisible: false })
+  assert.deepEqual(states, { initialToolsEnabled: true, alwaysAllowPresetTools: true, gateOwnScopeTools: true, compactBuiltinToolDescriptions: false, ptcCompatibility: false, requireTrustedEpoch: false, requireTrustedEpochForSubagents: false, tolerantLoadProtected: true, respectAlwaysVisible: false })
   const enabled = t.featureChoices({ requireTrustedEpoch: true, initialToolsEnabled: false })
   assert.equal(enabled.find(row => row[0] === 'requireTrustedEpoch')[3], true)
   assert.equal(enabled.find(row => row[0] === 'initialToolsEnabled')[3], false)
@@ -483,7 +484,7 @@ test('C-U08: 面板叶子把目录里的可选项折成可勾选行（含未选�
   assert.equal(built.rows.length, 2)
   assert.ok(built.rows.some((r) => r.name === 'fixture_beta' && !r.selected),
     '未选中的第三方工具必须可勾')
-  assert.deepEqual([...built.fixed], ['tool_list', 'tool_search', 'tool_load'])
+  assert.deepEqual([...built.fixed], ['tool_list', 'tool_search', 'tool_load', 'tool_unload'])
   // 组件本体存在。DOM 渲染未验证；真实 reconciler 的 hooks/effect 接缝见文件头。
   assert.equal(typeof t.SettingsPanel, 'function')
 })
@@ -516,7 +517,7 @@ test('C-U13: all editable Config fields have a save path; trusted framework stay
   const t = mod.__test
   const calls = []
   const form = { mutate: async ops => { calls.push(ops); return true } }
-  const values = { alwaysVisible: [], initialToolsEnabled: false, alwaysAllowPresetTools: false, compactBuiltinToolDescriptions: true, compactBuiltinToolOverrides: { skill: true }, ptcCompatibility: true,
+  const values = { alwaysVisible: [], initialToolsEnabled: false, alwaysAllowPresetTools: false, gateOwnScopeTools: false, compactBuiltinToolDescriptions: true, compactBuiltinToolOverrides: { skill: true }, ptcCompatibility: true,
     requireTrustedEpoch: false, requireTrustedEpochForSubagents: false, tolerantLoadProtected: false,
     respectAlwaysVisible: true, locale: 'zh', budgets: { maxActiveTools: 3 }, categoryConfig: {} }
   const schema = buildConfig(Schema)
@@ -589,7 +590,11 @@ test('C-U19: effect badges cover every feature switch with a real effect kind', 
   }
 })
 
-test('C-U27: rendered effect badge titles resolve in both dictionaries', () => {
+test('C-U27: rendered effect badge titles resolve in both dictionaries', (tc) => {
+  if (reconcilerBundle.error) {
+    tc.skip(`react-reconciler 不可解析：${reconcilerBundle.error.message}`)
+    return
+  }
   const { exports: mod } = loadClient()
   const t = mod.__test
   for (const dictionary of [t.zh, t.en]) {

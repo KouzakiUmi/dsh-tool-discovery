@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { validateListRequest, validateSearchRequest, validateLoadRequest, okEnvelope, errorEnvelope } from '../../domain/protocol.mjs';
 import { DomainError } from '../../domain/errors.mjs';
 import { resolveBudgets } from '../../domain/budgets.mjs';
+import { PROTOCOL_VERSION } from '../../domain/constants.mjs';
 import { domainText } from '../../domain/locale.mjs';
 
 const B = resolveBudgets({});
@@ -254,13 +255,13 @@ test('load:非对象根拒绝', () => {
 
 test('响应外壳形状', () => {
   const ok = okEnvelope('tool_search', 'search', { a: 1 }, 'next');
-  assert.deepEqual(ok, { protocolVersion: 2, tool: 'tool_search', operation: 'search', ok: true, data: { a: 1 }, nextAction: 'next' });
+  assert.deepEqual(ok, { protocolVersion: PROTOCOL_VERSION, tool: 'tool_search', operation: 'search', ok: true, data: { a: 1 }, nextAction: 'next' });
   const err = errorEnvelope('tool_load', 'load', new DomainError('STALE_CANDIDATE'));
   assert.equal(err.ok, false);
   assert.equal(err.error.code, 'STALE_CANDIDATE');
   assert.equal(err.error.retryable, true);
   assert.equal(err.error.recovery, 'select_again');
-  assert.equal(err.protocolVersion, 2);
+  assert.equal(err.protocolVersion, PROTOCOL_VERSION);
   // 错误外壳不泄漏内部 details
   const withDetails = errorEnvelope('tool_load', 'load', new DomainError('INVALID_ARGS', undefined, { internal: 1 }));
   assert.equal(withDetails.error.internal, undefined);

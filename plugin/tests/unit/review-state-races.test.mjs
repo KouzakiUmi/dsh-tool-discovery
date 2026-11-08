@@ -1,47 +1,51 @@
 // 纯产品模块回归，不使用真实 profile 或远端模型。
+//
+// rc.1 重设计：pending 操作、journal 冷恢复与 epoch 重置已删除。本文件保留
+// “入队后会话被销毁/插件被卸载时旧事务不得复活”的竞态目标，并验证
+// seedSelection 的会话隔离（resume 的唯一入口）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeEngine, SCOPE_A, pair } from './helpers.mjs';
+import { makeEngine, loadTools, SCOPE_A } from './helpers.mjs';
 import { createRegistryAdapter } from '../../adapters/dsh/registry.mjs';
-import { createJournal } from '../../adapters/dsh/journal.mjs';
 
-test('加载锁内使用当前 selected：回执在入队与取锁之间折叠也不能突破预算', async (t) => {
+test('加载锁内使用当前 selected：已提交的选择立即占用预算', async (t) => {
   const { engine } = await makeEngine({ engineConfig: { budgets: { maxActiveTools: 1 } } });
   t.after(() => engine.dispose());
-  const input = { names: ['glob'] };
-  const first = await engine.handleLoad(input, SCOPE_A, { operationId: 'op_first' });
-  const second = engine.handleLoad({ names: ['grep'] }, SCOPE_A, { operationId: 'op_second' });
-  assert.equal(engine.applyCanonicalPair(pair({ seq: 1, operationId: 'op_first', input,
-    payload: first.response.data.receipt }), SCOPE_A).applied, true);
+  const first = loadTools(engine, SCOPE_A, { names: ['glob'] });
+  const second = loadTools(engine, SCOPE_A, { names: ['grep'] });
+  assert.equal((await first).response.ok, true);
   assert.equal((await second).response.error.code, 'BUDGET_EXCEEDED');
   assert.equal(engine.getState(SCOPE_A).selected.size, 1);
-  assert.equal(engine.getPendingSize(), 0);
 });
 
-for (const transition of ['failClosed', 'dispose', 'resetCacheEpoch', 'destroySession']) {
-  test(`入队后 ${transition}：旧事务不得成功或复活 pending`, async (t) => {
+for (const transition of ['destroySession', 'dispose']) {
+  test(`入队后 ${transition}：旧事务不得成功或复活状态`, async (t) => {
     const { engine } = await makeEngine();
     t.after(() => engine.dispose());
-    const pending = engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: 'op_old' });
-    if (transition === 'destroySession') engine.destroySession(SCOPE_A.sessionId);
-    else if (transition === 'dispose') engine.dispose();
-    else engine[transition](SCOPE_A);
-    const result = await pending;
-    assert.equal(result.response.ok, false);
-    assert.equal(result.operation, null);
-    assert.equal(engine.getPendingSize(), 0);
-    if (transition === 'resetCacheEpoch') {
-      assert.equal(result.response.error.code, 'SELECTION_CHANGED');
-      assert.equal((await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: 'op_new' })).response.ok, true);
-    } else assert.equal(result.response.error.code, 'STATE_NOT_READY');
+    const pending = loadTools(engine, SCOPE_A, { names: ['glob'] });
+    if (transition === 'destroySession') {
+      engine.destroySession(SCOPE_A.sessionId);
+      const result = await pending;
+      assert.equal(result.response.ok, false);
+      assert.equal(result.response.error.code, 'STATE_NOT_READY', '锁竞态语义');
+      // 销毁后重新发起会建立新会话（旧选择不复活）。
+      const fresh = await loadTools(engine, SCOPE_A, { names: ['glob'] });
+      assert.equal(fresh.response.ok, true);
+    } else {
+      engine.dispose();
+      const result = await pending;
+      assert.equal(result.response.ok, false);
+      assert.equal(result.response.error.code, 'ENGINE_DISPOSED', '释放语义');
+    }
   });
 }
 
 test('dispose 后首次 load 也不得重建会话状态', async () => {
   const { engine } = await makeEngine();
   engine.dispose();
-  assert.equal((await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: 'op_dead' })).response.ok, false);
-  assert.equal(engine.getPendingSize(), 0);
+  const res = await loadTools(engine, SCOPE_A, { names: ['glob'] });
+  assert.equal(res.response.ok, false);
+  assert.equal(res.response.error.code, 'ENGINE_DISPOSED');
 });
 
 test('目录深冻结不触碰宿主 schema，原位更新后可刷新身份', async (t) => {
@@ -62,27 +66,11 @@ test('目录深冻结不触碰宿主 schema，原位更新后可刷新身份', a
   assert.equal(current.wire.parameters.properties.text.description, 'changed by host');
 });
 
-for (const duplicate of [false, true]) {
-  test(`恢复期间摘要已 live 折叠：${duplicate ? '真实重复摘要仍拒绝' : '同一 seq 不再重复计数'}`, async (t) => {
-    const { engine } = await makeEngine({ newSessionMode: 'restoring' });
-    let release;
-    const reading = new Promise((resolve) => { release = resolve; });
-    const resets = [];
-    const journal = createJournal({ ctx: {}, session: { inheritedEventCount: 0 }, scope: SCOPE_A, engine,
-      query: { readSession: () => reading }, onEpochReset: (info) => resets.push(info) });
-    t.after(() => { journal.dispose(); engine.dispose(); });
-    const events = [
-      { seq: 0, type: 'turn/start', data: { turn: 1 } },
-      { seq: 1, type: 'compaction/start', data: { compactionId: 'cmp', turn: 1 } },
-      { seq: 2, type: 'compaction/summary', data: { compactionId: 'cmp' } },
-    ];
-    if (duplicate) events.push({ ...events[2], seq: 3 });
-    const restoring = journal.restore();
-    for (const event of events.slice(1)) journal.onEvent(event);
-    release({ inheritedEventCount: 0, events });
-    assert.equal((await restoring).mode, 'ready');
-    journal.onEvent({ seq: events.length, type: 'compaction/end', data: { compactionId: 'cmp', turn: 1 } });
-    assert.equal(journal.currentEpoch().epochId, duplicate ? 'initial' : 'cmp@3');
-    assert.equal(resets.length, duplicate ? 0 : 1);
-  });
-}
+test('resume 种子按会话隔离：A 的 admitted 行不会进入 B', async () => {
+  const { engine } = await makeEngine();
+  const entry = engine.getCatalog().entries.get('t_files_glob');
+  const rows = [{ name: entry.name, toolId: entry.toolId, schemaDigest: entry.schemaDigest, at: 1 }];
+  assert.deepEqual(engine.seedSelection(SCOPE_A, rows), { seeded: ['glob'], dropped: [] });
+  assert.equal(engine.getState(SCOPE_A).selected.size, 1);
+  assert.equal(engine.getState({ sessionId: 'other' }).selected.size, 0);
+});

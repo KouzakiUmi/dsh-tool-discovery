@@ -9,7 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { makeEngine, sampleBindings, binding, commitLoad, nextOpId, SCOPE_A, SCOPE_B } from './helpers.mjs';
+import { makeEngine, sampleBindings, binding, loadTools, SCOPE_A, SCOPE_B } from './helpers.mjs';
 import { buildCatalog, identityFingerprintOf, orderedNamesFor } from '../../domain/catalog.mjs';
 import { digestOf } from '../../domain/canonical.mjs';
 
@@ -115,7 +115,7 @@ test('无关 tools/change：身份一致的绑定集不升代次、不重建目�
   assert.equal(engine.getEligibilityGeneration(), genBefore);
 
   // 旧 ref 仍可 load（否则模型必须重跑整轮搜索）。
-  const res = await engine.handleLoad({ candidates: [{ ref: candidate.ref, revision: candidate.revision }] }, SCOPE_A, { operationId: nextOpId() });
+  const res = await engine.handleLoad({ candidates: [{ ref: candidate.ref, revision: candidate.revision }] }, SCOPE_A);
   assert.equal(res.response.ok, true, '内容未变的刷新不得作废候选 ref');
   assert.ok(res.response.error === undefined);
 
@@ -145,14 +145,14 @@ test('真实变化仍然照旧：升代次、重建目录、作废旧 ref 与旧
   assert.equal(outcome.eligibilityGeneration, genBefore + 1, '真实变化必须升代次');
   assert.notEqual(engine.getCatalog(), before, '真实变化必须重建目录');
 
-  const res = await engine.handleLoad({ candidates: [{ ref: candidate.ref, revision: candidate.revision }] }, SCOPE_A, { operationId: nextOpId() });
+  const res = await engine.handleLoad({ candidates: [{ ref: candidate.ref, revision: candidate.revision }] }, SCOPE_A);
   assert.equal(res.response.error.code, 'CANDIDATE_UNAVAILABLE');
 });
 
 test('真实变化后旧游标失效，且 selected 按 definition-changed / tool-removed 区分作废', async () => {
   // 换 wire → definition-changed
   const changed = await makeEngine();
-  await commitLoad(changed.engine, SCOPE_A, { names: ['glob'] });
+  await loadTools(changed.engine, SCOPE_A, { names: ['glob'] });
   changed.engine.refreshCatalog(sampleBindings().map((b) => (b.name === 'glob'
     ? { ...b, wire: { ...b.wire, parameters: { type: 'object', required: ['run'] } } }
     : b)));
@@ -162,7 +162,7 @@ test('真实变化后旧游标失效，且 selected 按 definition-changed / too
 
   // 撤掉 → tool-removed
   const removed = await makeEngine();
-  await commitLoad(removed.engine, SCOPE_A, { names: ['glob'] });
+  await loadTools(removed.engine, SCOPE_A, { names: ['glob'] });
   removed.engine.refreshCatalog(sampleBindings().filter((b) => b.toolId !== 't_files_glob'));
   const st2 = removed.engine.getState(SCOPE_A);
   assert.equal(st2.selected.size, 0);
@@ -189,25 +189,19 @@ test('坏绑定不走上短路：refreshCatalog 仍抛 buildCatalog 的规范错
   );
 });
 
-test('刷新移除条目后，未决预留不得让 tool_load 抛内部错误（resolveByToolId 找不到时是 null）', async () => {
+test('刷新移除条目后：仍可加载其它工具，被移除工具不会混进结果', async () => {
   const { engine } = await makeEngine();
-  // 先登记一条未决 load：它的期望回执会在预算核算里被当作"已预留的 toolId"。
-  const first = await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: nextOpId() });
-  assert.equal(first.response.ok, true);
+  assert.equal((await loadTools(engine, SCOPE_A, { names: ['glob'] })).response.ok, true);
 
-  // 目录真实变化：glob 被移除。refreshCatalog 不清理 pending（收口只在下述四条路径）。
-  engine.refreshCatalog(sampleBindings().filter((b) => b.toolId !== 't_files_glob'));
+  // 目录真实变化：glob 被移除 → 选择被作废。
+  const outcome = engine.refreshCatalog(sampleBindings().filter((b) => b.toolId !== 't_files_glob'));
+  assert.deepEqual(outcome.invalidatedNames, ['glob']);
 
-  // 预算核算必须跳过已解析不到的预留项：`resolveByToolId` 返回 **null**，
-  // 旧判据 `entry === undefined` 会放它过去并在此处解引用 null → 内部错误。
-  const res = await engine.handleLoad({ names: ['grep'] }, SCOPE_A, { operationId: nextOpId() });
+  // 预算核算必须跳过已解析不到的选择项，而不是抛内部错误。
+  const res = await loadTools(engine, SCOPE_A, { names: ['grep'] });
   assert.equal(res.response.error, undefined, `不得是内部错误：${JSON.stringify(res.response.error)}`);
   assert.equal(res.response.ok, true);
-  assert.deepEqual(
-    res.response.data.receipt.selected.map((s) => s.name),
-    ['grep'],
-    '被移除工具不得混进回执',
-  );
+  assert.deepEqual(res.response.data.loaded, ['grep'], '被移除工具不得混进回执');
 });
 
 // ---------------------------------------------------------------------------
@@ -311,16 +305,17 @@ test('首张卡就超字节上限时明确失败，且一条 ref 都不铸', asy
 // Defect 3：dispose 后的拒绝文案
 // ---------------------------------------------------------------------------
 
-test('dispose 后 guard 拒绝带得上面向模型的文案（不是 reason: undefined）', async () => {
-  for (const locale of ['en', 'zh']) {
-    const { engine } = await makeEngine({ engineConfig: { locale } });
-    engine.dispose();
-    const out = engine.evaluateCall(SCOPE_A, { name: 'glob', toolId: 't_files_glob', requestId: 'r1' });
-    assert.equal(out.allowed, false);
-    assert.equal(out.code, 'TOOL_NOT_LOADED');
-    assert.equal(typeof out.reason, 'string', `locale=${locale} 的拒绝原因必须是字符串`);
-    assert.ok(out.reason.length > 0, `locale=${locale} 的拒绝原因不得为空`);
-  }
+test('dispose 后所有入口返回 ENGINE_DISPOSED，而不是伪装成空状态', async () => {
+  const { engine } = await makeEngine();
+  engine.dispose();
+  const list = engine.handleList({ view: 'state' }, SCOPE_A);
+  const search = engine.handleSearch({ category: 'files', query: 'glob' }, SCOPE_A);
+  const load = await engine.handleLoad({ names: ['glob'] }, SCOPE_A);
+  const unload = await engine.handleUnload({ names: ['glob'] }, SCOPE_A);
+  assert.equal(list.error.code, 'ENGINE_DISPOSED');
+  assert.equal(search.error.code, 'ENGINE_DISPOSED');
+  assert.equal(load.response.error.code, 'ENGINE_DISPOSED');
+  assert.equal(unload.response.error.code, 'ENGINE_DISPOSED');
 });
 
 // ---------------------------------------------------------------------------
@@ -337,16 +332,16 @@ test('engine.invalidate 升资格代次并作废旧候选 ref（与 refreshCatal
 
   assert.equal(engine.getEligibilityGeneration(), genBefore + 1, '撤权必须升资格代次');
   const res = await engine.handleLoad(
-    { candidates: [{ ref: candidate.ref, revision: candidate.revision }] }, SCOPE_A, { operationId: nextOpId() },
+    { candidates: [{ ref: candidate.ref, revision: candidate.revision }] }, SCOPE_A,
   );
   assert.equal(res.response.error.code, 'CANDIDATE_UNAVAILABLE', '撤权后旧候选 ref 必须失效');
 });
 
-test('engine.invalidate 只为曾 selected / advertised 的工具留痕，不喂大 invalidated', async () => {
+test('engine.invalidate 只为曾 selected 的工具留痕，不喂大 invalidated', async () => {
   const { engine } = await makeEngine();
   engine.getState(SCOPE_A); // 会话存在但从未选中任何工具
-  const loaded = await commitLoad(engine, SCOPE_B, { names: ['glob'] });
-  assert.equal(loaded.applied, true);
+  const loaded = await loadTools(engine, SCOPE_B, { names: ['glob'] });
+  assert.equal(loaded.response.ok, true);
   const globRevision = engine.getState(SCOPE_B).selected.get('t_files_glob').revision;
 
   engine.invalidate('t_files_grep', 'tool-removed'); // 与两个会话都无关的工具

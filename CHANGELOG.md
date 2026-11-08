@@ -23,7 +23,98 @@ Nothing in this file is a product-acceptance statement. For the authoritative pe
 what is verified, what is unverified, and what this version refuses to support — see
 [`plugin/docs/05-current-status.md`](plugin/docs/05-current-status.md).
 
-## [Unreleased]
+## [0.6.0] — 2026-11-08 — rc.1+ admission rewrite (breaking)
+
+The plugin is re-designed for DSH Core `0.2.2-rc.1+` only. The entire legacy
+projection path — verbatim-frozen wire, canonical receipts, cache epochs, trusted
+epoch records, the PTC compatibility toggle, and built-in description compaction —
+is removed. `engines.dsh` is now `>=0.2.2-rc.1`; `dshReleases` marks
+`0.2.2-rc.1` `compatible` and every earlier release `incompatible`. Protocol
+version moves to **3**.
+
+- **Admission as the single fact source**: `tool_load` writes `selected` and admits
+  the name in one step — the tool is disclosed and callable from the *next*
+  request (the current step's tool set is already fixed). New `tool_unload` entry
+  retracts admission; `ENTRY_TOOL_NAMES` is now four tools.
+- **Per-agent restrict mask**: the allow-list is entries ∪ `frameworkRetained` ∪
+  alwaysVisible (manual/preset/self-attested) ∪ admitted names, filtered by
+  `restrictableNames`; the mask is installed on `agent/created` (inside the
+  host-awaited listener, together with the runtime) and reconciled on
+  `agent/pre-step` and `tools/change`. The catalog and preset checks read the
+  *unrestricted* view, so masked tools stay discoverable.
+- **Admission gate** (`tools.guard`): admitted + current catalog digest →
+  execute; catalog-internal unadmitted → refused; `gateOwnScopeTools` (default
+  `true`, volatile) also requires admission for own-scope names that cannot be
+  masked. Entry names shadowed by a same-name registration are refused.
+- **Durable admissions**: `ctx.storageDomain` keeps one record per session
+  (`{name, toolId, schemaDigest}`); store absent/broken → in-memory only, never
+  blocking. Resume aligns rows against the current catalog and drops mismatches.
+- **Revocation durability**: final unload uses rc.1 `table.delete`; late storage seed respects local revoke tombstones. Queued snapshots wait for open and drain before close; same-process resume reloads its session snapshot.
+- **Atomic unload and request admission**: protected-name mixed batches make no partial changes; own-scope calls loaded in the same response wait for the next request. Initial injection disabled also disables core-name self-admission.
+- **Mask churn**: normalize owned-filter collections and release obsolete references; pure mask changes no longer refresh every session catalog. Failed old disposers remain tracked for safe retry.
+- **Live initial lists**: manual/preset initial lists reconcile consistently across engine, mask and guard on subsequent requests; bilingual effect copy follows this timing.
+- **Removed config keys** (schema fields kept, inert): `ptcCompatibility`,
+  `compactBuiltinToolDescriptions`, `compactBuiltinToolOverrides`,
+  `requireTrustedEpoch`, `requireTrustedEpochForSubagents`,
+  `allowMissingSessionQuery`. `apply.inject` no longer needs `sessionQuery`.
+- **Removed peers**: `@deepseek-ai/dsh-llm` and `@deepseek-ai/dsh-tool-executor-ptc`.
+- **Native/PTC unified**: masks act on `view().visible`, so the `run_code` SDK
+  projection follows the same admission set with no separate path.
+- The settings page (four entry cards, `gateOwnScopeTools` switch) and the
+  contract document are updated; `tool_unload` descriptions are bilingual.
+- **Catalog build single canonicalization**: `prepareCatalog` validates, canonicalizes
+  each wire once, and derives `schemaDigest`/`revision`/categories/`searchDocumentId`
+  in one pass; `buildCatalog` and `refreshCatalog` share the same prepared records, so
+  a changed tool set no longer serializes parameters twice or classifies twice.
+  `available:all` order names are computed at snapshot build time and frozen.
+- **Incremental search index**: `buildSearchIndex` reuses tokenized documents when an
+  entry's `toolId` + `searchDocumentId` is unchanged — `searchDocumentId` is now
+  consumed for its designed purpose. Only actually changed entries are re-tokenized
+  on each `tools/change` refresh.
+- **Shared definition digests**: `bindingGenerationFor` and the registry-change
+  fingerprint share a per-definition `WeakMap` cache keyed on a cheap content probe,
+  so one `tools/change` no longer canonicalizes and hashes the same definitions twice.
+- **Always-list memoization**: `currentAlwaysNames` shares one unrestricted view
+  between the preset probe and the core self-attestation probe (previously two layer
+  walks) and memoizes on scope + registry generation + live config values + preset
+  generation; `tools/change` and `disposeSession` clear the cache, preset rebinding
+  invalidates via the token.
+- **Smaller state diagnostics**: the `invalidated` map is bounded (256 newest),
+  duplicated `requireState` calls in list/search are merged, `tool_unload` resolves
+  names through a prebuilt reverse map, and dead code (`toolIdFor`, `digestOfWire`,
+  `protectedNames`, `sameOrderDigest`) is removed. The settings panel memoizes its
+  derived rows on the snapshot so draft/notice updates no longer re-sort the catalog.
+
+### DSH Core 0.2.2-rc.1 experimental adapter (superseded by 0.6.0)
+
+`0.2.2-rc.1` remains `unknown` in `dshReleases`; the evidence is limited to an unpacked rc.1
+anchor with a mock provider (see [current status](plugin/docs/05-current-status.md)).
+
+- **Install admission**: added `engines.dsh: ">=0.2.1-alpha.1"`. rc.1's app-boot decides on
+  `engines.dsh` alone when present; without it the optional `@deepseek-ai/dsh-tool-executor-ptc`
+  peer (`>=0.2.2-alpha.3`) would make 0.2.1 hosts refuse the install. `schemastery` peer is
+  `>=3.18.5-alpha.1 <4`.
+- **Provider-owned declarations**: on hosts without `tools.modeFor`, disclosure is controlled by a
+  per-agent `restrict` mask installed between steps; agent-own registrations may be declared but
+  still cannot execute until loaded. Presentation mode is read from executor prompt sections, PTC
+  SDK schemas from public `tools.definitions()`, live config from `fiber.effectiveConfig`.
+- **Resume without a failed first turn**: when an agent with its own history is resumed, the
+  awaited `agent/created` hook waits up to 3 s for cold restore and (strict mode) the trusted
+  baseline before installing the mask. Strict legacy sessions without a record settle as blocked
+  immediately instead of waiting for a `/compact` migration. On timeout creation completes, the
+  existing assembly barrier still sends zero requests, and the first turn may stop with
+  `STATE_NOT_READY`. Cancellation, session disposal and plugin unload abort the wait.
+- **Auto-compaction after tool admission** still stops the turn rather than sending a stale tool
+  set; the message now tells the user (zh/en) to resend.
+- **Activation self-check**: the private registry shape (`layers`, `selectExecutor`, `view`,
+  `restrict`) is validated once before activation; a mismatch rejects with
+  `INCOMPATIBLE_COMPOSITION`.
+- **Registry refresh**: `tools/change` events caused only by this plugin's own masks no longer
+  recompute every session's catalog; reentrant third-party registrations are still reconciled in
+  a microtask, and unknown registry shapes keep the full refresh.
+- **Tests**: composition tests branch on `providerOwnedTools` / `legacyHost`; legacy assertions are
+  kept unchanged, rc.1 branches assert the rc.1 contract. Built-in description compaction tests are
+  skipped on provider-owned hosts, where the feature is unavailable.
 
 ## [0.5.1] — 2026-11-01 — request-shape validation unification
 
@@ -1166,7 +1257,7 @@ Tests and documentation only; the product source exercised is the unpublished F3
 Version stays `0.2.0-functional.5`; nothing is published, installed, reloaded, restarted or bumped.
 
 - One new real-host composition file with **two cases**
-  ([gate-trusted-epoch-settlement.test.mjs](plugin/tests/composition/gate-trusted-epoch-settlement.test.mjs)):
+  (`gate-trusted-epoch-settlement.test.mjs` (removed in 0.6.0)):
   `TS1` is **own-segment-empty bootstrap** (only injection: a `table().put` barrier on the real
   storage domain); `TS2` is **legacy cold restore** (injections: a gate **before the real
   `facility.open()`**, a `put` barrier after the domain opens, and a **read-only** pass-by on
@@ -1178,7 +1269,7 @@ Version stays `0.2.0-functional.5`; nothing is published, installed, reloaded, r
   altogether only fails a precondition and is not decisive). They pin separately repeatable
   settlement contracts and do **not** show that a real host naturally produces either window.
 - One new portable unit case `TE-U19`
-  ([unit/trusted-epoch.test.mjs](plugin/tests/unit/trusted-epoch.test.mjs)): a declaratively injected
+  (`unit/trusted-epoch.test.mjs` (removed in 0.6.0)): a declaratively injected
   test store pins record-key isolation, no runtime overwrite by a late write, and cold restore by
   newest identity, making **no claim about the real SDK's internal commit / enqueue timing**.
 - `test:composition` names that one file; the explicit host list in CI gains one line.
@@ -1267,6 +1358,5 @@ frozen, not a release date.
   cross-reviewer, and the D-1 fix author is unattributed. Both are awaiting a fresh independent
   review, per the "authors do not sign their own security boundaries" rule.
 
-<!-- No version-link references are defined below: no tag or release exists to link to. Add
-     them at the same time as the actual release, not before. -->
+[0.6.0]: https://github.com/KouzakiUmi/dsh-tool-discovery/releases/tag/v0.6.0
 

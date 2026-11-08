@@ -1,57 +1,43 @@
 // plugin/domain/engine.mjs
-// 组合根:请求处理、load/unload 事务、advertise/guard/失效/恢复。
+// 会话内核（rc.1 重设计，docs/14-rc1-redesign.md）。
 //
-// 边界:不 import Cordis / DSH / 第三方包;不注册工具;不写日志;不改 profile。
-// 所有"当前可见性 / 展示模式 / 保留项 / 身份"都由 adapter 以可信 DTO 传入。
-import { resolveBudgets } from './budgets.mjs';
-import { buildCatalog, identityFingerprintOf, orderedNamesFor, resolveByName, resolveByToolId } from './catalog.mjs';
-import { buildCategoryCards, resolveCategory } from './categories.mjs';
-import { canonicalJson, deepEqualCanonical, deepFreeze, digestOf } from './canonical.mjs';
-import { fitPrefixLength } from './budgets.mjs';
-import { createCursorStore, fitStateWithinBudget, paginateCategories, paginateNames, projectState } from './list.mjs';
-import { createRefStore } from './candidate-refs.mjs';
-import { DomainError, toDomainError } from './errors.mjs';
-import { ENTRY_TOOL_NAMES, PROTOCOL_VERSION } from './constants.mjs';
+// 与旧版的不同：没有 pending 操作、canonical 回执折叠、冻结 wire、epoch 与
+// advertised 账本。tool_load 校验通过后**立即**写入 selected（admission 由
+// adapter 的 store 持久化，掩码与执行门禁各自消费同一份事实）；tool_unload
+// 是公开的第四入口；resume 由 seedSelection 按名字+schemaDigest 回填。
+//
+// 保留：目录构建与刷新（身份指纹快路径）、eligibility 代次与候选 ref、
+// 分页游标、预算核算、技能交付、本地化文案、输入形状判定一套口径。
 import { AUTO_LOCALE } from './host-locale.mjs';
-import { assertSkillBudget, projectSkill } from './skills.mjs';
-import { assertActiveBudget } from './budgets.mjs';
+import { ENTRY_TOOL_NAMES, PROTOCOL_VERSION } from './constants.mjs';
 import {
-  errorEnvelope, okEnvelope, validateListRequest, validateLoadRequest, validateSearchRequest,
-} from './protocol.mjs';
-import { buildSearchIndex, search as runSearch } from './search.mjs';
+  buildCatalog, catalogFromPrepared, prepareCatalog, orderedNamesFor, resolveByName,
+} from './catalog.mjs';
+import { DomainError, toDomainError } from './errors.mjs';
+import { digestOf } from './canonical.mjs';
 import {
-  createState, evaluateCall as evalCall, freezeTool, frozenWireList,
-  invalidateTool, recordAdvertisement, reducePair, resetCacheEpoch, setSessionMode,
-} from './state.mjs';
+  resolveBudgets, assertActiveBudget, fitPrefixLength,
+} from './budgets.mjs';
 import { clampCodePoints, createMutex, isNonEmptyString, isPlainObject } from './util.mjs';
-import { createText } from './locale.mjs';
-
-// --- i18n shim (added by the message migration) ---------------------------
-// These validators are pure and take no locale argument. The plugin resolves
-// one locale per activation, so bind the text accessor once here rather than
-// threading it through every signature. setLocaleForDomain() is called by the
-// adapter at activation; tests call it directly to exercise both languages.
-import { domainText } from './locale.mjs';
-
+import { buildCategoryCards, resolveCategory } from './categories.mjs';
+import { buildSearchIndex, search as runSearch } from './search.mjs';
+import { createRefStore } from './candidate-refs.mjs';
+import { createCursorStore, paginateNames, paginateCategories, projectState, fitStateWithinBudget } from './list.mjs';
+import { projectSkill, assertSkillBudget } from './skills.mjs';
+import {
+  validateListRequest, validateSearchRequest, validateLoadRequest, validateUnloadRequest,
+  okEnvelope, errorEnvelope,
+} from './protocol.mjs';
+import { createText, domainText } from './locale.mjs';
+import { createState, invalidateTool, removeSelection } from './state.mjs';
 
 const MAX_SUMMARY_CODE_POINTS = 96;
 const jsonBytes = (value) => Buffer.byteLength(JSON.stringify(value), 'utf8');
-
-// 候选 ref 的定长形状:与 candidate-refs.mjs 的 mintOpaqueId(random, 'c_') 一致
-// (前缀 + byteLength×2 个 hex 字符,全是 ASCII)。预算判定必须发生在铸 ref 之前,
-// 于是先用**等长**占位符记账 —— JSON 里 ref 只贡献长度加两个引号,等长即逐字等价,
-// 截断边界因此与原来完全一致。
+// 候选 ref 的定长形状:与 candidate-refs.mjs 的 mintOpaqueId(random, 'c_') 一致。
 const REF_BYTE_LENGTH = 16;
 const REF_PLACEHOLDER = `c_${'0'.repeat(REF_BYTE_LENGTH * 2)}`;
 
-/**
- * @param {any} config
- * @returns {import('./index.mjs').DiscoveryEngine}
- */
 export function createDiscoveryEngine(config) {
-  // 配置校验发生在显式 locale 解析之前：这里必须直接用 domainText（默认语言），
-  // 不能引用函数内稍后才声明的 `t` —— 那会让这些分支在 TDZ 里抛 ReferenceError，
-  // 使规定的 INCOMPATIBLE_COMPOSITION 在导出面上不可达。
   if (!isPlainObject(config)) throw new DomainError('INCOMPATIBLE_COMPOSITION', domainText.t(['detail', 'engineConfigNotObject']));
   if ((config.protocolVersion ?? PROTOCOL_VERSION) !== PROTOCOL_VERSION) {
     throw new DomainError('INCOMPATIBLE_COMPOSITION', domainText.t(['detail', 'protocolVersionUnsupported']));
@@ -73,24 +59,14 @@ export function createDiscoveryEngine(config) {
   const entryNames = new Set([...ENTRY_TOOL_NAMES, ...(config.entryToolNames || [])]);
   const frameworkNames = new Set(config.frameworkToolNames || []);
   /**
-   * 常驻工具（alwaysVisible）：DSH 自带工具等。它们无需 load 即视为已激活，
-   * 因此既不可被 unload，也不需要经 canonical 回执进入 selected —— 它们本来
-   * 就在每一轮请求里。过滤只针对名单之外的后装工具。
+   * 常驻工具（alwaysVisible）：每轮都在声明里，无需 load 即视为已激活，
+   * 既不可 load 也不可 unload。
    */
   const alwaysNames = new Set(config.alwaysToolNames || []);
-  /** 是否容错放正常驻工具的重复加载（方案 2 开关项：默认开启以解除死锁冲突） */
+  /** 是否容错放正常驻工具的重复加载（默认开启以解除死锁冲突） */
   const tolerantLoadProtected = config.tolerantLoadProtected !== false;
-  /** 严格不可加载保护项：入口与框架保留项永远不可 load/unload */
   const strictProtectedNames = new Set([...entryNames, ...frameworkNames]);
-  /** 入口与框架保留项不可 load/unload —— 来自可信配置,不按名称猜。 */
-  const protectedNames = new Set([...entryNames, ...frameworkNames, ...alwaysNames]);
-  /** @type {Map<string, string>} name → toolId(受保护项,如可解析) */
-  const newSessionMode = config.newSessionMode === 'restoring' ? 'restoring' : 'ready';
 
-  // 面向模型的文案随界面语言变化。缺省英文（见 locale.mjs 的回落理由）。
-  // `'auto'` 是**适配层**的哨兵（"跟随宿主界面语言"），到内核时应当已被解析成具体语言；
-  // 直接用公开 API 构造 engine 的调用方若原样传进来，这里按"未指定"处理（→ 默认语言），
-  // 而不是让 normalizeLocale 把一个哨兵值当成无法识别的语言名静默钉死。
   const explicitLocale = config.locale === undefined || config.locale === AUTO_LOCALE ? undefined : config.locale;
   const text = explicitLocale === undefined ? domainText : createText(explicitLocale);
   const t = (path) => text.t(path);
@@ -112,39 +88,29 @@ export function createDiscoveryEngine(config) {
   let index = buildSearchIndex(Array.from(catalog.entries.values()));
   let eligibilityGeneration = 1;
 
-  /** @type {Map<string, import('./state.mjs').SessionDiscoveryState>} */
+  /** @type {Map<string, ReturnType<typeof createState>>} */
   const sessions = new Map();
   /** @type {Map<string, ReturnType<typeof createMutex>>} */
   const locks = new Map();
-  /** @type {Map<string, any>} operationId → pending */
-  const pending = new Map();
-  // 热态的新提交必须仍有 pending；删除即永久撤销该次接纳，不保存逐操作墓碑。
-  // 无 pending 只允许 reducer 处理已落后的 seq（不会再激活），冷恢复独立走 restore。
-  // 因而取消次数不增加常驻内存，也不存在有限墓碑淘汰后的重放窗口。
-  let opCounter = 0;
   let disposed = false;
 
-  /**
-   * @param {any} scope
-   * @returns {import('./state.mjs').SessionDiscoveryState}
-   */
   function requireState(scope) {
+    if (disposed) {
+      throw new DomainError('ENGINE_DISPOSED', undefined, undefined, explicitLocale);
+    }
     if (!isPlainObject(scope) || !isNonEmptyString(scope.sessionId)) {
       throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'missingSessionIdentity']), undefined, explicitLocale);
     }
     let st = sessions.get(scope.sessionId);
     if (!st) {
       st = createState(scope.sessionId);
-      if (newSessionMode === 'ready') st = setSessionMode(st, 'ready');
       sessions.set(scope.sessionId, st);
-      locks.set(scope.sessionId, createMutex());
+      // 不能覆盖既有锁：handleLoad/handleUnload 已先 lockFor 取得 L1 并在其上
+      // 排队；此处重建 L2 会让 L1 上的排队者在取到锁后发现锁已换而被拒。
+      if (!locks.has(scope.sessionId)) {
+        locks.set(scope.sessionId, createMutex());
+      }
     }
-    return st;
-  }
-
-  function requireReady(scope) {
-    const st = requireState(scope);
-    if (st.mode !== 'ready') throw new DomainError('STATE_NOT_READY', undefined, undefined, explicitLocale);
     return st;
   }
 
@@ -158,119 +124,43 @@ export function createDiscoveryEngine(config) {
   }
 
   /**
-   * 当前 catalog 内受保护项的 toolId。**按当前 catalog 动态解析**，
-   * 不做创建期快照(D2)：refreshCatalog 换绑定后新 toolId 必须同样被保护。
-   * @returns {Set<string>}
+   * 活跃 schema 占用面 = 本会话有效 selected（仍解析得到且版本一致）。
+   * admission 与 selected 由 adapter 保持一致：selected 之外的工具不占配额。
    */
-  function protectedToolIdsNow() {
-    const activeProtectedNames = tolerantLoadProtected ? strictProtectedNames : protectedNames;
-    return new Set(
-      Array.from(catalog.entries.values())
-        .filter((e) => activeProtectedNames.has(e.name))
-        .map((e) => e.toolId),
-    );
-  }
-
-  /**
-   * @param {string} tool
-   * @param {string} operation
-   * @param {unknown} raw
-   * @param {any} scope
-   */
-  function failEnvelope(tool, operation, raw, scope) {
-    void scope;
-    return errorEnvelope(tool, operation, toDomainError(raw, explicitLocale));
-  }
-
-  /**
-   * 活跃 schema 占用面 = 已冻结披露 ∪ 仍解析得到且版本一致的 selected ∪ 本会话未决回执的预留。
-   *
-   * 预算门禁（handleLoadLocked）与 `view:'state'` 的 activeCount / activeSchemaBytes
-   * 必须走**同一份**核算：两套口径会让模型看到的数字小于实际计费值，于是它会以为
-   * 还能再加载，实际却被门禁拒掉。只有这里一份实现，不要另写统计。
-   * @param {any} st
-   * @param {string} sessionId
-   * @returns {{ active: Array<{wireBytes:number}>, reservedOnly: Set<string> }}
-   */
-  function activeFootprint(st, sessionId) {
-    /** @type {Set<string>} 本 scope 未决回执已预留的 toolId */
-    const reserved = new Set();
-    for (const op of pending.values()) {
-      if (op.sessionId !== sessionId || op.action !== 'load') continue;
-      const selections = op.expectedReceipt?.selected ?? [];
-      // 预留属于原子批次的确定版本，不只是 toolId。任一项定义已失效，整批回执
-      // 都无法按当前目录提交；不能把旧预留借给同 ID 的新 schema，也不为其余项占额。
-      // 仅排除已知定义失效的计费，不提前取消操作或改变候选 ref 的正式提交校验。
-      if (selections.some((s) => {
-        const current = resolveByToolId(catalog, s.toolId);
-        return !current || current.revision !== s.revision;
-      })) continue;
-      for (const s of selections) reserved.add(s.toolId);
-    }
-
-    // 尚未走到真实出站披露的 selected（还没冻结）按其选中时的 catalog 条目计字节，
-    // 否则"加载成功但本轮还没发出去"的窗口会被免费。
-    /** @type {Array<{wireBytes:number}>} */
-    const frozen = frozenWireList(st);
-    const frozenNames = new Set(frozen.map((f) => f.name));
-    // 初始名单独立于按需配额；容错 load 不能把免费基线变成收费选择。
-    const active = frozen.filter((f) => !alwaysNames.has(f.name)).map((f) => ({ wireBytes: f.bytes }));
+  function activeFootprint(st) {
+    const active = [];
     for (const [toolId, selection] of st.selected) {
-      if (alwaysNames.has(selection.name) || st.frozen.has(toolId) || frozenNames.has(selection.name)) continue;
-      const entry = resolveByToolId(catalog, toolId);
-      // `resolveByToolId` 找不到时返回 **null**：判据必须是 `!entry`，
-      // 写成 `entry === undefined` 会让 null 通过并在此处抛 TypeError。
+      if (alwaysNames.has(selection.name)) continue;
+      const entry = resolveByToolIdSafe(toolId);
       if (!entry || entry.revision !== selection.revision) continue;
       active.push({ wireBytes: entry.wireBytes });
     }
-    // 已被未决回执预留、但尚未进入 selected/frozen 的工具：按预留时的当前定义计字节。
-    /** @type {Set<string>} 已预留，本次再请求同一工具时应视为幂等而非新增 */
-    const reservedOnly = new Set();
-    for (const toolId of reserved) {
-      if (st.frozen.has(toolId) || st.selected.has(toolId)) continue;
-      const entry = resolveByToolId(catalog, toolId);
-      if (!entry || alwaysNames.has(entry.name) || frozenNames.has(entry.name)) continue;
-      active.push({ wireBytes: entry.wireBytes });
-      reservedOnly.add(toolId);
-    }
-    return { active, reservedOnly };
+    return active;
+  }
+
+  const resolveByToolIdSafe = (toolId) => catalog.entries.get(toolId) ?? null;
+
+  function failEnvelope(tool, operation, raw) {
+    return errorEnvelope(tool, operation, toDomainError(raw, explicitLocale));
   }
 
   const api = {
-    // ---- 只读视图 -------------------------------------------------------
-    getCatalog() {
-      return catalog;
-    },
-    getEligibilityGeneration() {
-      return eligibilityGeneration;
-    },
-    getState(scope) {
-      return requireState(scope);
-    },
-    getBudgets() {
-      return budgets;
-    },
+    getCatalog() { return catalog; },
+    getEligibilityGeneration() { return eligibilityGeneration; },
+    getState(scope) { return requireState(scope); },
+    getBudgets() { return budgets; },
+    /** adapter 读侧：某会话已选条目（Map 引用，只读使用）。 */
+    selectedOf(sessionId) { return sessions.get(sessionId)?.selected ?? new Map(); },
 
-    // ---- tool_list ------------------------------------------------------
-    /**
-     * @param {unknown} raw
-     * @param {any} scope
-     */
+    // ---- tool_list ----------------------------------------------------
     handleList(raw, scope) {
       try {
-        requireReady(scope);
-        const req = validateListRequest(raw, budgets);
         const st = requireState(scope);
+        const req = validateListRequest(raw, budgets);
 
         if (req.view === 'state') {
-          // 与 tool_load 门禁同口径（冻结 ∪ 有效 selected ∪ 未决预留）：模型据此判断
-          // 还剩多少额度，少算了就等于谎报。
-          const { active } = activeFootprint(st, scope.sessionId);
+          const active = activeFootprint(st);
           const payload = projectState(st, budgets, active);
-          // 状态投影同样受 `maxListResultBytes` 约束（02 §4）：配了上限却被静默绕过的响应等于假执行。
-          // 超限时**先裁诊断段**（`invalidated`，返回值带 `invalidatedTruncated` 标记）—— 它的来源
-          // 只增不减，长会话里会单独把整个视图顶穿，让"配了上限"变成永久报错；连诊断段裁空都装不下
-          // 才明确失败。度量与出站同口径（JSON.stringify），并走文案表（数字并进 what）。
           const maxBytes = budgets.maxListResultBytes;
           const fitted = fitStateWithinBudget(payload, maxBytes,
             (data) => jsonBytes(listEnvelope(data, 'stateViewNoHidden')));
@@ -287,7 +177,6 @@ export function createDiscoveryEngine(config) {
         }
 
         if (req.view === 'categories') {
-          // 预算限制每页卡片数，不能先截掉全集，否则后续类别永远没有游标可达。
           const cards = buildCategoryCards(catalog, config.categoryConfig);
           const orderDigest = catalog.orderDigestByView.get('categories:all') || 'empty';
           const page = paginateCategories({
@@ -315,20 +204,15 @@ export function createDiscoveryEngine(config) {
         const category = resolveCategory(/** @type {string} */ (req.category), catalog, config.categoryConfig);
 
         if (req.view === 'loaded') {
-          // 只列当前 category 中**有效** selected(仍解析得到且未被撤权/失效)的名称
           const allNames = Array.from(st.selected.values())
             .map((s) => {
-              const e = resolveByToolId(catalog, s.toolId);
-              if (!e || e.revision !== s.revision) return null; // 已失效
+              const e = catalog.entries.get(s.toolId);
+              if (!e || e.revision !== s.revision) return null;
               if (category !== 'all' && !e.categories.includes(category)) return null;
               return e.name;
             })
             .filter((n) => n !== null)
             .sort();
-          // 与 available 同一分页形状：`limit`、`cursor` 与字节上限都必须真的生效。
-          // 这里过去硬编码 `nextCursor: null` / `truncated: false` 并丢掉已校验的 `limit` ——
-          // 一份"看似有界、实则无界"的响应会击穿调用方的 token 预算，而且谎报"这就是全部"。
-          // 顺序摘要取**这份名单自己的**摘要（它来自会话状态而非目录），名单一变旧游标即失效。
           const page = paginateNames({
             allNames,
             measurePage: measureListPage('loaded', category, 'loadedMeansSelected'),
@@ -348,9 +232,6 @@ export function createDiscoveryEngine(config) {
           }, text.t(['nextAction', 'loadedMeansSelected']));
         }
 
-        // available:只返回完整原生名称,不附描述/revision/schema/skill
-        // 序列与快照里的 available:<category> 顺序摘要同源(catalog.orderedNamesFor),
-        // 于是"翻出来的顺序"与"游标绑定的顺序"不可能各说各话。
         const allNames = orderedNamesFor(catalog, category);
         const orderDigest = catalog.orderDigestByView.get(`available:${category}`) || 'empty';
         const page = paginateNames({
@@ -375,23 +256,17 @@ export function createDiscoveryEngine(config) {
           truncated: page.truncated,
         }, text.t(['nextAction', 'searchAfterList']));
       } catch (e) {
-        return failEnvelope('tool_list', 'list', e, scope);
+        return failEnvelope('tool_list', 'list', e);
       }
     },
 
-    // ---- tool_search ----------------------------------------------------
-    /**
-     * @param {unknown} raw
-     * @param {any} scope
-     */
+    // ---- tool_search --------------------------------------------------
     handleSearch(raw, scope) {
       try {
-        requireReady(scope);
+        const st = requireState(scope);
         const req = validateSearchRequest(raw, budgets);
         const category = resolveCategory(req.category, catalog, config.categoryConfig);
-        const st = requireState(scope);
 
-        // 多取一条只用于判断截断；返回数量仍不超过请求 limit。
         const hits = runSearch(index, { query: req.query, category, limit: req.limit + 1 });
         const count = Math.min(hits.length, req.limit);
         const cards = [];
@@ -414,104 +289,65 @@ export function createDiscoveryEngine(config) {
           catalogGeneration: catalog.generation, category, candidates,
           truncated: length < hits.length,
         }, text.t(['nextAction', hits.length === 0 ? 'rewriteOrBrowse' : 'pickCandidateThenLoad']));
-        // 包含外壳、数组分隔与 nextAction；空命中同样必须满足完整响应限额。
         const keep = fitPrefixLength(count, budgets.maxSearchResultBytes,
           (n) => jsonBytes(envelopeFor([], n)), (i) => jsonBytes(cardAt(i)));
         if (keep < 0 || (count > 0 && keep === 0)) {
           throw new DomainError('BUDGET_EXCEEDED', t(['detail', 'candidateCardOverByteBudget']), undefined, explicitLocale);
         }
         const candidates = Array.from({ length: keep }, (_, i) => cardAt(i));
-        // 预算判定结束后才铸 ref，等长占位符与真实值的计量完全一致。
         for (const card of candidates) {
           card.ref = refStore.issue(scope.sessionId, eligibilityGeneration, card.toolId, card.revision);
         }
         return envelopeFor(candidates);
       } catch (e) {
-        return failEnvelope('tool_search', 'search', e, scope);
+        return failEnvelope('tool_search', 'search', e);
       }
     },
 
-    // ---- tool_load ------------------------------------------------------
+    // ---- tool_load ----------------------------------------------------
     /**
-     * @param {unknown} raw
-     * @param {any} scope
-     * @param {{operationId:string}} ctx operationId 必须由宿主产生
+     * 校验 → 预算 → 代次复核 → **立即提交** selected。
+     * @returns {{response:object, admitted:Array<{toolId:string,name:string,revision:string,schemaDigest:string}>|null}}
+     *   admitted 非 null 时 adapter 必须把它写进 admission store 并更新掩码。
      */
-    async handleLoad(raw, scope, ctx) {
-      const requestedAction = isPlainObject(raw) && raw.action === 'unload' ? 'unload' : 'load';
-      const runLocked = (req, queuedEpoch, queuedLock) => {
+    async handleLoad(raw, scope) {
+      const queuedLock = lockFor(scope.sessionId);
+      return queuedLock.run(() => {
         try {
-          // 入队之后可能折叠回执、压缩、fail closed 或销毁会话：锁内才读取预算状态。
-          if (disposed || locks.get(scope.sessionId) !== queuedLock) {
+          if (disposed) {
+            throw new DomainError('ENGINE_DISPOSED', undefined, undefined, explicitLocale);
+          }
+          if (locks.get(scope.sessionId) !== queuedLock) {
             throw new DomainError('STATE_NOT_READY', undefined, undefined, explicitLocale);
           }
-          const st = requireReady(scope);
-          if (st.epoch !== queuedEpoch) throw new DomainError('SELECTION_CHANGED', undefined, undefined, explicitLocale);
-          return api.handleLoadLocked(req, st, scope, ctx, raw);
+          const st = requireState(scope);
+          const req = validateLoadRequest(raw, budgets);
+          return api.handleLoadLocked(req, st, scope, raw);
         } catch (e) {
-          return { response: errorEnvelope('tool_load', requestedAction, toDomainError(e, explicitLocale)), operation: null };
+          return { response: errorEnvelope('tool_load', 'load', toDomainError(e, explicitLocale)), admitted: null };
         }
-      };
-
-      /** @type {any} */
-      let req;
-      try {
-        if (disposed) throw new DomainError('STATE_NOT_READY', undefined, undefined, explicitLocale);
-        requireReady(scope);
-        req = validateLoadRequest(raw, budgets);
-        // 模型不得自主 unload:缓存周期的清空点只有成功压缩(`/unloadtool` 暂缓)。
-        // protocol 已拒,此处再兜一层,保证 engine 不存在第二条卸载路径。
-        if (req.action !== 'load') {
-          throw new DomainError('INVALID_ARGS', t(['detail', 'modelUnloadDisabled']), undefined, explicitLocale);
-        }
-      } catch (e) {
-        return { response: errorEnvelope('tool_load', requestedAction, toDomainError(e, explicitLocale)), operation: null };
-      }
-      if (!isPlainObject(ctx) || !isNonEmptyString(ctx.operationId)) {
-        return {
-          response: errorEnvelope('tool_load', requestedAction, new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'operationIdRequired']), undefined, explicitLocale)),
-          operation: null,
-        };
-      }
-      const queuedEpoch = requireState(scope).epoch;
-      const queuedLock = lockFor(scope.sessionId);
-      // FIFO 只串行事务；不能把入队前的状态快照跨越异步队列复用。
-      return queuedLock.run(() => runLocked(req, queuedEpoch, queuedLock));
+      });
     },
 
     /**
-     * 内部:load/unload 的事务实现(在锁内同步执行,便于单测与可重入)。
-     * @param {any} req
-     * @param {any} st
-     * @param {any} scope
-     * @param {{operationId:string}} ctx
-     * @param {unknown} raw
+     * 事务实现（锁内同步）。
+     * @returns {{response:object, admitted:Array}|{response:object, admitted:null}}
      */
-    handleLoadLocked(req, st, scope, ctx, raw) {
-      if (req.action !== 'load') {
-        throw new DomainError('INVALID_ARGS', t(['detail', 'modelUnloadDisabled']), undefined, explicitLocale);
-      }
-
+    handleLoadLocked(req, st, scope, raw) {
       /** @type {Array<{entry:any, source:'candidate'|'name'}>} */
       const resolved = [];
       /** @type {Map<string,string>} toolId → revision */
       const byToolId = new Map();
-      /** @type {string[]} */
-      const namesPath = [];
 
       for (const item of /** @type {any[]} */ (req.candidates ?? [])) {
         const rec = refStore.resolve(item.ref, scope.sessionId, eligibilityGeneration, clock.now());
-        const entry = resolveByToolId(catalog, rec.toolId);
+        const entry = catalog.entries.get(rec.toolId);
         if (!entry) throw new DomainError('CANDIDATE_UNAVAILABLE', undefined, undefined, explicitLocale);
         const expectedRevision = item.revision ?? rec.revision;
-        // 同一批次里两个候选解析到同一 toolId 却携带冲突 revision：这是**批次自身**的
-        // 矛盾，必须在这里报出来。若把 STALE_CANDIDATE 判在前面，第二条候选会先因为
-        // "与当前定义不符" 被拒，candidateRevisionConflict 永远不可达。
         if (byToolId.has(entry.toolId) && byToolId.get(entry.toolId) !== expectedRevision) {
           throw new DomainError('INVALID_ARGS', t(['detail', 'candidateRevisionConflict']), undefined, explicitLocale);
         }
         if (entry.revision !== expectedRevision) throw new DomainError('STALE_CANDIDATE', undefined, undefined, explicitLocale);
-        // D1:候选路径与 names 路径对称 —— 入口/框架保留项一律不可 load。
         if (entryNames.has(entry.name) || frameworkNames.has(entry.name)) {
           throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotLoadable']), undefined, explicitLocale);
         }
@@ -524,7 +360,6 @@ export function createDiscoveryEngine(config) {
       }
 
       for (const name of /** @type {string[]} */ (req.names ?? [])) {
-        namesPath.push(name);
         if (entryNames.has(name) || frameworkNames.has(name)) {
           throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotLoadable']), undefined, explicitLocale);
         }
@@ -540,17 +375,7 @@ export function createDiscoveryEngine(config) {
 
       if (resolved.length === 0) throw new DomainError('INVALID_ARGS', t(['detail', 'nothingToLoad']), undefined, explicitLocale);
 
-      // 披露按原生名称占一个槽位，不能以换 toolId 绕过旧定义。
-      // schema 不同的重选在当前周期根本无法被投影，必须在产生 pending 前明确拒绝。
-      const frozenByName = new Map(frozenWireList(st).map((f) => [f.name, f]));
-      for (const { entry } of resolved) {
-        const frozen = frozenByName.get(entry.name);
-        if (frozen && frozen.schemaDigest !== entry.schemaDigest) {
-          throw new DomainError('COMPACTION_REQUIRED', undefined, undefined, explicitLocale);
-        }
-      }
-
-      // 锁定本次验证快照(含资格代次)
+      // 锁定资格代次：解析与复核之间目录若被刷新，整批失败。
       const genAtStart = eligibilityGeneration;
       const snapshot = resolved.map((r) => ({
         toolId: r.entry.toolId,
@@ -558,40 +383,25 @@ export function createDiscoveryEngine(config) {
         schemaDigest: r.entry.schemaDigest,
       }));
 
-      // 预算占用面 = 已冻结披露 ∪ 已选未披露 ∪ **本 scope 未决 load 回执预留的新增**
-      // （与 `view:'state'` 共用同一个 activeFootprint —— 见其注释）。
-      // 少了最后一项时,同一会话里先后两次 handleLoad 在 canonical 折叠前都只看到旧的
-      // selected,各自都判定"放得下",合计却突破显式设置的上限。默认 null 关闭时这无关
-      // 紧要,但**显式设置必须真的生效**。
-      // 预留沿用既有 pending(applyCanonicalPair 折叠、cancelOperation 取消、resetCacheEpoch
-      // 清空三条既有路径自然收口),不新增 TTL 或存储。
-      const { active: alreadyActive, reservedOnly } = activeFootprint(st, scope.sessionId);
-
-      // 幂等:已以同版本选中、或已被本 scope 未决回执预留 → 不重复计费
+      const alreadyActive = activeFootprint(st);
       const fresh = resolved.filter((r) => {
         if (alwaysNames.has(r.entry.name)) return false;
         const sel = st.selected.get(r.entry.toolId);
         if (sel && sel.revision === r.entry.revision) return false;
-        // 同名且 schema 相同的冻结 wire 已计费；绑定/技能换版不是新增 schema。
-        if (frozenByName.has(r.entry.name)) return false;
-        return !reservedOnly.has(r.entry.toolId);
+        return true;
       });
-      // 降低限额后保留的旧披露可能已超限：只拒绝新增占用，不阻断零新增重选。
       if (fresh.length > 0) assertActiveBudget(fresh.map((r) => r.entry), alreadyActive, budgets);
-      // 技能交付只对已提交的同版本选择去重；pending 可能失败/取消，不能冒充成功交付。
-      // 同时避免为每项技能全量扫描 pending；schema 预留仍由上面的独立口径去重。
+
       const skills = resolved.filter(({ entry }) => st.selected.get(entry.toolId)?.revision !== entry.revision)
         .map(({ entry }) => projectSkill(entry));
       assertSkillBudget(skills, budgets.maxSkillBytesPerLoad);
 
-      // 提交前 recheck:资格代次 + 每项 revision 重算。变化则整批失败,绝不偷偷改选。
       if (eligibilityGeneration !== genAtStart) {
         throw new DomainError('SELECTION_CHANGED', undefined, undefined, explicitLocale);
       }
-      /** @type {Map<string, any>} toolId → 复核通过的当前条目(回执直接取它,不再重解析) */
       const rechecked = new Map();
       for (const snap of snapshot) {
-        const cur = resolveByToolId(catalog, snap.toolId);
+        const cur = catalog.entries.get(snap.toolId);
         if (!cur) throw new DomainError('SELECTION_CHANGED', undefined, undefined, explicitLocale);
         if (cur.revision !== snap.revision || cur.schemaDigest !== snap.schemaDigest) {
           throw new DomainError('SELECTION_CHANGED', undefined, undefined, explicitLocale);
@@ -599,436 +409,204 @@ export function createDiscoveryEngine(config) {
         rechecked.set(snap.toolId, cur);
       }
 
-      // req 已经过 validateLoadRequest 归一化：到这里 candidates 只可能是非空数组或
-      // 缺省键，真值判断与键在判断在**本调用点**等价。保留键在写法是为了与折叠侧
-      // deriveInputPath 的口径叙述保持一致——那边面对的是未归一的原始 canonical
-      // input，空数组在那里必须按"未提供"处理，回执的 selectionSource 才能与重算对上。
+      // 立即提交：selected 与 admission 是同一事实的两份投影。
+      // alwaysVisible 名字在 tolerant 模式下不抛错，但它们是常驻成员、不占
+      // admission——只报告为 alreadyResident，不写 selected、不进 admitted。
       const selectionSource = /** @type {'candidate'|'name'} */ (req.candidates !== undefined ? 'candidate' : 'name');
-      const receipt = {
-        kind: 'tool-discovery.selection',
-        version: PROTOCOL_VERSION,
-        operationId: ctx.operationId,
-        operation: 'load',
-        selectionSource,
-        selected: snapshot.map((s) => {
-          const e = /** @type {any} */ (rechecked.get(s.toolId));
-          return {
-            toolId: s.toolId,
-            name: e.name,
-            revision: s.revision,
-            schemaDigest: s.schemaDigest,
-            skillRevision: e.skillRevision,
-          };
-        }),
-      };
+      /** @type {Array<{toolId:string,name:string,revision:string,schemaDigest:string}>} */
+      const admitted = [];
+      const resident = [];
+      for (const snap of snapshot) {
+        const entry = /** @type {any} */ (rechecked.get(snap.toolId));
+        if (alwaysNames.has(entry.name)) {
+          resident.push(entry.name);
+          continue;
+        }
+        const prev = st.selected.get(snap.toolId);
+        if (prev && prev.revision === snap.revision) continue;
+        st.selected.set(snap.toolId, {
+          toolId: snap.toolId,
+          name: entry.name,
+          revision: snap.revision,
+          schemaDigest: snap.schemaDigest,
+          skillRevision: entry.skillRevision,
+          selectionSource,
+          activatedAt: clock.now(),
+        });
+        st.invalidated.delete(snap.toolId);
+        admitted.push({ toolId: snap.toolId, name: entry.name, revision: snap.revision, schemaDigest: snap.schemaDigest });
+      }
 
       const response = okEnvelope('tool_load', 'load', {
-        receipt,
+        loaded: admitted.map((a) => a.name),
+        ...(resident.length > 0 ? { alreadyResident: resident } : {}),
         skills: skills.filter(Boolean),
         takesEffect: 'next_request',
         schemaDelivery: 'native_tools_only',
       }, text.t(['nextAction', 'callNextRequest']));
-
-      const inputCanonical = canonicalJson(raw);
-      // 内部期望与出站响应不共享引用；预算预留也只读取这份稳定快照。
-      // 冻结前复制 input，不能顺带冻结宿主传入的原对象。
-      const op = deepFreeze({
-        operationId: ctx.operationId,
-        // 预算需要按会话隔离统计未决预留（pending 本身是 engine 全局的），故带上归属会话。
-        sessionId: scope.sessionId,
-        eligibilityGeneration: genAtStart,
-        action: /** @type {const} */ ('load'),
-        selectionSource,
-        input: JSON.parse(inputCanonical),
-        inputCanonical,
-        expectedReceipt: JSON.parse(canonicalJson(receipt)),
-      });
-      pending.set(ctx.operationId, op);
-      // adapter 的观察对象同样独立，替换字段或修改嵌套数组都不能改写 pending。
-      return { response, operation: JSON.parse(canonicalJson(op)) };
+      return { response, admitted };
     },
 
-    // ---- canonical 折叠 --------------------------------------------------
+    // ---- tool_unload ----------------------------------------------------
     /**
-     * 只在 adapter 确认 canonical tool/call → tool/result 对时调用。
-     *
-     * 新提交必须**仍登记在案**且属于本会话。cancelOperation、resetCacheEpoch、
-     * destroySession 删除 pending 后，无论过多久或换 scope 都不得再次激活。
-     * 无 pending 的冷回放必须走 restore，不能借热态入口绕过接纳。
-     * 已成功折叠过的重复 / 乱序投递仍交给 reducePair 的 stale-seq 语义；
-     * 它们的提交 seq 已不大于 lastAppliedSeq，不可能再改 selected。
-     * @param {any} pair
-     * @param {any} scope
+     * 撤销 admitted 条目。只接受 names（admitted 名字，不需要 ref——
+     * 模型从 tool_list view:'loaded' 拿到的是名字）。
+     * @returns {{response:object, revoked:string[]|null}}
      */
-    applyCanonicalPair(pair, scope) {
-      if (disposed) return { applied: false, reason: 'engine-disposed' };
-      let st;
-      try {
-        st = requireState(scope);
-      } catch (e) {
-        return { applied: false, reason: toDomainError(e, explicitLocale).code };
-      }
-      const operationId = pair?.call?.operationId;
-      const op = pending.get(operationId);
-      if (op && op.sessionId !== scope.sessionId) {
-        // pending 是引擎级 Map：别的会话登记的 operationId 不得在本会话折叠。
-        // 这里**不**删除它 —— 它仍属于登记它的那个会话。
-        return { applied: false, reason: 'operation-session-mismatch' };
-      }
-      if (!op && !((pair?.resultSeq ?? pair?.seq) <= st.lastAppliedSeq)) {
-        return { applied: false, reason: 'operation-closed' };
-      }
-      if (op) {
-        // 热态:回执必须与登记的期望回执逐字一致(renderer/pruner 改写 → 拒)
-        if (!deepEqualCanonical(op.expectedReceipt, pair?.result?.payload)) {
-          // 收口是操作级事实（迟到回执不得再折叠），预算预留则必须同步释放：
-          // 这条回执已经不会再被接受，留着 pending 只会让后续 load 误报 BUDGET_EXCEEDED。
-          pending.delete(pair.call.operationId);
-          const next = reducePair(st, { ...pair, result: { ...pair.result, rewrittenBy: 'receipt-mismatch' } }, {
-            now: () => clock.now(), catalog,
-          });
-          sessions.set(scope.sessionId, next.state);
-          return { applied: false, reason: 'receipt-mismatch' };
-        }
-        pending.delete(pair.call.operationId);
-      }
-      // 候选 ref 在 handleLoad 入队前已解析并校验。已登记操作的期望回执又与本次
-      // canonical 结果逐字一致，因此同一资格代次内不应因短期 ref 在等待期间过期而撤销它。
-      // 资格代次若已变化，仍走当前 ref 解析路径拒绝旧候选，保持目录变更的既有语义。
-      let candidateInputMatchesAdmission = false;
-      if (op?.action === 'load' && op.selectionSource === 'candidate') {
+    async handleUnload(raw, scope) {
+      const queuedLock = lockFor(scope.sessionId);
+      return queuedLock.run(() => {
         try {
-          candidateInputMatchesAdmission = canonicalJson(pair?.call?.input) === op.inputCanonical;
-        } catch {
-          candidateInputMatchesAdmission = false;
-        }
-      }
-      const candidateAcceptedAtAdmission = op?.action === 'load'
-        && op.selectionSource === 'candidate'
-        && candidateInputMatchesAdmission
-        && op.eligibilityGeneration === eligibilityGeneration;
-      const resolver = {
-        now: () => clock.now(),
-        catalog,
-        protectedToolIds: protectedToolIdsNow(),
-        protectedNames: tolerantLoadProtected ? strictProtectedNames : protectedNames,
-        candidateAcceptedAtAdmission,
-        resolveRef: (ref) => {
-          try {
-            const rec = refStore.resolve(ref, scope.sessionId, eligibilityGeneration, clock.now());
-            return { toolId: rec.toolId, revision: rec.revision };
-          } catch {
-            return null;
+          if (disposed) {
+            throw new DomainError('ENGINE_DISPOSED', undefined, undefined, explicitLocale);
           }
-        },
-      };
-      const out = reducePair(st, pair, resolver);
-      sessions.set(scope.sessionId, out.state);
-      return { applied: out.applied, reason: out.reason };
-    },
-
-    /** 取消 / 失败 / post-policy 失败:丢弃 pending,selected 不动。 */
-    cancelOperation(operationId) {
-      const op = pending.get(operationId);
-      if (!op) return false;
-      // 删除接纳即释放预算；无 pending 的迟到回执不能成为新提交。
-      return pending.delete(operationId);
-    },
-
-    /**
-     * 本会话尚未折叠（回执还没到/还没配对）的 tool_load 目标名，names 与 candidates
-     * 两条路径给同一份结果。
-     *
-     * candidates 路径的 canonical input 只有 `{ref, revision}`，工具名是 engine 在接纳时
-     * 解析出来的；它已经在期望回执快照里，而快照与 `pending` 同生共灭。所以这里直接读
-     * 快照，不另存一份 operationId → 名字的映射 —— 多一份状态就多一条会漏清理的路径。
-     * 只回答**调用方认定仍在途**的那些操作（`operationIds` 为 undefined 时回答全部未决项）：
-     * engine 的未决项可以在没有 canonical 折叠的情况下存在（例如 PTC 子调用的回执由
-     * journal 自行消费），调用方用它自己那份"还没落地"的登记做交集，才不会把已经结算的
-     * load 永久说成"即将生效"。
-     * @param {any} scope 与 engine 其它查询同一入参形状（只读 sessionId）
-     * @param {ReadonlySet<string>} [operationIds]
-     * @returns {Set<string>}
-     */
-    pendingLoadTargetNames(scope, operationIds) {
-      const sessionId = scope?.sessionId;
-      const only = operationIds instanceof Set ? operationIds : null;
-      const names = new Set();
-      for (const [operationId, op] of pending) {
-        if (op.sessionId !== sessionId || op.action !== 'load') continue;
-        if (only !== null && !only.has(operationId)) continue;
-        for (const s of op.expectedReceipt?.selected ?? []) {
-          if (typeof s?.name === 'string' && s.name.length > 0) names.add(s.name);
+          if (locks.get(scope.sessionId) !== queuedLock) {
+            throw new DomainError('STATE_NOT_READY', undefined, undefined, explicitLocale);
+          }
+          const st = requireState(scope);
+          const req = validateUnloadRequest(raw);
+          // 整批事务（全有全无）：保护规则必须先对**整批名字**校验，再执行任何删除。
+          // 逐名"边删边校验"会先删掉前面的已选名字再抛错，返回 ok:false / revoked:null，
+          // 而 selected 已被删掉一部分 —— adapter 拿不到 revoked 就不会撤销 admission，
+          // 随后的单独 unload 该名字又变成空操作，撤销永远到不了 admission store。
+          for (const name of req.names) {
+            if (strictProtectedNames.has(name) || alwaysNames.has(name)) {
+              throw new DomainError('INVALID_ARGS', t(['detail', 'protectedNotLoadable']), undefined, explicitLocale);
+            }
+          }
+          // 未选中的名字保持幂等：不进 revoked，也算成功。
+          // name → toolId 反查一次建好（避免 names × selected 的 O(n·m) 嵌套扫）。
+          /** @type {Map<string, string>} */
+          const toolIdByName = new Map();
+          for (const [toolId, sel] of st.selected) toolIdByName.set(sel.name, toolId);
+          /** @type {Array<{toolId:string,name:string}>} */
+          const matches = [];
+          for (const name of req.names) {
+            const toolId = toolIdByName.get(name);
+            if (toolId !== undefined) matches.push({ toolId, name });
+          }
+          /** @type {string[]} */
+          const revoked = matches.map((m) => m.name);
+          for (const { toolId } of matches) removeSelection(st, toolId);
+          const response = okEnvelope('tool_unload', 'unload', {
+            unloaded: revoked,
+            takesEffect: 'next_request',
+          }, text.t(['nextAction', 'callNextRequest']));
+          return { response, revoked };
+        } catch (e) {
+          return { response: errorEnvelope('tool_unload', 'unload', toDomainError(e, explicitLocale)), revoked: null };
         }
-      }
-      return names;
+      });
     },
 
-    // ---- 曝光 / guard ---------------------------------------------------
     /**
-     * 一次真实出站披露：既登记 advertised（执行面的"已披露"凭据），
-     * 也把**逐字 wire** 冻结进披露缓存（顺序固化，只增不改）。
+     * resume 种子：按名字+schemaDigest 回填 selected。
      * @param {any} scope
-     * @param {{requestId:string, toolId:string, name:string, revision:string, schemaDigest:string, wire:object}} rec
+     * @param {Array<{name:string,toolId:string,schemaDigest:string,at:number}>} rows
+     * @returns {{seeded:string[], dropped:string[]}}
      */
-    recordAdvertisement(scope, rec) {
+    seedSelection(scope, rows) {
       const st = requireState(scope);
-      let next = recordAdvertisement(st, { ...rec, now: clock.now() });
-      next = freezeTool(next, rec);
-      sessions.set(scope.sessionId, next);
-    },
-
-    /** 按历史首见次序恢复披露账本；绝不写 selected / advertised 或扩大当前资格。 */
-    restoreDisclosures(scope, records) {
-      if (disposed) return;
-      let next = { ...requireState(scope), frozen: new Map(), frozenOrder: 0 };
-      // adapter 提供 own 当前周期内已配对成功回执 + 实际 header 的同 digest 证据。
-      for (const rec of records) {
-        if (digestOf(rec.wire) !== rec.schemaDigest || rec.wire.name !== rec.name) {
-          throw new DomainError('INCOMPATIBLE_COMPOSITION', undefined, undefined, explicitLocale);
+      const seeded = [];
+      const dropped = [];
+      for (const row of rows ?? []) {
+        const entry = resolveByName(catalog, row.name);
+        if (!entry || entry.schemaDigest !== row.schemaDigest) {
+          dropped.push(row.name);
+          continue;
         }
-        next = freezeTool(next, rec);
+        st.selected.set(entry.toolId, {
+          toolId: entry.toolId,
+          name: entry.name,
+          revision: entry.revision,
+          schemaDigest: entry.schemaDigest,
+          skillRevision: entry.skillRevision,
+          selectionSource: 'resumed',
+          activatedAt: row.at ?? clock.now(),
+        });
+        seeded.push(row.name);
       }
-      sessions.set(scope.sessionId, next);
+      return { seeded, dropped };
     },
 
-    // ---- 缓存周期 -------------------------------------------------------
-    /** 披露缓存（按首次披露次序）：projection 纯追加它，永不重排既有项。 */
-    getFrozenWire(scope) {
-      return frozenWireList(requireState(scope));
-    },
-
-    /**
-     * 推进缓存周期。**只允许成功压缩调用**（adapter 侧绑定 session 的
-     * compaction/start + 无 error 的 compaction/end）。清空披露缓存与执行授权，
-     * 丢弃**本会话**的未决 pending（边界之前的回执不再有对价）；压缩只属于一个会话，
-     * 其它会话的未决 load 不受影响。
-     * @param {any} scope
-     * @param {string} reason
-     */
-    resetCacheEpoch(scope, reason) {
-      const st = requireState(scope);
-      const next = resetCacheEpoch(st);
-      sessions.set(scope.sessionId, next);
-      for (const [operationId, op] of pending) {
-        if (op.sessionId !== scope.sessionId) continue;
-        // 边界之前的回执不再有对价：删除接纳，迟到的 canonical 对不得折进新周期。
-        pending.delete(operationId);
-      }
-      void reason;
-      return { epoch: next.epoch };
-    },
-
-    /**
-     * 换掉本引擎的常驻（alwaysVisible）名单。**只在缓存周期边界调用**
-     * （新会话 runtime 建立 / 成功压缩后的周期重开），绝不在周期中途调用 ——
-     * 中途换名会让已披露 schema 与白名单不一致，等于把一次稳定的 prefix 打断。
-     *
-     * 名单是替换而非并集：被移除的工具离开 protectedNames 后，handleLoad /
-     * handleUnload 的 protected 判据（protectedNotLoadable）随之放开，
-     * 用户可以经普通 tool_load 把它重新加回来。
-     * @param {readonly string[]} names 本周期生效的完整常驻名单
-     */
     setAlwaysVisibleNames(names) {
       const next = names === undefined || names === null ? [] : [...new Set(
         names.filter((name) => typeof name === 'string' && name.length > 0),
       )];
       alwaysNames.clear();
       for (const name of next) alwaysNames.add(name);
-      protectedNames.clear();
-      for (const name of entryNames) protectedNames.add(name);
-      for (const name of frameworkNames) protectedNames.add(name);
-      for (const name of alwaysNames) protectedNames.add(name);
       return { alwaysToolNames: [...alwaysNames] };
     },
 
     /**
-     * @param {any} scope
-     * @param {any} call
-     */
-    evaluateCall(scope, call) {
-      if (disposed) {
-        // ENGINE_DISPOSED 是**顶层**文案键(与 error_internal 同级),不在 error 之下 ——
-        // 写成 ['error','ENGINE_DISPOSED'] 会静默取到 undefined,拒绝原因就成了空文案。
-        return { allowed: false, code: 'TOOL_NOT_LOADED', reason: text.t(['ENGINE_DISPOSED']), visibility: 'hidden' };
-      }
-      const st = requireState(scope);
-      const isEntryOrFramework = protectedNames.has(call.name);
-      return evalCall(st, {
-        name: call.name,
-        toolId: call.toolId,
-        requestId: call.requestId,
-        now: clock.now(),
-        locale: call.locale ?? explicitLocale,
-        registeredInScope: call.registeredInScope ?? null,
-        pendingLoad: call.pendingLoad === true,
-        isEntryOrFramework,
-      });
-    },
-
-    // ---- 失效 -----------------------------------------------------------
-    /**
-     * 撤权 / 同名替换 / schema 变化:作废 selected + advertised,升资格代次。
-     * @param {string} toolId
-     * @param {string} reason
+     * 撤权 / 同名替换 / schema 变化：作废 selected，升资格代次。
+     * @returns {string[]} 受影响会话里被作废的**工具名**（adapter 据此同步撤销 admission）
      */
     invalidate(toolId, reason) {
-      // 撤权 / 同名替换 / schema 变化改变的是**资格**本身（而不只是本次选择）：
-      // 与 refreshCatalog 的慢路径同口径，升资格代次并作废旧候选 ref —— 注释里的
-      // "升资格代次"必须真的发生，否则模型手里的候选 ref 会在撤权后继续指向旧定义。
       eligibilityGeneration += 1;
       refStore.dropForEligibility(eligibilityGeneration);
-      // 游标也全部绑定旧资格代次，既已不可用就立即回收，而不是等 TTL。
       cursorStore.clear();
       const now = clock.now();
+      const names = [];
       for (const [sid, st] of sessions) {
-        // 从未 selected / advertised 过该工具的会话不会因此被动改状态（见 state.invalidateTool）。
+        const sel = st.selected.get(toolId);
+        if (sel) names.push(sel.name);
         sessions.set(sid, invalidateTool(st, toolId, reason, now));
       }
+      return names;
     },
 
     /**
-     * 目录刷新:重建不可变快照,升代次,旧 ref/cursor 全部失效,失效不再匹配的选择。
-     *
-     * **内容感知**:宿主对任一 scope 的任一次 register/dispose/restrict 都广播
-     * tools/change,而 lifecycle.onRegistryChange 对**每个**活会话都调这里。绑定代次
-     * 已经按 (scope, toolId) 收窄(见 registry.mjs),无关插件注册一个工具、某个 MCP
-     * 服务连上来,本 scope 的绑定身份根本没变 —— 若此时仍无条件升代次,模型手里的
-     * 候选 ref 与分页游标会被白白作废,一次 tools/change 就逼它重跑整轮搜索。
-     * 因此先用身份指纹做廉价判定:一致就走快路径(不重建、不升代次、不动 ref/cursor),
-     * 真的变了才走原路径(重建 + 升代次 + 失效不再匹配的选择 + 与新资格取交集)。
-     * @param {any[]} bindings
+     * 目录刷新：身份指纹一致走快路径；真变了重建 + 升代次 + 作废不匹配项。
+     * @returns {{eligibilityGeneration:number, invalidatedNames:string[]}}
      */
     refreshCatalog(bindings) {
-      // 指纹只哈希每条绑定的身份字段(toolId/name/description/wire/bindingGeneration/
-      // 技能版本),比整目录重建 + 索引重建便宜两个数量级。
+      // 校验 + canonical 化只做一遍：指纹判同直接丢 prepared；判异则带着全部
+      // 预计算字段构建（wire/parameters 不再二次序列化、分类不再二次推导）。
+      let prepared = null;
       let unchanged = false;
       try {
-        unchanged = identityFingerprintOf(bindings) === catalog.identityFingerprint;
+        const result = prepareCatalog(bindings);
+        unchanged = result.fingerprint === catalog.identityFingerprint;
+        if (!unchanged) prepared = result.prepared;
       } catch {
-        unchanged = false; // 绑定形状异常 → 交给 buildCatalog 抛规范错误,不在此处分叉
+        unchanged = false;
       }
-      if (unchanged) return { eligibilityGeneration };
+      if (unchanged) return { eligibilityGeneration, invalidatedNames: [] };
 
-      const nextCatalog = buildCatalog(bindings, {
-        now: clock.now(),
-        // 单调计数而非时钟:同一毫秒内连刷 / 冻结时钟下 generation 仍唯一且可复现。
-        generation: `g${eligibilityGeneration + 1}`,
-      });
-      const nextIndex = buildSearchIndex(Array.from(nextCatalog.entries.values()));
+      // prepared === null 说明规范化阶段就抛了：buildCatalog 重跑一遍得到规范错误。
+      const nextCatalog = prepared !== null
+        ? catalogFromPrepared(prepared, { now: clock.now(), generation: `g${eligibilityGeneration + 1}` })
+        : buildCatalog(bindings, { now: clock.now(), generation: `g${eligibilityGeneration + 1}` });
+      // 同名 toolId + 同 searchDocumentId 的条目直接复用上一版 doc，不重分词。
+      const nextIndex = buildSearchIndex(Array.from(nextCatalog.entries.values()), index);
       catalog = nextCatalog;
       index = nextIndex;
       eligibilityGeneration += 1;
       refStore.dropForEligibility(eligibilityGeneration);
-      // 游标也全部绑定旧资格代次，既已不可用就立即回收，而不是等 TTL。
       cursorStore.clear();
 
+      const invalidatedNames = [];
       for (const [sid, st] of sessions) {
         let cur = st;
         for (const [toolId, sel] of st.selected) {
           const e = nextCatalog.entries.get(toolId);
           const gone = !e;
           const changed = Boolean(e) && (e.revision !== sel.revision || e.name !== sel.name);
-          if (gone || changed) cur = invalidateTool(cur, toolId, gone ? 'tool-removed' : 'definition-changed', clock.now());
+          if (gone || changed) {
+            invalidatedNames.push(sel.name);
+            cur = invalidateTool(cur, toolId, gone ? 'tool-removed' : 'definition-changed', clock.now());
+          }
         }
         sessions.set(sid, cur);
       }
-      return { eligibilityGeneration };
+      return { eligibilityGeneration, invalidatedNames };
     },
 
-    // ---- 恢复 -----------------------------------------------------------
-    /**
-     * 冷恢复:按 seq 折叠 canonical 对,与当前资格取交集;**只证明 wire 合同**。
-     * @param {any[]} pairs
-     * @param {any} scope
-     */
-    restore(pairs, scope) {
-      if (disposed) return { mode: 'incompatible', applied: 0, rejected: 0 };
-      let st;
-      try {
-        st = requireState(scope);
-      } catch (e) {
-        return { mode: 'incompatible', applied: 0, rejected: 0, error: toDomainError(e, explicitLocale).code };
-      }
-      if (!Array.isArray(pairs)) {
-        sessions.set(scope.sessionId, setSessionMode(st, 'incompatible'));
-        return { mode: 'incompatible', applied: 0, rejected: 0 };
-      }
-      const sorted = pairs
-        .filter((p) => isPlainObject(p) && typeof p.seq === 'number')
-        .sort((a, b) => (a.resultSeq ?? a.seq) - (b.resultSeq ?? b.seq));
-      // 按 seq 去重(同 seq 只折叠第一次)
-      /** @type {Set<number>} */
-      const seenSeq = new Set();
-      const deduped = sorted.filter((p) => {
-        if (seenSeq.has(p.seq)) return false;
-        seenSeq.add(p.seq);
-        return true;
-      });
-
-      let applied = 0;
-      let rejected = 0;
-      /** 拒绝原因分布（reducePair 的 reason）：restore:folded 日志据此可取证
-       * "哪个周期/哪对回执为什么没被认出来"，而不是只有一个总数。 */
-      const rejectedReasons = {};
-      let cur = st;
-      for (const p of deduped) {
-        const out = reducePair(cur, p, {
-          now: () => clock.now(),
-          catalog,
-          protectedToolIds: protectedToolIdsNow(),
-          protectedNames: tolerantLoadProtected ? strictProtectedNames : protectedNames,
-          resolveRef: undefined,
-        });
-        cur = out.state;
-        if (out.applied) applied += 1;
-        else {
-          rejected += 1;
-          const reason = out.reason ?? 'unknown';
-          rejectedReasons[reason] = (rejectedReasons[reason] ?? 0) + 1;
-        }
-      }
-      // 与当前资格取交集:不再解析的定义作废
-      for (const [toolId, sel] of cur.selected) {
-        const e = catalog.entries.get(toolId);
-        if (!e || e.revision !== sel.revision) cur = invalidateTool(cur, toolId, 'not-eligible-after-restore', clock.now());
-      }
-      cur = setSessionMode(cur, 'ready');
-      sessions.set(scope.sessionId, cur);
-      return { mode: 'ready', applied, rejected, rejectedReasons, coldCandidateRestores: cur.integrity.coldCandidateRestores };
-    },
-
-    /**
-     * 恢复完成(全新会话无 journal 时直接 ready)。
-     * @param {any} scope
-     */
-    ready(scope) {
-      const st = requireState(scope);
-      if (st.mode === 'restoring') {
-        sessions.set(scope.sessionId, setSessionMode(st, 'ready'));
-      }
-    },
-
-    /** 不可信恢复 → fail closed,保持不可执行。 */
-    failClosed(scope) {
-      const st = requireState(scope);
-      sessions.set(scope.sessionId, setSessionMode(st, 'incompatible'));
-    },
-
-    /** 销毁会话(会话销毁 / HMR):注销缓存引用,不影响历史日志。 */
+    /** 销毁会话：注销 ref/cursor/锁。 */
     destroySession(sessionId) {
       sessions.delete(sessionId);
       locks.delete(sessionId);
-      // 未决预留也属于这个会话：每条 `pending` 都握着整份 `input`（原始请求）与期望回执，
-      // 而收口只有 applyCanonicalPair / cancelOperation / resetCacheEpoch / dispose 四条路径。
-      // 会话销毁是第五条 —— 漏掉它就把最后一次 load 的现场留到插件结束（实测可复现）。
-      for (const [operationId, op] of pending) {
-        if (op?.sessionId !== sessionId) continue;
-        // 会话已销毁：删除接纳，迟到回执不得在重建的会话里折叠激活。
-        pending.delete(operationId);
-      }
-      // 会话级 store 也要回收：ref / cursor 都按 sessionId 归属，sessionId 重建后
-      // 旧条目仍会解析成功（同一会话的残留数据）。
       refStore.dropForSession(sessionId);
       cursorStore.dropForSession(sessionId);
     },
@@ -1037,13 +615,9 @@ export function createDiscoveryEngine(config) {
       disposed = true;
       refStore.clear();
       cursorStore.clear();
-      pending.clear();
       sessions.clear();
       locks.clear();
     },
-
-    // 供测试 / adapter 观察
-    getPendingSize: () => pending.size,
   };
   return api;
 }

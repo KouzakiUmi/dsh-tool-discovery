@@ -33,12 +33,14 @@ export function globalToolInventory(tools) {
 
 // 当前 agent 实际绑定的 preset 修订才是授权来源，不信 session header 字符串或设置页全局目录。
 // 只保留 preset 自有登记且原生 scope 仍允许的工具；其它 preset 与 agent 后装 scoped 工具不在内。
-export function presetToolNamesOf(tools, agentPresets, agentScope) {
+// viewFor 可传共享视图提供者：调用方（currentAlwaysNames）本轮已经构造了
+// unrestricted view 闭包，直接复用，不再对同一 scope 构造第二遍 layer 遍历。
+export function presetToolNamesOf(tools, agentPresets, agentScope, viewFor = (scope) => tools.view(scope)) {
   if (typeof agentPresets?.generationFor !== 'function' || agentScope?.ctx === undefined) return [];
   const generation = agentPresets.generationFor(agentScope.ctx);
   if (generation?.key === undefined || typeof tools?.layers?.peek !== 'function') return [];
   const names = new Set();
   addLayer(names, tools.layers.peek(generation.key));
-  const visible = tools.view(agentScope).visible;
+  const visible = viewFor(agentScope).visible;
   return [...names].filter(name => visible.has(name)).sort();
 }

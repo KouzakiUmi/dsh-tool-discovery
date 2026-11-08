@@ -23,9 +23,7 @@ test('AL2 dispose rejects pending waits immediately and permanently forbids old 
   const failure = assert.rejects(waiting, disposed);
   live.dispose();
   await failure;
-  assert.throws(() => live.ensureRuntime({ id: 'old' }, {}), disposed);
   assert.throws(() => live.runtimeFor({ id: 'old' }, {}), disposed);
-  await assert.rejects(live.awaitEpochRecord('old'), disposed);
   assert.equal(live.sessions.size, 0);
   assert.doesNotThrow(() => live.dispose());
   await assert.rejects(live.waitForActive(Promise.reject(new Error('work arriving after disposal'))), disposed);

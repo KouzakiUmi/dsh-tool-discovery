@@ -1,119 +1,130 @@
-// 目录变更 × 在途预留：手造绑定，不读取评分数据；不改变候选提交/TTL 规则。
+// 目录变更 × 选择状态（rc.1 重设计）：手造绑定，不读取评分数据。
+//
+// 旧文件围绕“未决预留/原子批次/pending 取消”展开；这些机制已删除。等价的
+// 产品目标改由“已提交选择”验证：换版/移除使选择失效并释放预算；无关新增不动
+// 既有选择；旧候选 ref 与游标随资格代次失效。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDiscoveryEngine } from '../../domain/index.mjs';
-import { makeEngine, binding, CATEGORY_CONFIG, fakeClock, fakeRandom, SCOPE_A } from './helpers.mjs';
+import { makeEngine, loadTools, binding, CATEGORY_CONFIG, fakeClock, fakeRandom, SCOPE_A } from './helpers.mjs';
 
 const seed = () => ['task_tool', 'cheap_tool', 'spare_tool', 'last_tool'].map(name => binding({ name, namespace: 'files', skill: null }));
 const enlarged = () => binding({ name: 'task_tool', namespace: 'files', generation: 'g2', description: 'expanded schema '.repeat(100), skill: null });
-let serial = 0;
 async function scene(budgets = {}) {
   const bindings = seed();
   const { engine } = await makeEngine({ bindings, engineConfig: { budgets } });
-  let seq = 0;
-  const request = async (input) => {
-    const operationId = `cw_${++serial}`, callSeq = seq++;
-    return { input, operationId, callSeq, out: await engine.handleLoad(input, SCOPE_A, { operationId }) };
-  };
+  const request = (input) => loadTools(engine, SCOPE_A, input);
   const inputFor = (path, name = 'task_tool') => path === 'name' ? { names: [name] } : {
     candidates: [{ ref: engine.handleSearch({ category: 'files', query: name }, SCOPE_A).data.candidates.find(c => c.name === name).ref }],
   };
-  const fold = p => engine.applyCanonicalPair({ seq: p.callSeq, resultSeq: seq++,
-    call: { operationId: p.operationId, tool: 'tool_load', input: p.input },
-    result: { isError: false, ok: true, payload: structuredClone(p.out.response.data.receipt) },
-  }, SCOPE_A);
   const stats = () => engine.handleList({ view: 'state' }, SCOPE_A).data.budgets;
-  return { engine, bindings, request, inputFor, fold, stats };
+  return { engine, bindings, request, inputFor, stats };
 }
 
 for (const path of ['name', 'candidate']) {
-  test(`CW1 ${path}: 旧版本预留不能让新大 schema 被当成零新增`, async () => {
-    const s = await scene({ maxActiveSchemaBytes: 300 });
-    const old = await s.request(s.inputFor(path)); assert.equal(old.out.response.ok, true);
-    s.engine.refreshCatalog([enlarged(), ...s.bindings.slice(1)]);
-    const current = await s.request({ names: ['task_tool'] });
-    assert.equal(current.out.response.ok, false, '新版本必须重新核算，不能借用旧 toolId 的预留');
-    assert.equal(current.out.response.error.code, 'BUDGET_EXCEEDED');
-    assert.equal(s.stats().activeSchemaBytes, 0);
-    assert.equal(s.engine.getPendingSize(), 1, '只移除计费资格，不粗暴取消未决回执');
-    assert.equal(s.fold(old).applied, false, '旧定义最终回执仍不应提交');
-    assert.equal(s.engine.getPendingSize(), 0);
-  });
-  test(`CW2 ${path}: 无法提交的旧版本不阻塞另一项小工具`, async () => {
+  test(`CW1 ${path}: 换版后旧选择失效，新大 schema 必须重新核算预算`, async () => {
     const s = await scene({ maxActiveSchemaBytes: 300 });
     const old = await s.request(s.inputFor(path));
+    assert.equal(old.response.ok, true);
+    assert.equal(s.stats().activeCount, 1);
+
+    const outcome = s.engine.refreshCatalog([enlarged(), ...s.bindings.slice(1)]);
+    assert.deepEqual(outcome.invalidatedNames, ['task_tool']);
+    assert.equal(s.stats().activeCount, 0, '旧版本选择不得继续占预算');
+    assert.equal(s.engine.getState(SCOPE_A).invalidated.get('t_task_tool').reason, 'definition-changed');
+
+    const current = await s.request({ names: ['task_tool'] });
+    assert.equal(current.response.ok, false, '新版本必须重新核算，不能借用旧 toolId 的预算');
+    assert.equal(current.response.error.code, 'BUDGET_EXCEEDED');
+    assert.equal(s.stats().activeCount, 0);
+  });
+  test(`CW2 ${path}: 失效选择不阻塞另一项小工具`, async () => {
+    const s = await scene({ maxActiveSchemaBytes: 300 });
+    assert.equal((await s.request(s.inputFor(path))).response.ok, true);
     s.engine.refreshCatalog([enlarged(), ...s.bindings.slice(1)]);
     const small = await s.request({ names: ['cheap_tool'] });
-    assert.equal(small.out.response.ok, true);
-    assert.equal(s.fold(small).applied, true);
+    assert.equal(small.response.ok, true);
     assert.equal(s.stats().activeCount, 1);
-    assert.equal(s.fold(old).applied, false);
-    assert.equal(s.stats().activeCount, 1, '迟到失败不能释放另一笔合法选择');
-    assert.equal(s.engine.getPendingSize(), 0);
+    assert.deepEqual([...s.engine.getState(SCOPE_A).selected.values()].map((x) => x.name), ['cheap_tool']);
   });
 }
 
 for (const change of ['changed', 'removed']) {
-  test(`CW3 ${change}: 原子批次一项失效后整笔预留不再计费`, async () => {
+  test(`CW3 ${change}: 批次中一项失效只作废该项，其余选择与预算保持不变`, async () => {
     const s = await scene({ maxActiveTools: 2 });
-    const old = await s.request({ names: ['task_tool', 'cheap_tool'] }); assert.equal(old.out.response.ok, true);
-    s.engine.refreshCatalog(change === 'changed' ? [enlarged(), ...s.bindings.slice(1)] : s.bindings.slice(1));
-    assert.equal(s.stats().activeCount, 0, '不能继续为同一失败批次的其它项保留额度');
-    const next = await s.request({ names: ['spare_tool', 'last_tool'] });
-    assert.equal(next.out.response.ok, true); assert.equal(s.fold(next).applied, true);
-    assert.equal(s.fold(old).applied, false); assert.equal(s.stats().activeCount, 2);
+    const old = await s.request({ names: ['task_tool', 'cheap_tool'] });
+    assert.equal(old.response.ok, true);
+    assert.equal(s.stats().activeCount, 2);
+
+    const outcome = s.engine.refreshCatalog(change === 'changed' ? [enlarged(), ...s.bindings.slice(1)] : s.bindings.slice(1));
+    assert.deepEqual(outcome.invalidatedNames, ['task_tool']);
+    assert.equal(s.stats().activeCount, 1, '只有失效项离开预算');
+    assert.equal(s.engine.getState(SCOPE_A).invalidated.get('t_task_tool').reason,
+      change === 'changed' ? 'definition-changed' : 'tool-removed');
+
+    const next = await s.request({ names: ['spare_tool'] });
+    assert.equal(next.response.ok, true);
+    assert.equal((await s.request({ names: ['last_tool'] })).response.error.code, 'BUDGET_EXCEEDED');
+    assert.equal(s.stats().activeCount, 2);
   });
 }
 
-for (const frozen of [false, true]) {
-  test(`CW4 frozen=${frozen}: 失效批次不释放独立存在的 selected/frozen`, async () => {
-    const s = await scene({ maxActiveTools: 2 });
-    const committed = await s.request({ names: ['cheap_tool'] }); assert.equal(s.fold(committed).applied, true);
-    if (frozen) s.engine.recordAdvertisement(SCOPE_A, { ...s.engine.getCatalog().entries.get('t_cheap_tool'), requestId: 'cw_header' });
-    const old = await s.request({ names: ['task_tool', 'cheap_tool'] }); assert.equal(old.out.response.ok, true);
-    s.engine.refreshCatalog([enlarged(), ...s.bindings.slice(1)]);
-    assert.equal(s.stats().activeCount, 1);
-    const next = await s.request({ names: ['spare_tool'] }); assert.equal(next.out.response.ok, true);
-    assert.equal(s.fold(next).applied, true);
-    assert.equal((await s.request({ names: ['last_tool'] })).out.response.error.code, 'BUDGET_EXCEEDED');
-    assert.equal(s.fold(old).applied, false); assert.equal(s.stats().activeCount, 2);
-  });
-}
+test('CW4: 既有的独立选择不随另一个工具的失效而释放', async () => {
+  const s = await scene({ maxActiveTools: 2 });
+  assert.equal((await s.request({ names: ['cheap_tool'] })).response.ok, true);
+  assert.equal((await s.request({ names: ['task_tool'] })).response.ok, true);
+  s.engine.refreshCatalog([enlarged(), ...s.bindings.slice(1)]);
 
-test('CW5: 真正的无关目录新增不取消合法 names 在途操作或释放其额度', async () => {
-  const s = await scene({ maxActiveTools: 1 });
-  const old = await s.request({ names: ['task_tool'] });
-  s.engine.refreshCatalog([...s.bindings, binding({ name: 'another_tool', namespace: 'files', skill: null })]);
-  assert.equal(s.stats().activeCount, 1);
-  assert.equal((await s.request({ names: ['cheap_tool'] })).out.response.error.code, 'BUDGET_EXCEEDED');
-  assert.equal(s.fold(old).applied, true);
-  const repeated = await s.request({ names: ['task_tool'] }); assert.equal(repeated.out.response.ok, true);
-  assert.equal(s.fold(repeated).applied, true); assert.equal(s.stats().activeCount, 1);
+  assert.equal(s.stats().activeCount, 1, 'cheap_tool 仍在 selected');
+  assert.deepEqual([...s.engine.getState(SCOPE_A).selected.values()].map((x) => x.name), ['cheap_tool']);
+  const next = await s.request({ names: ['spare_tool'] });
+  assert.equal(next.response.ok, true);
+  assert.equal((await s.request({ names: ['last_tool'] })).response.error.code, 'BUDGET_EXCEEDED');
+  assert.equal(s.stats().activeCount, 2);
 });
 
-test('CW6: 不改变既有候选代次校验，待正式失败后才释放该未决操作', async () => {
+test('CW5: 真正的无关目录新增不作废合法选择，也不释放其预算', async () => {
   const s = await scene({ maxActiveTools: 1 });
-  const input = s.inputFor('candidate'); const old = await s.request(input);
-  s.engine.refreshCatalog([...s.bindings, binding({ name: 'another_tool', namespace: 'files', skill: null })]);
-  assert.equal((await s.request(input)).out.response.error.code, 'CANDIDATE_UNAVAILABLE');
-  assert.equal(s.stats().activeCount, 1, '本轮只过滤定义版本失效，不改候选事务规则');
-  assert.equal(s.fold(old).applied, false);
-  assert.equal(s.stats().activeCount, 0);
-  const next = await s.request({ names: ['cheap_tool'] }); assert.equal(next.out.response.ok, true);
-  assert.equal(s.fold(next).applied, true);
+  assert.equal((await s.request({ names: ['task_tool'] })).response.ok, true);
+  const outcome = s.engine.refreshCatalog([...s.bindings, binding({ name: 'another_tool', namespace: 'files', skill: null })]);
+  assert.deepEqual(outcome.invalidatedNames, []);
+  assert.equal(s.stats().activeCount, 1);
+  assert.equal((await s.request({ names: ['cheap_tool'] })).response.error.code, 'BUDGET_EXCEEDED');
+  const repeated = await s.request({ names: ['task_tool'] });
+  assert.equal(repeated.response.ok, true);
+  assert.deepEqual(repeated.admitted, [], '同版本重复 load 幂等');
+  assert.equal(s.stats().activeCount, 1);
 });
 
-test('CW7: 相同 wire 的新绑定也不能借用旧版本预留，但当前预留仍去重', async () => {
+test('CW6: 目录变化后旧候选 ref 失效，重新检索的新 ref 可用', async () => {
   const s = await scene({ maxActiveTools: 1 });
-  const old = await s.request({ names: ['task_tool'] });
-  const rebound = structuredClone(s.bindings); rebound[0].bindingGeneration = 'new_generation';
-  s.engine.refreshCatalog(rebound);
+  const oldRef = s.inputFor('candidate');
+  assert.equal((await s.request(oldRef)).response.ok, true);
+  s.engine.refreshCatalog([...s.bindings, binding({ name: 'another_tool', namespace: 'files', skill: null })]);
+  const stale = await s.request(oldRef);
+  assert.equal(stale.response.error.code, 'CANDIDATE_UNAVAILABLE');
+  assert.equal(s.stats().activeCount, 1, '资格代次变化只作废 ref，不改选择');
+  const fresh = s.inputFor('candidate', 'cheap_tool');
+  assert.equal((await s.request(fresh)).response.error.code, 'BUDGET_EXCEEDED');
+  assert.equal((await s.request({ names: ['cheap_tool'] })).response.error.code, 'BUDGET_EXCEEDED');
+});
+
+test('CW7: 相同 wire 的新绑定也重新核算；当前选择仍去重', async () => {
+  const s = await scene({ maxActiveTools: 1 });
+  assert.equal((await s.request({ names: ['task_tool'] })).response.ok, true);
+  const rebound = structuredClone(s.bindings);
+  rebound[0].bindingGeneration = 'new_generation';
+  const outcome = s.engine.refreshCatalog(rebound);
+  assert.deepEqual(outcome.invalidatedNames, ['task_tool']);
   assert.equal(s.stats().activeCount, 0);
-  const current = await s.request({ names: ['task_tool'] }); assert.equal(current.out.response.ok, true);
-  const duplicate = await s.request({ names: ['task_tool'] }); assert.equal(duplicate.out.response.ok, true);
+
+  const current = await s.request({ names: ['task_tool'] });
+  assert.equal(current.response.ok, true);
+  assert.equal(current.admitted.length, 1);
+  const duplicate = await s.request({ names: ['task_tool'] });
+  assert.equal(duplicate.response.ok, true);
+  assert.deepEqual(duplicate.admitted, []);
   assert.equal(s.stats().activeCount, 1);
-  assert.equal(s.fold(old).applied, false); assert.equal(s.fold(current).applied, true);
-  assert.equal(s.fold(duplicate).applied, true); assert.equal(s.stats().activeCount, 1);
 });
 
 // 仅同步构造期间跟踪原生 Map 分配以观察真实游标 store，不替换业务方法；立即恢复全局 Map。

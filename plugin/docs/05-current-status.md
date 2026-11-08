@@ -1,6 +1,6 @@
 # 05 · 当前状态
 
-更新日期：**2026-11-01**（Asia/Hong_Kong）。对应源码 manifest `0.5.1`，统一 tool_load / tool_search / tool_list 的请求形状判定口径，修复候选与 names 两条路径的在途检测，并在协议层拒绝纯空白 cursor；本批以 `v0.5.1` 标签驱动正式版本，npm 发布状态以 registry 为准。
+更新日期：**2026-11-07**（Asia/Hong_Kong）。对应源码 manifest `0.6.0`：宿主支持收敛为 **DSH Core `0.2.2-rc.1`+**，整套实现按准入设计重写（规格见 [14](<14-rc1-redesign.md>)），旧投影/epoch/journal/PTC/描述精简子系统整体移除。npm 发布状态以 registry 为准。
 现行行为见 [00 当前实现契约](<00-current-contract.md>)，验收判据见 [03](<03-implementation-and-acceptance.md>)。
 本文不登记未经重新核验的远端最新发布、STORE 收录或在线安装状态。
 
@@ -10,20 +10,55 @@
 旧文件中的“本轮”“当前宿主”“未发布”“待合并”仅在其取证时点成立，不自动滚动到今天。
 历史记录保留在 [04](<04-runtime-evidence.md>)、[06](<06-rewrite-changelog.md>)、[07](<07-lifecycle-recovery-coverage.md>)、[08](<08-trusted-epoch-baselines.md>)、[10](<10-store-compatibility.md>)、[11](<11-code-review-findings.md>) 与私有证据中。
 
-**版本坐标**：本源码 manifest 为 `0.5.1`。npm 发布与 provenance 以 registry 为准；GitHub Release/tarball 不能替代 npm 发布证明。每个绿色 main 构建会产出 `build-<sha>` 资产，正式语义版本由 `v<version>` 标签驱动；本次准备 `v0.5.1` 标签，npm 是否随之发布须单独核对 registry。
-上游记录的 2026-10-06 重建前历史（`2a1f9c0`、`257ddc0` 等）已淘汰，不作为本批证据来源。
+**版本坐标**：本源码 manifest 为 `0.6.0`、协议版本 `3`。npm 发布与 provenance 以 registry 为准；GitHub Release/tarball 不能替代 npm 发布证明。
 
 ### 0.1 版本与兼容
 
-- 包版本：`0.5.1`；协议版本：`2`。不要把包版本当 Core 版本。
-- manifest 的 Core peer 准入范围为 `>=0.2.1-alpha.1`；显式兼容声明仍只将 alpha.1、alpha.2 标为 `compatible`，`0.2.0-rc.2` 为 `unknown`。未列出的新版本不据此变成“已测”。
-- `schemastery` peer 仍是 `3.18.5-alpha.1`；不能把所有 peer 都描述成同一开放 Core 范围。
-- 本次组合测试核实公共安装的 DSH 服务为 `0.2.1-rc.3`；不据此扩大 manifest 的兼容声明。[04](<04-runtime-evidence.md>) 的 alpha.1 现场与 [10](<10-store-compatibility.md>) 的 alpha.2 实验均是历史坐标。
-- 整合的 PR #18 后续修复保留有序 wire 独立副本、getter/toJSON 内容变化拒绝、逐项字节累计及末页节省判定。字节上限约束响应构造，不约束索引评分/排序的全部计算量。其历史 549 项结果见 0.3，不冒充本轮宿主验收。
+- 包版本：`0.6.0`；协议版本：`3`（不再与 0.5.x 的 `2` 兼容，调用处须显式传 3 或依赖默认）。不要把包版本当 Core 版本。
+- 安装准入由 `engines.dsh` = `>=0.2.2-rc.1` 声明（0.2.2-rc.1 的 app-boot 有它时只按它判定，不再逐个比对含 optional 在内的 dsh peer）；Core peer 范围同为 `>=0.2.2-rc.1`。`@deepseek-ai/dsh-llm` 与 `@deepseek-ai/dsh-tool-executor-ptc` peer 已随 0.6.0 移除。
+- `dshReleases`：`0.2.2-rc.1` 为 `compatible`，`0.2.1-alpha.1`/`0.2.1-alpha.2`/`0.2.0-rc.2` 为 `incompatible`；0.2.2 更晚版本未逐一验收。
+- `schemastery` peer 为 `>=3.18.5-alpha.1 <4`（0.2.2-rc.1 自带 `3.19.0`）。
+- 组合测试锚点为 `.probe/install-root-rc1`（从 DSH NEXT `2.0.22-next` 桌面壳 `app.asar` 解包；Core / dsh-tools / executor 均为 `0.2.2-rc.1`，Cordis `4.1.0`）。这不是逐版本兼容声明。
 
-### 0.2 本次运行证据
+### 0.2 当前优化验证（2026-11-07，0.6.0 工作区）
 
-2026-11-01，Node **v24.13.0**。产品代码对应修复提交 `23e61a5`（在 `ac37bbc` 请求形状统一之上补在途 load 口径与纯空白 cursor），发布准备仅更新版本与文档。本机全局 npm 树中的两棵 DSH 安装已于 10-30 被清空，旧锚点不可复用；本次 `DSH_INSTALL_ROOT` 指向从桌面壳 `app.asar` 解包的 `dsh/` 子树（Core 全量依赖与原生 unpacked 模块齐备，desktop `0.2.1-rc.5`），react / react-reconciler / scheduler 由本机 npm 缓存离线装入同一锚点。
+目标锚点为 `.probe/install-root-rc1`，真实公共服务 + mock provider + 测试私有存储。单测使用 Node v24.13.0，组合使用捆绑 Node v24.21.0；未安装、重启或访问在线 GUI。
+
+- 全量单测：482 pass / 0 fail / 4 skip（486，exit 0）；跳过项为锚点缺 react-reconciler 的渲染用例。
+- 全量组合：81 pass / 0 fail / 0 skip（exit 0），含新增 11 项撤权/恢复/配置/步骤/掩码边界覆盖。
+- 仓库一致性与 diff 空白检查通过。质量集保留 H037/H044 既有三项跨类别期望问题，冻结标签未改，不发布评分。
+- 20 次 load/unload 循环：纯掩码引发的全会话目录刷新 40 → 0；保留 filter 引用 41 → 1，实际安装均为 1 层。这是特定测试的事件/引用计数，不是 token 或时延收益。
+
+当前实现采用 storageDomain 快照/delete、晚 seed 撤销墓碑、open 排队与关闭排空；混批 unload 原子校验；toolSet 绑定步骤准入快照；常驻配置 engine/mask/guard 同源；掩码旧引用及时回收。持续 I/O 错误下 durable 仍是 best-effort。
+
+### 历史迁移记录（2026-11-06，0.6.0 工作区）
+
+Node **v24.21.0**（DSH NEXT 运行时自带）。`DSH_INSTALL_ROOT` 指向 `.probe/install-root-rc1`；TMP 指向工作区私有目录。真实 provider、模型行为、在线 GUI、Profile 安装与 HMR 均未验收。
+
+| 本次实际执行 | 退出码 | 结果与边界 |
+|---|---|---|
+| `npm run check`（identity + docs 链接 + git diff） | 0 | 通过 |
+| `npm test`（unit） | — | 迁移中：单元套件由子代理批量重写，本记录时未完成全绿；基线 428 pass / 291 fail / 133 total |
+| `npm run test:composition`（真实 Loader + mock provider + 测试自有临时存储） | — | 迁移中：组合套件由子代理批量重写，本记录时部分门禁（adapter 主链、mask、terminal、PTC SDK 同源、in-history unload）已 19/19 绿，其余分批推进；完整结果待全量 |
+| `npm run check:quality` | — | 依赖未公开评分集，本记录未复跑 |
+
+产品侧本批改动：`createDiscoveryEngine` 显式 `protocolVersion: 3`；`mask` 加 `getAlwaysVisible` provider（掩码 allow-list 并入常驻）；`agent/created` 内同步 `lifecycle.runtimeFor` 再 `mask.ensure`（修复首轮 own-scope 逃逸）；`requireState` 不覆盖既有锁、disposed 即 `ENGINE_DISPOSED`；`handleLoad` 的 alwaysVisible 在 tolerant 模式不写 selected（改 `alreadyResident`）；`errorCodes` 补 `ENGINE_DISPOSED`；`locale` entry 表补 `tool_unload` 双语；`client.js` FIXED_ENTRIES 同步为 4。配置 schema 保留 inert 字段：`ptcCompatibility`/`compactBuiltin*`/`requireTrustedEpoch(+ForSubagents)`/`allowMissingSessionQuery`。
+
+### 0.2 本次运行证据（2026-11-06，DSH Core 0.2.2-rc.1 适配，未提交工作区）
+
+Node **v24.21.0**（DSH NEXT 运行时自带）。`DSH_INSTALL_ROOT` 指向从 DSH NEXT `2.0.22-next` 桌面壳 `app.asar` 解包的私有锚点 `.probe/install-root-rc1`（Core / dsh-tools / executor 均为 `0.2.2-rc.1`，Cordis `4.1.0`，schemastery `3.19.0`）；锚点缺 `react-reconciler`。TMP 指向工作区私有目录。
+
+| 本次实际执行 | 退出码 | 结果与边界 |
+|---|---|---|
+| 全量 unit | 0 | **679 pass / 0 fail / 4 skip**（683）；跳过项为锚点缺 `react-reconciler` 的客户端渲染用例，非浏览器 DOM 验收 |
+| 全部 `gate-*.test.mjs` composition | 0 | **173 pass / 0 fail / 6 skip**（179）；4 条内置描述精简用例在 provider-owned 宿主按能力跳过（rc.1 行为由 "rc.1 native leaves provider-owned builtin descriptions intact…" 覆盖），2 条为既有 rc.3 指纹门槛；旧宿主独有断言位于 `legacyHost` 分支，**本机无旧宿主安装，该分支本次未实跑** |
+| `npm run check` 与 `git diff --check` | 0 | 包身份、双语文档和相对链接通过 |
+
+改动前同一锚点基线为 unit 661/5/3、composition 144/31/2（31 个失败多为旧宿主独有断言、测试搭建不经 `agent/created`、冷恢复首轮中止三类，没有隐藏工具被执行的证据）。本批产品改动：`engines.dsh` 安装准入；resume 有 own 历史时创建期有界（3 秒）等待冷恢复再装掩码；激活前私有 registry 形状自检；自有掩码引起的 `tools/change` 跳过全量重算；压缩中止双语重发提示。真实 provider、模型行为、在线 GUI、Profile 安装与 HMR 均未验收。
+
+### 0.2.0.1 历史运行证据（2026-11-01，v0.5.1）
+
+以下“本次”仅指该批次。2026-11-01，Node **v24.13.0**。产品代码对应修复提交 `23e61a5`（在 `ac37bbc` 请求形状统一之上补在途 load 口径与纯空白 cursor），发布准备仅更新版本与文档。本机全局 npm 树中的两棵 DSH 安装已于 10-30 被清空，旧锚点不可复用；本次 `DSH_INSTALL_ROOT` 指向从桌面壳 `app.asar` 解包的 `dsh/` 子树（Core 全量依赖与原生 unpacked 模块齐备，desktop `0.2.1-rc.5`），react / react-reconciler / scheduler 由本机 npm 缓存离线装入同一锚点。
 
 | 本次实际执行 | 退出码 | 结果与边界 |
 |---|---|---|
@@ -104,38 +139,35 @@
 
 | 面 | 当前实现与证据边界 |
 |---|---|
-| 三入口、目录、分类、词法搜索、版本与预算 | 已实现，有 portable 回归；检索指标尚未达成可发布评分 |
-| native 披露、guard、canonical 恢复 | 已实现；本次真实 Loader/mock provider 组合测试通过，范围见 0.2 |
-| 状态一致性修复 | 同名 schema 冲突、独立旧 wire 恢复、结果提交次序、技能下发和完整成功外壳预算已进入源码及回归 |
-| trusted-epoch | 已实现的**可选功能**，主/子开关默认关闭；不是“还没有实现”，也未完成全 feature 验收 |
-| 设置页 | 已实现，有 VM/配置面/历史 DOM 证据；当前 GUI 未验收 |
-| PTC 兼容 | 默认旁路，显式开启后接入 `run_code`；SDK 冻结、稳定追加、跨重启冻结仍缺失 |
-| 性能、真实 wire、自然语言搜索指标 | 没有本轮或可替代产品验收的测量结论 |
+| 四入口、目录、分类、词法搜索、版本与预算 | 已实现，有单测与组合回归；检索指标尚未达成可发布评分 |
+| native 披露、guard、admission 恢复 | 真实 Loader/mock provider 组合通过，范围见 0.2 |
+| 状态一致性 | 混批卸载原子性、晚 seed 撤销墓碑、关闭排空、同 id 恢复与步骤快照有回归 |
+| 旧 epoch/journal/projection | 已移除；兼容配置无效果 |
+| 设置页 | VM/配置面通过；四项渲染用例缺依赖跳过，当前 GUI 未验收 |
+| PTC | SDK 掩码同源测试通过；真实 worker/transport 未覆盖 |
+| 性能、真实 wire、自然语言搜索指标 | 本轮仅有掩码事件/引用计数；无 token、TTFT 或搜索评分 |
 | npm / GitHub Release / STORE / Profile | 相互独立，需核对各自实际状态；不从源码版本推断 |
 
-## 2. 已有回归保护的关键链路
+## 2. 已有回归保护的关键链路（0.6.0）
 
-- [设计契约回归](<../tests/unit/design-invariants.test.mjs>)：native 冻结迁移、当前资格与旧 wire 分离、失败/继承/header 不授信、native/PTC 加载结果完成排列、技能限额及完整响应字节上限。
-- [状态回归](<../tests/unit/state.test.mjs>)、[可选限额](<../tests/unit/optional-limits.test.mjs>)、[候选版本](<../tests/unit/load-revision-optional.test.mjs>)：回执不一致释放 pending、默认 limit 受显式 max 约束、空 revision 归一。
-- [恢复组合门禁](<../tests/composition/gate-adapter-recovery.test.mjs>)、[周期组合门禁](<../tests/composition/gate-cache-epoch.test.mjs>)：测试文件和历史结果存在；不能把“文件存在”写成“本轮跑过”。
-- [插件释放门禁](<../tests/composition/gate-plugin-disposal.test.mjs>)与 [activation unit](<../tests/unit/activation-lifetime.test.mjs>)：旧 activation 等待失效、清理和取消监听器回收；不承诺外部持有对象零内部写入或 GC 定量结果。
-- [PTC 组合门禁](<../tests/composition/gate-ptc-disclosure.test.mjs>)：fixture 与 mock provider 的 SDK 出站覆盖，不等于真实程序 worker、provider 或跨重启文本冻结。
+- 单元覆盖 domain/client 与 adapter 接缝；新增 [存储耐久性](<../tests/unit/admission-durability.test.mjs>)、[卸载原子性](<../tests/unit/unload-atomicity.test.mjs>) 与 [掩码回收](<../tests/unit/mask.test.mjs>)。
+- 组合使用真实 Loader + mock provider + 测试自有临时存储，含 settings、lifecycle、resume、isolation、PTC SDK、in-history 及 [rc.1 优化边界](<../tests/composition/gate-rc1-optimization.test.mjs>)。
+- 测试覆盖不等于真实 provider、在线 GUI 或全版本验收。
 
 ## 3. 未闭合的验证与产品边界
 
-1. **PTC SDK 逐字冻结、稳定追加和跨重启冻结**：当前实现仍按当前 `sdkSchemas` 重新渲染；执行守卫不能代替披露一致性。
-2. **真实 provider wire、token、TTFT 与任务净收益**：没有可据此发布的 A/B/C 指标。历史域内微基准不代表端到端时延。
-3. **检索质量**：类别词不得独立命中的门禁已修；Recall@K、误命中率与模型正确选择率仍未完成。私有 validator 的历史结果为 20 PASS / 1 FAIL（H037/H044 类别期望误标），不是产品搜索评分。
-4. **当前目标宿主的完整重验**：host-bound unit 和 Loader/mock provider composition 已运行；真实模型/程序 worker、完整 prompt 组合压力与浏览器自然操作仍未覆盖，不能把公共安装测试当成在线桌面 Profile 已验收。
-5. **持久化与切换**：crash/fsync、无停顿热替换原子绑定、完整 HMR 压力仍不能从正常恢复或成功压缩用例外推。
-6. **trusted-epoch 残余**：本次修复周期分叉后的持续阻断并验证完整用户迁移恢复；历史定义的新会话/迁移契约窗口及有限审查未覆盖项仍见 [08](<08-trusted-epoch-baselines.md>)，不宣布其它旧债务全闭合。
+1. **真实 provider wire、token、TTFT 与任务净收益**：没有可据此发布的 A/B/C 指标。历史域内微基准不代表端到端时延。
+2. **检索质量**：类别词不得独立命中的门禁已修；Recall@K、误命中率与模型正确选择率仍未完成。私有 validator 的历史结果为 20 PASS / 1 FAIL（H037/H044 类别期望误标），不是产品搜索评分。
+3. **当前目标宿主的完整重验**：0.2.2-rc.1 解包锚点上全量 unit 和 Loader/mock provider composition 已运行；rc.1 路径依赖私有 registry 结构，0.2.2 更晚版本须重新核验；真实模型/程序 worker、完整 prompt 组合压力与浏览器自然操作仍未覆盖，不能把公共安装测试当成在线桌面 Profile 已验收。
+4. **持久化与切换**：crash/fsync、无停顿热替换原子绑定、完整 HMR 压力仍不能从正常恢复或 admission 记录例外推。
+5. **旧子系统已移除，不是"待修复"**：epoch/journal/projection/trusted-epoch/PTC 开关/描述精简的既有缺口随 0.6.0 整体删除；对应断言不迁移为"仍待实现"。
 
 ## 4. 明确不提供的行为
 
 | 行为 | 当前约束 |
 |---|---|
-| 模型自主 unload、静默 LRU 淘汰 | 不提供；超限拒绝新增或等待用户/DSH 成功压缩 |
-| 同周期换名槽位的不同 schema | `COMPACTION_REQUIRED`，不能靠换 toolId 绕过 |
+| 静默 LRU 淘汰 | 不提供；模型可显式 tool_unload，超限拒绝新增 |
+| 同名定义无重新加载直接继承准入 | 不提供；换版失效，须重新 load |
 | 同 session 多活动 agent 并发 | 不声明支持，不能仅靠最近 header 建立无歧义归属 |
 | 全量 shadow 来源认证 | 宿主只提供胜出视图，不能补造 provider 身份 |
 | 坏历史、查询失败降级新会话 | fail closed，不用 header 推断选择或授权 |

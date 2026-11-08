@@ -21,7 +21,6 @@
 // Schema 由调用方注入（工厂 deps.Schema），生产默认按裸包名动态 import —— 与
 // defineTool 同一形状，因此工作区（无 node_modules）也不会因本模块而无法加载。
 import { CORE_TOOL_NAMES } from '../../domain/core-tools.mjs';
-import { BUILTIN_DESCRIPTION_TOOLS } from './builtin-description-options.mjs';
 import { ENTRY_TOOL_NAMES, DEFAULT_BUDGETS, OPTIONAL_LIMIT_KEYS, CONTROLLED_CATEGORIES } from '../../domain/constants.mjs';
 
 /** meta key：设置面板读取的当前工具目录。 */
@@ -65,40 +64,44 @@ export function buildConfig(Schema) {
   const alwaysVisible = Schema.array(Schema.string())
     .default([...DEFAULT_ALWAYS_VISIBLE])
     .volatile()
-    .description('Manual initial tool list. Replaces the DSH default list; current-preset retention is controlled separately. The three discovery entries are always present and cannot be removed.');
+    .description('Manual initial tool list. Replaces the DSH default list; current-preset retention is controlled separately. Changes reconcile on the next request. The four discovery entries stay available.');
   alwaysVisible.meta = { ...alwaysVisible.meta, settingConstraints: {
     budgetKeys: Object.keys(DEFAULT_BUDGETS), optionalLimitKeys: [...OPTIONAL_LIMIT_KEYS],
     categoryKeys: [...CONTROLLED_CATEGORIES],
-    builtinDescriptionTools: BUILTIN_DESCRIPTION_TOOLS.map(tool => ({ ...tool })),
+    builtinDescriptionTools: [],
   } };
   return Schema.object({
     alwaysVisible,
     initialToolsEnabled: Schema.boolean()
       .default(true)
       .volatile()
-      .description('Inject the configured initial tools. Changes take effect in a new session or after successful compaction; the three discovery entries stay available.'),
+      .description('Inject the configured initial tools. Changes reconcile on the next request; the four discovery entries stay available.'),
     alwaysAllowPresetTools: Schema.boolean()
       .default(true)
       .volatile()
-      .description('Always include tools registered by the current bound preset, even when manual initial injection is disabled. Applies at a new session or successful compaction; native permissions and eligibility remain enforced.'),
+      .description('Always include tools registered by the current bound preset, even when manual initial injection is disabled. Changes reconcile on the next request; native permissions and eligibility remain enforced.'),
+    gateOwnScopeTools: Schema.boolean()
+      .default(true)
+      .volatile()
+      .description('On (default): tools registered into the agent\'s own scope must also pass tool_load before they can execute — own-scope registrations cannot be masked by design, so admission is their only gate. Off: own-scope tools outside the catalog execute freely.'),
     compactBuiltinToolDescriptions: Schema.boolean()
       .default(false)
       .volatile()
-      .description('Off by default. Replace fingerprint-matched official tool descriptions with reviewed concise copy in native mode; parameters and execution stay unchanged. Saved without reload; applies in new sessions or after successful compaction. Unknown definitions and PTC stay unchanged.'),
-    compactBuiltinToolOverrides: Schema.dict(Schema.boolean(), Schema.union(BUILTIN_DESCRIPTION_TOOLS.map(tool => tool.name)))
+      .description('Deprecated on DSH 0.2.2: provider-owned declarations cannot be rewritten, so this setting has no effect. Kept for config compatibility.'),
+    compactBuiltinToolOverrides: Schema.dict(Schema.boolean(), Schema.string())
       .default({})
       .volatile()
-      .description('Per-tool concise-description switches, gated by compactBuiltinToolDescriptions. Omitted original five tools retain their enabled default; newly supported tools default off. Changes apply only in a new session or after successful compaction, without reloading.'),
+      .description('Deprecated on DSH 0.2.2: has no effect. Kept for config compatibility.'),
     ptcCompatibility: Schema.boolean()
       .default(false)
       .volatile()
-      .description('Off by default: PTC sessions bypass this plugin and keep the host SDK. On: discovery runs inside run_code. The three entries and the current preset initial tools are injected into the next run_code SDK instead of the model tool list. Takes effect on the next turn.'),
+      .description('Deprecated on DSH 0.2.2: discovery runs uniformly in native and PTC sessions now (SDK projections respect the same masks), so this switch has no effect. Kept for config compatibility.'),
     requireTrustedEpoch: Schema.boolean()
       .default(false)
-      .description('Opt-in strict durable epoch verification. Enabling reloads the plugin and may block existing sessions until a successful user /compact. Disabled by default; tool eligibility and protocol checks remain enforced.'),
+      .description('Removed on DSH 0.2.2 (the epoch/baseline subsystem no longer exists; admission is per-session). Kept for config compatibility, has no effect.'),
     requireTrustedEpochForSubagents: Schema.boolean()
       .default(false)
-      .description('Also require trusted epoch records for runtime-owned subagents, only when requireTrustedEpoch is on. Off by default because subagents cannot perform user /compact; changing this reloads the plugin.'),
+      .description('Removed together with requireTrustedEpoch on DSH 0.2.2. Has no effect.'),
     frameworkRetained: Schema.array(Schema.string())
       .default([])
       .description('Trusted framework-mandated tool names the projection must keep. Not user-editable here.'),

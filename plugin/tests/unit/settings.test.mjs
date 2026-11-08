@@ -16,23 +16,6 @@ import { DEFAULT_BUDGETS, OPTIONAL_LIMIT_KEYS, resolveBudgets } from '../../doma
 
 const Schema = (await import(dshModule('@deepseek-ai/schemastery'))).default
 
-test('S-U00: per-tool description map is volatile, validates keys and publishes its choices', () => {
-  const config = buildConfig(Schema)
-  const field = config.dict.compactBuiltinToolOverrides
-  assert.equal(field.meta.volatile, true)
-  assert.deepEqual(field.meta.default, {})
-  const choices = config.dict.alwaysVisible.meta.settingConstraints.builtinDescriptionTools
-  assert.equal(choices.length, 28)
-  assert.equal(choices.filter(tool => tool.defaultEnabled).length, 5)
-  const resolved = config({ compactBuiltinToolOverrides: { skill: true, bash: false } }).compactBuiltinToolOverrides
-  assert.equal(typeof resolved.get, 'function')
-  assert.deepEqual(resolved.get(), { skill: true, bash: false })
-  assert.throws(() => config({ compactBuiltinToolOverrides: { unknown: true } }))
-  assert.throws(() => config({ compactBuiltinToolOverrides: { skill: 'yes' } }))
-  const roundtrip = new Schema(config.toJSON())
-  assert.throws(() => roundtrip({ compactBuiltinToolOverrides: { unknown: true } }))
-})
-
 test('S-U01: Config.alwaysVisible 是 volatile 的 string[]，默认值是 DSH 自带工具', () => {
   const config = buildConfig(Schema)
   const node = config.dict.alwaysVisible
@@ -64,7 +47,7 @@ test('S-U04: 三个发现入口不在 alwaysVisible 字段里（配置改不动�
   assert.ok(!config.dict.alwaysVisible.meta.default.includes('tool_load'))
   assert.ok(!config.dict.alwaysVisible.meta.default.includes('tool_list'))
   assert.ok(!config.dict.alwaysVisible.meta.default.includes('tool_search'))
-  assert.deepEqual([...FIXED_ENTRY_NAMES], ['tool_list', 'tool_search', 'tool_load'])
+  assert.deepEqual([...FIXED_ENTRY_NAMES], ['tool_list', 'tool_search', 'tool_load', 'tool_unload'])
 })
 
 test('S-U05: resolveAlwaysVisible —— 替换不是并集，显式 [] 真的清空', () => {
@@ -84,8 +67,8 @@ test('S-U06: resolveAlwaysVisible 读 volatile 引用的当前值（即时生效
   assert.deepEqual(resolveAlwaysVisible(ref), ['write', 'glob'], 'volatile 引用必须读到更新后的值')
 })
 
-test('S-U07: 活目录排除三入口，按名字典序', () => {
-  const view = { visible: new Map([['tool_load', {}], ['zeta', {}], ['tool_list', {}], ['alpha', {}]]) }
+test('S-U07: 活目录排除四个入口，按名字典序', () => {
+  const view = { visible: new Map([['tool_load', {}], ['tool_unload', {}], ['zeta', {}], ['tool_list', {}], ['alpha', {}]]) }
   assert.deepEqual(nativeToolNamesOf(view), ['alpha', 'zeta'])
   assert.deepEqual(nativeToolNamesOf({ visible: new Map() }), [])
 })
@@ -105,7 +88,7 @@ test('S-U08: publishToolChoices 写进 meta 且纯 JSON（能随 schema.toJSON �
 test('S-U09: initialSelectionView —— 选中但当前不可用的项标缺失，且仍可删', () => {
   const meta = { choices: [{ name: 'alpha', available: true }] }
   const view = initialSelectionView(meta, ['alpha', 'gone_tool'])
-  assert.deepEqual(view.fixed, ['tool_list', 'tool_search', 'tool_load'])
+  assert.deepEqual(view.fixed, ['tool_list', 'tool_search', 'tool_load', 'tool_unload'])
   const gone = view.rows.find((r) => r.name === 'gone_tool')
   assert.equal(gone.available, false)
   assert.equal(gone.selected, true)
@@ -142,12 +125,15 @@ test('S-U12: 恢复默认 —— 无序比较，未变化时不产生多余写�
 test('S-U13: model.buildRows 目录 + 选择合成面板行，固定入口不进行', () => {
   const meta = { choices: [{ name: 'read' }, { name: 'glob' }], catalogComplete: true }
   const built = model.buildRows(meta, ['read', 'tool_load', 'missing_one'])
-  assert.deepEqual(built.fixed, ['tool_list', 'tool_search', 'tool_load'])
+  assert.deepEqual(built.fixed, ['tool_list', 'tool_search', 'tool_load', 'tool_unload'])
   assert.ok(!built.rows.some((r) => r.name === 'tool_load'), '固定入口不得成为可勾选行')
   assert.equal(built.rows.find((r) => r.name === 'missing_one').available, false)
   assert.equal(built.missingCount, 1)
   assert.equal(built.selectedCount, 2)
 })
+
+// 已删除：S-U00 针对 compactBuiltinToolOverrides（内置描述精简）——rc.1 上该功能
+// 不再实现，只保留兼容键；其 volatile/choices 断言由 config.mjs 的兼容字段测试取代。
 
 // --- budgets 的 null 语义：校验层与 resolveBudgets 必须同源 -------------------------
 //

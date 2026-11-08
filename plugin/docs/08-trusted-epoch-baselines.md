@@ -6,6 +6,9 @@
 > 冻结协议常量、预算表与错误码见[02](<02-protocol-and-data-model.md>)，发布门槛见
 > [03 §11](<03-implementation-and-acceptance.md>)，总状态见[05](<05-current-status.md>)。
 
+
+> **0.6.0 之后**：本文引用的 epoch/journal/projection/trusted-epoch/PTC/描述精简子系统及其测试文件已随旧投影路径整体移除；文中以 `代码` 形式出现的路径即被移除文件，仅作历史引用。
+
 ## 0. 当前配置边界（2026-10-08）
 
 本文件以下持久化契约和历史复核结论限定于**显式启用**的严格模式，不再是默认行为。主会话由 `requireTrustedEpoch: true` 控制（默认 `false`）；宿主运行时拥有的子代理还必须显式开启 `requireTrustedEpochForSubagents: true`（默认 `false`）。两项都走普通 Loader 重挂载。默认子代理使用配置基线，不因缺记录要求用户 `/compact`；显式启用子严格模式仍可阻断旧子会话，而子代理无法自行代替用户压缩。
@@ -14,7 +17,7 @@
 
 默认模式不访问可信周期存储、不合成 trusted 记录，诊断基线为 `disabled`；常驻集合来自周期开始时的配置快照，而不是历史请求头。`initialToolsEnabled`（默认 `true`）可关闭手动初始注入；独立的 `alwaysAllowPresetTools`（默认 `true`）保留当前实际绑定 preset 修订自身登记且原生可见的工具。合并后的名单和这两项开关在新会话/成功压缩边界采用；严格模式把合并名单持久化，不从全局设置目录或会话 header 推断授权。canonical load、资格、协议、历史损坏与执行校验不变。默认模式不保证冷恢复时复用严格模式的 durable 名单。
 
-当前开关回归见[可选设置组合门禁](<../tests/composition/gate-optional-settings.test.mjs>)、[全局目录与 preset 门禁](<../tests/composition/gate-global-tools-preset.test.mjs>)、[子代理开关与真实 fork 门禁](<../tests/composition/gate-subagent-epoch-option.test.mjs>)；下文旧审查发现仍按原严格模式范围保留，不能因为默认关闭而视作已经修复。UI 浏览器渲染/在线部署未验收。
+当前开关回归见[可选设置组合门禁](<../tests/composition/gate-optional-settings.test.mjs>)、[全局目录与 preset 门禁](<../tests/composition/gate-global-tools-preset.test.mjs>)、`../tests/composition/gate-subagent-epoch-option.test.mjs`；下文旧审查发现仍按原严格模式范围保留，不能因为默认关闭而视作已经修复。UI 浏览器渲染/在线部署未验收。
 
 ### 0.1 可选设置边界的独立交叉复核概述（2026-10-08）
 
@@ -256,13 +259,13 @@ null、summary 多于一条或缺失、`sourceEventSeq` 与 summary 不对应，
 
 相关门禁文件（均已存在，三者分工不同）：
 
-- [`gate-trusted-epoch.test.mjs`](../tests/composition/gate-trusted-epoch.test.mjs) —— 授权面：
+- `../tests/composition/gate-trusted-epoch.test.mjs` —— 授权面：
   污染头 / 缺记录 / 缺 provider / 手动 `/compact` 迁移 / 同 root 重启冻结 / **存储迟到
   到位不得补建初始记录（TE-LM）**。其反例判据取自一条**声明式注入**的受污染历史，用于证伪旧实现。
-- [`gate-trusted-epoch-io.test.mjs`](../tests/composition/gate-trusted-epoch-io.test.mjs) —— I/O 时序：
+- `../tests/composition/gate-trusted-epoch-io.test.mjs` —— I/O 时序：
   初始 put 被挂住 / 真实自动压缩后的新 epoch put 被挂住 / put 被拒与 SDK 不可用 / pending 期间
   dispose，以及 legacy 会话上的**真实自动**压缩**不得**迁移。
-- [`gate-trusted-epoch-fork.test.mjs`](../tests/composition/gate-trusted-epoch-fork.test.mjs) ——
+- `../tests/composition/gate-trusted-epoch-fork.test.mjs` ——
   **真实 fork** 下 baseline 记录隔离：子会话建自己的记录，绝不继承父的名单。
 
 **文件存在不等于判据已通过。** 三者都只出现在需要真实 DSH 宿主的 composition 作业里。
@@ -371,7 +374,7 @@ null、summary 多于一条或缺失、`sourceEventSeq` 与 summary 不对应，
 
 ### 5.3 §2.4c「连坐」修复（2026-10-07，分支 `feat/trusted-epoch-isolated-bad-record`）
 
-**这一轮改了产品源码**：[`trusted-epoch.mjs`](../adapters/dsh/trusted-epoch.mjs) 一处，外加门禁
+**这一轮改了产品源码**：`../adapters/dsh/trusted-epoch.mjs` 一处，外加门禁
 与单测。它修的是 §2.4c 末段那条此前如实记录为「未修」的副作用。
 
 #### 缺口到底是什么
@@ -544,7 +547,7 @@ npm 发布与安装生效全部未完成；整体仍 **WIP、未验收**。历�
 已记录的未发布 F3 改动；`package.json` 只在 `test:composition` 里**加了这一个文件**（CI 主机显式列表
 另加一行），版本未 bump，**不在**任何已发布条目内。
 
-**一个门禁文件、两例**（[gate-trusted-epoch-settlement.test.mjs](../tests/composition/gate-trusted-epoch-settlement.test.mjs)），
+**一个门禁文件、两例**（`../tests/composition/gate-trusted-epoch-settlement.test.mjs`），
 接在真实 Loader、adapter、runtime / journal / ledger、agent 与真实用户 `/compact` 上，**无
 `createLifecycle` fake、无 mock apply**；注入面**按用例分列**：`TS1` = **own 段为空的 bootstrap**
 （`resolveBootstrapBaseline` 的 post-begin 裁决点），**仅**注入 `table().put` 写屏障；`TS2` = **真
@@ -558,7 +561,7 @@ legacy**（段一不装配 adapter → 真实 own 出站事实、表里无记录
 的**忠实**形态（F3 之前代码：单次 `load()`、单次判态）→ **只 TS2 红**；粗改成**连 `load()` 都不调用**只红
 在**前置**上，属**弱反例**。二者钉住**两个可重复的结算契约**，但**都不证明真实宿主会自然产生这两条窗口**。
 
-**新增可移植单测 `TE-U19`**（[unit/trusted-epoch.test.mjs](../tests/unit/trusted-epoch.test.mjs)），用
+**新增可移植单测 `TE-U19`**（`../tests/unit/trusted-epoch.test.mjs`），用
 **声明式注入的测试存储**，只钉三条：记录键由构造时冻结的身份编码、迟到 resolve 不覆盖 runtime
 `identity` / `names`、冷恢复按最新 identity 取名单。它**不宣称真实 SDK 的内部提交 / 排队时点**（其 map
 是 fixture 记录视图，非物理介质），也**不断言**「旧 put 绝不落盘」；分辨力在**私有副本**上验过。
@@ -586,14 +589,14 @@ npm** / 未打 semantic tag。上文所有"仍未完成"与"未验收"结论**�
 
 ## 6. 相关文件
 
-- 门禁：[`gate-trusted-epoch.test.mjs`](../tests/composition/gate-trusted-epoch.test.mjs)、
-  [`gate-trusted-epoch-io.test.mjs`](../tests/composition/gate-trusted-epoch-io.test.mjs)、
-  [`gate-trusted-epoch-fork.test.mjs`](../tests/composition/gate-trusted-epoch-fork.test.mjs)
-- pending 结算门禁：[`gate-trusted-epoch-settlement.test.mjs`](../tests/composition/gate-trusted-epoch-settlement.test.mjs)
-- 恢复收尾单测（**纯可移植**，无宿主 SDK）：[`lifecycle-settlement.test.mjs`](../tests/unit/lifecycle-settlement.test.mjs)
-- 改动面：[`adapters/dsh/journal.mjs`](../adapters/dsh/journal.mjs)、
+- 门禁：`../tests/composition/gate-trusted-epoch.test.mjs`、
+  `../tests/composition/gate-trusted-epoch-io.test.mjs`、
+  `../tests/composition/gate-trusted-epoch-fork.test.mjs`
+- pending 结算门禁：`../tests/composition/gate-trusted-epoch-settlement.test.mjs`
+- 恢复收尾单测（**纯可移植**，无宿主 SDK）：`../tests/unit/lifecycle-settlement.test.mjs`
+- 改动面：`../adapters/dsh/journal.mjs`、
   [`adapters/dsh/lifecycle.mjs`](../adapters/dsh/lifecycle.mjs)、
   [`adapters/dsh/guard.mjs`](../adapters/dsh/guard.mjs)、
-  [`adapters/dsh/projection.mjs`](../adapters/dsh/projection.mjs)
+  `../adapters/dsh/projection.mjs`
 - 协议与状态口径：[02](<02-protocol-and-data-model.md>)、[05](<05-current-status.md>)、
   [07](<07-lifecycle-recovery-coverage.md>)

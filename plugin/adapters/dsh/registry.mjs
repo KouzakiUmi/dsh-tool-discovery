@@ -57,6 +57,50 @@ export function scopeKeyOf(scope) {
 }
 
 /**
+ * definition 实例 → {probe, digest} 的进程级缓存。
+ *
+ * 宿主对**任一 scope** 的任意注册动作都广播 tools/change，两条消费路径都要对
+ * **同一批** definition 算 wire 摘要：
+ *   * bindingGenerationFor（每会话每绑定）—— digest 进绑定代次；
+ *   * registry-change 的 registry 指纹（每次变更整个注册表一遍）。
+ * 同一实例 + 相同内容探针 → 同一份 wire → 同一个 canonical digest，故共享一张
+ * WeakMap 天然一致：探针是 wire 实际读取的三个字段（name/description/parameters
+ * 的直接属性读取，与 wireOfDefinition 同一读取面；不读其它字段，避免触发无关
+ * getter）的普通 JSON.stringify（约 canonical 的 1/5 成本）。
+ *
+ * 残余盲区（Symbol 键携带 wire 数据、不可枚举 toJSON 快照）下可能复用到旧 digest，
+ * 但授权语义由 catalog 的 schemaDigest 判据兜底，不受影响。
+ * @type {WeakMap<object, {probe: string, digest: string}>}
+ */
+const DEFINITION_DIGESTS = new WeakMap();
+
+/**
+ * definition 的 wire 摘要：实例 + 内容探针未变时复用缓存，否则当场重算。
+ * 探针序列化失败（循环引用等病态形状）不缓存——让 canonical 路径每次都报错，
+ * 与"未命中"语义一致。
+ * @param {any} definition
+ * @param {object} [wire] 该定义的 wire 投影（缺省按 wireOfDefinition 现算）
+ * @returns {string}
+ */
+export function digestOfDefinition(definition, wire = wireOfDefinition(definition)) {
+  let probe;
+  try {
+    probe = JSON.stringify([definition.name, definition.description, definition.parameters]);
+  } catch {
+    probe = undefined;
+  }
+  if (probe !== undefined && definition !== null
+    && (typeof definition === 'object' || typeof definition === 'function')) {
+    const cached = DEFINITION_DIGESTS.get(definition);
+    if (cached !== undefined && cached.probe === probe) return cached.digest;
+    const digest = digestOf(wire);
+    DEFINITION_DIGESTS.set(definition, { probe, digest });
+    return digest;
+  }
+  return digestOf(wire);
+}
+
+/**
  * 资格视图适配器。
  * @param {{ctx: any, entryNames?: readonly string[], frameworkRetained?: readonly string[], log?: (msg: string, extra?: any) => void}} deps
  */
@@ -113,20 +157,14 @@ export function createRegistryAdapter(deps) {
   function bindingGenerationFor(scopeKey, toolId, definition, wire) {
     const key = bindingKey(scopeKey, toolId);
     const prev = bindingState.get(key);
-    let probe;
-    try {
-      probe = JSON.stringify([definition.name, definition.description, definition.parameters]);
-    } catch {
-      probe = undefined; // 循环引用等病态形状 → 视为已变化，交给 canonical 路径报错
-    }
-    const reusable = prev !== undefined && prev.definition === definition
-      && probe !== undefined && prev.probe === probe;
-    const digest = reusable ? prev.digest : digestOf(wire);
+    // digest 走共享缓存：同一实例 + 相同内容探针的绑定不重算 canonical；
+    // 与 registry-change 的指纹共用同一份 digest 事实。
+    const digest = digestOfDefinition(definition, wire);
     const changed = prev === undefined
       || prev.definition !== definition
       || prev.digest !== digest;
     const gen = changed ? (prev?.gen ?? 0) + 1 : prev.gen;
-    bindingState.set(key, { gen, definition, digest, probe });
+    bindingState.set(key, { gen, definition, digest });
     return `bg_${scopeKey}_${gen}`;
   }
 
@@ -170,12 +208,13 @@ export function createRegistryAdapter(deps) {
    * 入口与可信 framework 保留项不进目录（它们不可 load/unload）。
    * 每个绑定带**自己的**绑定代次（见文件头「绑定代次」段）。
    * @param {any} scope agent 或 undefined（global）
+   * @param {any} [viewOverride] 目录要用不受本插件掩码影响的可见面时显式传入
    * @returns {{bindings: any[], toolIdsByName: Map<string,string>, generation: string, scopeKey: string}}
    */
-  function bindingsFor(scope) {
+  function bindingsFor(scope, viewOverride) {
     const scopeKey = scopeKeyOf(scope);
     const generation = generationFor(scopeKey);
-    const view = ctx.tools.view(scope);
+    const view = viewOverride ?? (typeof deps.viewFor === 'function' ? deps.viewFor(scope) : ctx.tools.view(scope));
     const globalView = ctx.tools.view(undefined);
     /** @type {any[]} */
     const bindings = [];
@@ -274,11 +313,5 @@ export function createRegistryAdapter(deps) {
     diffAgainst,
     disposeScope,
     findEntryConflicts,
-    /** 当前 scope 下按名称解析的 toolId（guard/projection 只读）。 */
-    toolIdFor(scope, name) {
-      return this.bindingsFor(scope).toolIdsByName.get(name) ?? null;
-    },
-    /** 组合内的 wire 摘要（报告取证用）。 */
-    digestOfWire: digestOf,
   };
 }

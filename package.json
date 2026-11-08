@@ -1,11 +1,12 @@
 {
   "name": "dsh-tool-discovery",
-  "description": "Progressive tool discovery for DSH: three-entry control protocol with a host-independent domain kernel and a DSH adapter",
-  "version": "0.5.1",
+  "description": "Progressive tool discovery for DSH: four-entry admission protocol with a host-independent domain kernel and a DSH adapter",
+  "version": "0.6.0",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {
-    "node": "^22.19.0 || >=24.0.0"
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.2.2-rc.1"
   },
   "repository": {
     "type": "git",
@@ -37,9 +38,10 @@
     "compatibility": {
       "node": "^22.19.0 || >=24.0.0",
       "dshReleases": {
-        "0.2.0-rc.2": "unknown",
-        "0.2.1-alpha.1": "compatible",
-        "0.2.1-alpha.2": "compatible"
+        "0.2.0-rc.2": "incompatible",
+        "0.2.1-alpha.1": "incompatible",
+        "0.2.1-alpha.2": "incompatible",
+        "0.2.2-rc.1": "compatible"
       }
     }
   },
@@ -53,12 +55,11 @@
     "zod": "^4.4.3"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh": ">=0.2.1-alpha.1",
-    "@deepseek-ai/dsh-tools": ">=0.2.1-alpha.1",
-    "@deepseek-ai/dsh-llm": ">=0.2.1-alpha.1",
-    "@deepseek-ai/schemastery": "3.18.5-alpha.1",
-    "@deepseek-ai/dsh-storage-domain": ">=0.2.1-alpha.1",
-    "@deepseek-ai/dsh-home-paths": ">=0.2.1-alpha.1"
+    "@deepseek-ai/dsh": ">=0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": ">=0.2.2-rc.1",
+    "@deepseek-ai/schemastery": ">=3.18.5-alpha.1 <4",
+    "@deepseek-ai/dsh-storage-domain": ">=0.2.2-rc.1",
+    "@deepseek-ai/dsh-home-paths": ">=0.2.2-rc.1"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh": {
@@ -69,9 +70,6 @@
     },
     "@deepseek-ai/schemastery": {
       "optional": false
-    },
-    "@deepseek-ai/dsh-llm": {
-      "optional": true
     },
     "@deepseek-ai/dsh-storage-domain": {
       "optional": true

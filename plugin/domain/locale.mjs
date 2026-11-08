@@ -54,12 +54,16 @@ const MESSAGES = Object.freeze({
     },
     tool_load: {
       description:
-        'Explicitly select tools by exact native name, or by candidate ref from tool_search — the candidate revision is optional and inferred from the version that ref is bound to. Prefer loading all tools needed for the task in a single batch to maximize cache reuse. Disclosed tools accumulate and stay available until the context is compacted — there is no unload. Takes effect on the NEXT request — it never executes a target tool.',
+        'Explicitly select tools by exact native name, or by candidate ref from tool_search — the candidate revision is optional and inferred from the version that ref is bound to. Prefer loading all tools needed for the task in a single batch to maximize cache reuse. Loaded tools stay admitted until tool_unload or the session ends. Takes effect on the NEXT request — it never executes a target tool.',
       names: 'Exact native tool names to load. Mutually exclusive with candidates.',
       candidates: 'Candidates chosen by ref, as returned by tool_search. revision is optional; it defaults to the version bound to the ref. Mutually exclusive with names.',
-      action: '"load" to activate tools (the only supported action).',
-      toolIds: 'Tool IDs to unload, as reported by tool_list in the "loaded" view.',
       nextAction_loaded: 'You will see the tool schemas in the next request; call the tools then.',
+      nextAction_unloaded: 'The next request will drop these tools.',
+    },
+    tool_unload: {
+      description:
+        'Unload tools admitted earlier this session: they leave the next request\'s tool declarations and cannot be called until loaded again. Pass names from tool_list view:"loaded". Takes effect on the NEXT request.',
+      names: 'Exact native tool names to unload, as reported by tool_list in the "loaded" view.',
       nextAction_unloaded: 'The next request will drop these tools.',
     },
   },
@@ -77,10 +81,12 @@ const MESSAGES = Object.freeze({
     COMPACTION_REQUIRED: 'This name already has a different frozen definition in this cache epoch. Wait for a successful context compaction by the user or DSH, then load again. Retrying or searching again cannot replace the frozen definition.',
     BUDGET_EXCEEDED: 'Over budget: load fewer tools in this request, or let a successful context compaction (by the user or DSH) free the disclosed set. Already-disclosed tools are never evicted to make room.',
     STATE_NOT_READY: 'Session state is not ready yet.',
+    TOOL_EPOCH_UPDATED: 'Context compaction updated the tool epoch. Please resend or retry this message.',
     TOOL_NOT_LOADED: 'This tool was not explicitly loaded in this session.',
     TOOL_NOT_ADVERTISED: 'This tool is not disclosed in the current request.',
     INCOMPATIBLE_PRESENTATION: 'The current presentation mode is not supported.',
     INCOMPATIBLE_COMPOSITION: 'The current plugin composition is not supported.',
+    ENGINE_DISPOSED: 'The discovery engine has been released.',
   },
 
   // ---- guard 拒绝文案 ----
@@ -93,7 +99,6 @@ const MESSAGES = Object.freeze({
 
   // 内部错误：只用于「未知异常收敛」，不得泄漏堆栈给模型。
   error_internal: 'Internal error in the discovery kernel.',
-  ENGINE_DISPOSED: 'The discovery engine has been released.',
   missingSessionIdentityHost: 'The host session identity is unavailable.',
   sessionContextUnavailable: 'The current session context is unavailable.',
 
@@ -243,12 +248,15 @@ const MESSAGES_ZH = Object.freeze({
       nextAction_empty: '改写 query，或用 tool_list 浏览名称。',
     },
     tool_load: {
-      description: '按精确原生名称、或用 tool_search 给出的候选 ref 显式选择工具——候选 revision 可选，缺省由该 ref 绑定的版本推导。建议一次性批量加载当前任务所需的全部工具以最大化复用提示词缓存。已披露的工具会累积并保持可用，直到上下文被压缩——没有卸载。在**下一次请求**生效——它从不执行目标工具。',
+      description: '按精确原生名称、或用 tool_search 给出的候选 ref 显式选择工具——候选 revision 可选，缺省由该 ref 绑定的版本推导。建议一次性批量加载当前任务所需的全部工具以最大化复用提示词缓存。已加载的工具保持准入，直到 tool_unload 或会话结束。在**下一次请求**生效——它从不执行目标工具。',
       names: '要加载的精确原生工具名称。与 candidates 互斥。',
       candidates: '由 tool_search 返回的 ref 选出的候选；revision 可选，缺省取 ref 绑定的版本。与 names 互斥。',
-      action: '"load" 激活工具（唯一支持的动作）。',
-      toolIds: '要卸载的工具 ID，由 tool_list 的 "loaded" 视图给出。',
       nextAction_loaded: '下一次请求你会看到这些工具的 schema，届时再调用。',
+      nextAction_unloaded: '下一次请求将移除这些工具。',
+    },
+    tool_unload: {
+      description: '卸载本会话此前准入的工具：它们从下一次请求的工具声明中消失，重新 tool_load 之前不可调用。名称取自 tool_list 的 "loaded" 视图。在**下一次请求**生效。',
+      names: '要卸载的精确原生工具名称，由 tool_list 的 "loaded" 视图给出。',
       nextAction_unloaded: '下一次请求将移除这些工具。',
     },
   },
@@ -264,17 +272,18 @@ const MESSAGES_ZH = Object.freeze({
     COMPACTION_REQUIRED: '本缓存周期内，该名称已冻结披露过不同定义。请等待用户或 DSH 成功压缩上下文后再加载；重试或重新搜索不能替换冻结定义。',
     BUDGET_EXCEEDED: '已超出预算上限：请减少本次新增的工具数量，或等待一次成功的上下文压缩（由用户或 DSH 触发）释放已披露集合；已披露的工具不会为了腾出预算而被淘汰。',
     STATE_NOT_READY: '会话状态尚未就绪。',
+    TOOL_EPOCH_UPDATED: '工具周期因上下文压缩已更新，请重新发送或重试本条消息即可。',
     TOOL_NOT_LOADED: '该工具未在当前会话中显式加载。',
     TOOL_NOT_ADVERTISED: '该工具未在当前请求中披露。',
     INCOMPATIBLE_PRESENTATION: '当前展示模式不受支持。',
     INCOMPATIBLE_COMPOSITION: '当前插件组合不受支持。',
-  },
+    ENGINE_DISPOSED: '发现引擎已释放。',
+      },
   guard: {
     pendingFold: '该工具的加载正在生效，请在下一次请求中调用。',
     pendingFoldCode: 'TOOL_NOT_ADVERTISED',
   },
   error_internal: '发现内核内部错误。',
-  ENGINE_DISPOSED: '发现引擎已释放。',
   missingSessionIdentityHost: '缺少宿主会话身份。',
   sessionContextUnavailable: '当前会话上下文不可用。',
 

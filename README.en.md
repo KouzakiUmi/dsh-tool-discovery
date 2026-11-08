@@ -3,41 +3,34 @@
 
   # DSH Tool Discovery
 
-  **Three small entries and the initial tool set up front; other tools' real schemas arrive on demand.**
+  **Four small entries and the initial tool set up front; other tools' real schemas arrive on demand.**
 
   [中文](README.md) | English
 
   [![npm version](https://img.shields.io/npm/v/dsh-tool-discovery)](https://www.npmjs.com/package/dsh-tool-discovery)
   [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-  [![DSH](https://img.shields.io/badge/DSH-0.2.1--alpha.1%20%7C%200.2.1--alpha.2-informational)](plugin/docs/10-store-compatibility.md)
+  [![DSH](https://img.shields.io/badge/DSH-%3E%3D0.2.2--rc.1-informational)](plugin/docs/10-store-compatibility.md)
 
-  [Quick start](#quick-start) · [The three entries](#the-three-entries) · [Configuration](#configuration) · [Verify it yourself](#verify-it-yourself) · [Design documents](plugin/docs/README.md)
+  [Quick start](#quick-start) · [The four entries](#the-four-entries) · [Configuration](#configuration) · [Verify it yourself](#verify-it-yourself) · [Design documents](plugin/docs/README.md)
 </div>
 
 ---
 
-> This README describes the source tree with manifest `0.5.1`. Subsequent fixes are distinguished by `build-<sha>` snapshots, not implied to be present in the npm `0.5.1` release. The [current contract](plugin/docs/00-current-contract.md) consolidates current parameters, state and boundaries; frozen drafts and experiments remain dated history. The preview below primarily describes native mode. PTC bypasses discovery by default; opt-in compatibility still lacks SDK freezing.
+> This README describes the working tree with manifest `0.6.0`: from this version **only DSH Core 0.2.2-rc.1+ is supported** — the legacy projection path (frozen wire, cache epochs, trusted records, the PTC toggle, description compaction) is removed entirely. The [current contract](plugin/docs/00-current-contract.md) consolidates current parameters, state and boundaries.
 
 ## Feature preview
 
 ### Only the essentials on the first turn
 
-The first request carries just the three fixed entries, a short summary per category, and the full schemas of the default initial set. Other ordinary tools stay undisclosed and take no context.
+The first request carries just the four fixed entries, a short summary per category, and the full schemas of the default initial set. Other ordinary tools stay undisclosed and take no context.
 
 ### Picked tools appear on the next turn
 
-`tool_load` only records the selection and runs nothing; disclosure happens on the following turn, so the model reads definitions that match its choice.
+`tool_load` admits the tools and runs nothing; disclosure and execution both start on the following turn, with the definitions the catalog currently holds.
 
-### Disclosed content is never rewritten quietly
+### Retract what you no longer need
 
-Within one cache epoch, disclosed content and order are append-only, so a host-side tool upgrade cannot rewrite a definition the model has already read mid-session. Only a successful compaction resets the epoch.
-
-**The freeze guarantee currently applies to native only.** A same-name schema conflicting with the
-frozen definition returns `COMPACTION_REQUIRED`; wait for successful compaction by the user or DSH
-before loading it again. Same-schema rebinding and skill upgrades remain loadable. Native recovery
-preserves previously disclosed definitions without restoring invalid execution authority. Optional
-PTC compatibility still re-renders the current SDK: **byte freezing, stable appending, and cross-restart
-SDK freezing are not guaranteed**. That gap remains open.
+`tool_unload` removes admitted tools from the next request's declarations; revocation and version changes likewise become uncallable immediately — disclosure is retracted, not left executable.
 
 ---
 
@@ -45,14 +38,14 @@ SDK freezing are not guaranteed**. That gap remains open.
 
 | Without it | With it |
 |---|---|
-| Every registered tool's full JSON Schema is injected on the first request, whether the task needs it or not | The first request carries three small entries, a bounded category summary, and full schemas for the default initial set (DSH core tools and the current preset's retained tools); other tools' real native schemas appear in the **next** turn after explicit selection |
-| A host-side tool upgrade can silently rewrite a definition the model has already read mid-session | Disclosed wire is **append-only** within a cache epoch — the definition recorded at first disclosure is the one that keeps being sent |
+| Every registered tool's full JSON Schema is injected on the first request, whether the task needs it or not | The first request carries four small entries, a bounded category summary, and full schemas for the default initial set (DSH core tools and the current preset's retained tools); other tools' real native schemas appear in the **next** turn after explicit selection |
+| A finished tool still lingers in the context forever | `tool_unload` retracts disclosure and execution from the next request, freeing declaration space |
 | Guessing which category holds which tool | `tool_search` returns top-K candidate cards (short purpose + ref/revision), `tool_list` pages complete names; neither changes the active set |
-| No answer to "what is active right now?" | `tool_load` receipts are versioned canonical records; the `view: "state"` projection lists `selected` / `advertised` / `invalidated` |
+| No answer to "what is active right now?" | `tool_load`/`tool_unload` return immediate receipts; the `view: "state"` projection lists `selected` / `invalidated` |
 
-## The three entries
+## The four entries
 
-This is a DSH plugin. On the first request the model sees the three entries below plus a short
+This is a DSH plugin. On the first request the model sees the four entries below plus a short
 summary of each capability category, **plus the default initial set**: DSH's own core tools (the
 manual baseline) and the tools registered by the current agent's own preset, which is retained by
 default. Other ordinary tools are not disclosed up front.
@@ -61,22 +54,24 @@ default. Other ordinary tools are not disclosed up front.
 |---|---|---|
 | `tool_list` | What tools are discoverable in this category? | No |
 | `tool_search` | Which tool suits this task? | No |
-| `tool_load` | I want these tools. | Yes |
+| `tool_load` | I want these tools. | Yes (admit) |
+| `tool_unload` | I no longer need these tools. | Yes (retract) |
 
-`tool_load` never runs the target tool. It records the selection, and disclosure happens on the
-following turn. Outside the initial/framework and other documented exceptions, reaching for an unloaded on-demand tool is refused, and unloading is not a
-model action at all — `action: "unload"` is rejected, so between two successful compactions the
-disclosed set only grows.
+`tool_load`/`tool_unload` never run the target tool; disclosure and executability both take effect
+from the next request — the current step's tool set is already fixed, so a freshly loaded tool cannot
+be called in the same step. Outside the initial/framework exceptions, reaching for an unadmitted tool
+is refused. Admissions persist across restarts when `storageDomain` is available (aligned against the
+current catalog revision); without it they last for the session's lifetime.
 
-## Two invariants bound the whole design
+## Admission is the single source of truth
 
-- **Native disclosure order and content are append-only within a healthy cache epoch.** A load never moves or rewrites
-  an already-disclosed entry — the wire recorded at first disclosure is what keeps being sent, so a
-  host-side tool upgrade cannot silently mutate a definition the model has already read.
-- **Only a successful compaction resets the epoch.** A manual `/compact` and DSH's automatic
-  compaction both qualify; a failed, cancelled, or summary-less compaction does not.
+Disclosure and execution read the same admission set: after `tool_load` the tool is both disclosed
+and callable from the next request; after `tool_unload` it is both gone and uncallable — there is no
+"visible but uncallable" or "callable but invisible" drift. Tools an agent registers into its own
+scope cannot be masked by the host and may be disclosed, but by default they still need admission to
+execute (`gateOwnScopeTools`).
 
-Frozen wire is not execution permission. A disclosed tool still goes through the host's own
+Disclosure is not execution permission. A disclosed tool still goes through the host's own
 approval, sandbox, and authorization checks on every call, exactly as if it had never been mediated
 by this plugin.
 
@@ -97,7 +92,7 @@ dsh plugin --profile web add \
 2. Open **Settings → Tool discovery** — the plugin's own page: optional feature switches, the
    application-wide tool catalog (filter, checkboxes, **Restore DSH default**), and advanced
    budget / language fields.
-3. Back in a session the three entries are live. Nothing else changes: every tool call keeps
+3. Back in a session the four entries are live. Nothing else changes: every tool call keeps
    going through DSH's own approval, sandbox, and permission chain.
 
 `<build-tag>` is a commit-derived release tag such as `build-80216ba3effa`. Full install/update
@@ -111,16 +106,15 @@ rules — npm package for Node projects, tag pinning, CLI-vs-Core version caveat
 
 ## Requirements
 
-- DSH Core **`>=0.2.1-alpha.1`** — the install-admission range on every `@deepseek-ai/dsh` and
-  `@deepseek-ai/dsh-*` peer. A newer host line is allowed to install instead of being refused
-  outright. This is not a compatibility claim: `dshReleases` still marks only `0.2.1-alpha.1` and
-  `0.2.1-alpha.2` as `compatible`; any other version remains untested and may fail at runtime if
-  its contracts change. The matrix and one-time Profile record are in
+- DSH Core **`>=0.2.2-rc.1`** — the install-admission range declared by `engines.dsh`.
+  `dshReleases` marks `0.2.2-rc.1` as `compatible` and every earlier release as `incompatible`;
+  later 0.2.2 versions are not individually verified and may fail at runtime if contracts
+  change. The matrix and one-time Profile record are in
   [STORE compatibility](plugin/docs/10-store-compatibility.md).
 - The native **`@deepseek-ai/schemastery`** peer is required for the config surface and the settings
   page. Without it the discovery domain still runs normally, but there is no Config and the plugin
   logs `ConfigUnavailable` instead of silently pretending a settings page exists.
-- **native** is the full disclosure path. Non-native sessions are not universally rejected at activation: PTC bypasses discovery by default; `ptcCompatibility` opts into the next `run_code` SDK. It does not guarantee native-style freezing or silently change the host presentation mode.
+- Native and PTC sessions share one admission path: the same masks govern the SDK projection inside `run_code`; there is no separate compatibility toggle.
 - **One active agent per session.** Concurrent agents in a single session are not supported,
   because a request cannot be attributed unambiguously.
 - Node `^22.19.0 || >=24.0.0`.
@@ -133,27 +127,26 @@ complete list for this plugin — nothing here is inferred from "we did not find
 | Surface | Behaviour |
 |---|---|
 | Files (read) | At activation it reads the active profile's patch file to pick up the host's own `locale.preference`, and otherwise falls back to `$DSH_HOME/desktop-locale.json` (**keyed by profile name**). Any failure (missing file, bad JSON, unknown language) falls back to `en` with one log line. Setting the `locale` config field to `zh`/`en` **pins the language and skips both reads entirely**. |
-| Files (write) | No direct filesystem writes. Durable state goes through the host's `@deepseek-ai/dsh-storage-domain` service: one record per session holding an epoch identity plus the **tool-name list** permitted to stay resident. It contains no file contents, no message bodies, and no credentials. |
-| Session data | Reads this session's own events through the public `ctx.sessionQuery` service (one fold, then incremental) to restore what the session had already loaded. |
+| Files (write) | No direct filesystem writes. Durable state goes through the host's `@deepseek-ai/dsh-storage-domain` service: one record per session holding this session's admitted **tool names + version digests**. It contains no file contents, no message bodies, and no credentials. |
+| Session data | Does not read session events; recovery aligns the admission record against the current catalog. |
 | Network | None. The plugin issues no outbound request of any kind. |
 | Commands | None. No child process, shell, or dynamic code evaluation. |
 | Credentials | None. It does not read `process.env`, does not touch keychains or account state, and stores no secret. |
 | Logging | Diagnostics only (session id, state, reason). Tool arguments, file contents, and message bodies are never logged. |
 
 **Runtime dependency: `zod`.** The host storage API (`@deepseek-ai/dsh-storage-domain`) accepts a zod
-schema, so the optional trusted-epoch feature declares `zod` as a real dependency. When it cannot be
-resolved the plugin does **not** fake an in-memory store: the session lands in a terminal
-`STORAGE_UNAVAILABLE` state and stops issuing requests. Everything else — the three entries, the
-catalog, the projection, the guards — works without it.
+schema, so admission persistence declares `zod` as a real dependency. When it cannot be resolved or
+the storage service is absent, admissions degrade to **in-memory only** (the session still runs; they
+just do not survive a restart) — nothing is faked.
 
 **Host peers.** `@deepseek-ai/dsh` and `@deepseek-ai/dsh-tools` are required.
-`@deepseek-ai/dsh-storage-domain` (trusted epoch) and `@deepseek-ai/dsh-home-paths` (interface
+`@deepseek-ai/dsh-storage-domain` (admission persistence) and `@deepseek-ai/dsh-home-paths` (interface
 language path) are optional: when absent, the corresponding feature degrades honestly instead of
 being simulated.
 
 **Scope of the promise.** This plugin is built and verified for a **single user on a single
 profile** — the installation it is mounted into. It does **not** claim to hold a boundary across a
-shared, multi-user, remote, or multi-tenant deployment: session history and the trusted-epoch store
+shared, multi-user, remote, or multi-tenant deployment: session admission records
 are trusted *inputs*, and whoever can write them can influence what a session may execute. Treat it
 as a disclosure gate inside one profile, not as a wall between users. If you need that wall, put it
 in the host (per-user accounts, sandboxing, filesystem permissions), not here.
@@ -207,12 +200,8 @@ surface:
   // "alwaysVisible": ["read", "grep"],  // omit entirely to keep the DSH defaults
   "initialToolsEnabled": true,  // optional manual initial injection; preserves the configured list
   "alwaysAllowPresetTools": true, // retain tools declared by the current bound preset
-  "compactBuiltinToolDescriptions": false, // native-only master switch; no reload, epoch-boundary adoption
-  "compactBuiltinToolOverrides": {}, // per-tool booleans; original five keep their defaults, additions default off
-  "ptcCompatibility": false, // PTC bypass by default; opt in to discovery in the next run_code SDK
-  "requireTrustedEpoch": false, // opt-in strict durable epoch verification
-  "requireTrustedEpochForSubagents": false, // also enforce on children only if strict is on
-  "frameworkRetained": [],  // trusted framework-mandated names the projection must keep
+  "gateOwnScopeTools": true,    // own-scope registrations must also be admitted before executing
+  "frameworkRetained": [],  // trusted framework-mandated names the mask must keep
   "categoryConfig": {},     // localised category cards
   "tolerantLoadProtected": true, // tolerate loading an already-resident tool (idempotent)
   "respectAlwaysVisible": false, // false (default): core tools are auto-enrolled; true: your list is the ceiling
@@ -224,18 +213,18 @@ surface:
 `alwaysVisible` **replaces the manual initial list**, rather than adding to its defaults. Omitting
 it keeps the DSH core-tool defaults. Preset retention is separate: when `alwaysAllowPresetTools`
 is on, the current bound preset's native-visible registered tools are unioned with this manual list.
-To start with only the three discovery entries, set `alwaysAllowPresetTools: false` and either
+To start with only the four discovery entries, set `alwaysAllowPresetTools: false` and either
 `initialToolsEnabled: false`, or both `alwaysVisible: []` and `respectAlwaysVisible: true` (unless explicit framework retention also applies).
-The three entries cannot be removed. Names that are not native-visible in the current agent are
+The four entries cannot be removed. Names that are not native-visible in the current agent are
 not granted merely because the settings catalog contains them.
 
-### Optional concise DSH default tool descriptions
+### Deprecated configuration keys
 
-The master switch `compactBuiltinToolDescriptions` is off by default. There are now **28 individually selectable tools / 53 verified definition variants**. `compactBuiltinToolOverrides` maps supported names to booleans: the original five (`bash`, `pwsh`, `workflow`, `read_image`, `create_goal`) retain their defaults under the master switch; additional tools default off. For example, `{ "subagent_fork": true, "pwsh": false }` enables concise delegation wording and disables concise PowerShell wording.
-
-Native mode replaces only top-level descriptions of **exactly fingerprint-matched** definitions. Parameters, parameter descriptions, execution, approvals and sandboxing remain unchanged; unknown or unverified customized variants retain their original text.
-
-Saving this volatile switch **does not reload the plugin**. New sessions and successful compaction boundaries adopt it; existing epochs and cold recovery preserve the previously disclosed copy. It does not shorten global instructions or MCP prompts, or change the initial tool list. See the [design and compatibility boundaries](<plugin/docs/13-builtin-descriptions.md>).
+`ptcCompatibility`, `compactBuiltinToolDescriptions`, `compactBuiltinToolOverrides`,
+`requireTrustedEpoch`, `requireTrustedEpochForSubagents` and `allowMissingSessionQuery` have
+**no effect** on 0.2.2-rc.1+: their subsystems were removed with the legacy projection path. The
+fields stay in the config schema so existing files are not rejected; the settings page labels them
+deprecated/removed.
 
 ### Settings page: the Tool discovery home
 
@@ -246,8 +235,8 @@ is laid out as an at-a-glance home rather than a bare form:
 - **Status strip** — live counts from the same metadata the panel edits: fixed entries, catalog
   tools, initial-list size, and how many names are *not registered* in the application catalog or
   *unconfirmed*.
-- **Three entries reference cards** — `tool_list` / `tool_search` / `tool_load`: what each answers,
-  what it returns, and which one changes the active set, plus the two invariants above.
+- **Four entries reference cards** — `tool_list` / `tool_search` / `tool_load` / `tool_unload`: what
+  each answers, what it returns, and which one changes the active set, plus the admission semantics above.
 - **Optional feature switches** and the **manual initial tool list** — an application-wide
   registration catalog, including preloaded presets even before any session exists. The catalog
   reads all current registration layers, not session eligibility, discovery/loading state, or
@@ -261,15 +250,12 @@ is laid out as an at-a-glance home rather than a bare form:
 
 Every switch and field:
 
-- **PTC compatibility** (`ptcCompatibility`, default `false`): off preserves the host PTC SDK; on places discovery entries and selected tools in the next `run_code` SDK, taking effect on the next turn. The SDK still re-renders: byte freezing, stable append and cross-restart freezing remain unimplemented. This is not a native-freeze switch.
-
-- **Inject initial tools** (`initialToolsEnabled`, default `true`): disabling preserves the configured list but stops automatic initial injection; `tool_load` still works. This switch and the list apply in a **new session or after successful compaction**, not mid-epoch.
-- **Always allow tools specified by the preset** (`alwaysAllowPresetTools`, default `true`): retain only tools registered by the exact preset revision the current agent joined, intersected with its native-visible capabilities. Other presets and later agent-only tools do not become trusted. Independent of manual injection; uses the same new-session/successful-compaction boundary. It preserves the initial set, not arbitrary execution or native permission bypass.
-- **Require trusted epoch records** (`requireTrustedEpoch`, default `false`): default mode does not access the trusted epoch store or block sessions for missing records/storageDomain. Initial tools come from the configuration snapshot, never from outbound headers. Enabling reloads the plugin and requires durable records: an existing session without one needs a successful user `/compact`; storage failures also block. Disabling restores sessions missing records but does **not** offer strict mode's frozen-list guarantee across restarts.
-- **Also require trusted epochs for subagents** (`requireTrustedEpochForSubagents`, default `false`): only effective when `requireTrustedEpoch` is on. Live runtime-owned children otherwise use the configuration baseline without reading/writing epoch records or requiring `/compact`, including resumed legacy child sessions. Runtime ownership—not header/meta tags or durable fork lineage—identifies a child. A fork resumed as a top-level agent still follows the main strict switch. Changing this ordinary setting reloads the plugin, so disabling it recovers legacy children without a synthetic compaction. Enabling it explicitly may block old children; subagents cannot perform the user's `/compact` themselves.
+- **Inject initial tools** (`initialToolsEnabled`, default `true`): disabling preserves the configured list but stops automatic initial injection; `tool_load` still works. This switch and the list reconcile on the **next request**; existing on-demand admissions remain until unloaded.
+- **Always allow tools specified by the preset** (`alwaysAllowPresetTools`, default `true`): retain only tools registered by the exact preset revision the current agent joined, intersected with its native-visible capabilities. Other presets and later agent-only tools do not become trusted. Independent of manual injection; reconciles on the next request. It preserves the initial set, not arbitrary execution or native permission bypass.
+- **Gate the agent's own registrations** (`gateOwnScopeTools`, default `true`): tools registered into the agent's own scope cannot be masked and may be disclosed; when on, own-scope names in the catalog also need `tool_load` admission before executing; when off, own-scope names outside the catalog execute freely.
 - **Interface language** (`locale`, default `auto`): `auto` reads the host's own `locale.preference` from the active profile patch, and otherwise falls back to the desktop language file — any failure (missing, bad JSON, unsupported language) falls back to `en` and is always logged, never silent. `zh`/`en` pins the model-visible copy language and **skips those reads entirely**. Not a volatile field: a change takes effect when the plugin reloads.
-- **Make the initial list an exact set** (`respectAlwaysVisible`, default `false`): **off with initial injection enabled**, DSH core tools that the current scope actually offers are auto-enrolled and can be called without a load — fewer round-trips. This only recognizes names in the maintained core list; an unknown upstream addition still needs a [baseline review](plugin/docs/12-core-tools-maintenance.md). **On**, your `alwaysVisible` (plus preset retention) is the *ceiling*: a core tool you left out has to be loaded like any other tool. Refusing it is not a deadlock — an omitted core tool is simply **not in the protected baseline**, so one ordinary `tool_load` admits it on the next request (`tolerantLoadProtected` is about something else: re-loading a tool that is *already* resident stays idempotent). Two caveats: a session already running under strict mode keeps admitting what its durable record already lists until the next user `/compact`; and this is not a volatile field — changing it reloads the plugin.
-- Eligibility, protocol receipts, corrupt-history checks and execution guards remain enforced. The three discovery entries cannot be disabled.
+- **Make the initial list an exact set** (`respectAlwaysVisible`, default `false`): **off with initial injection enabled**, DSH core tools that the current scope actually offers are auto-enrolled and can be called without a load — fewer round-trips. This only recognizes names in the maintained core list; an unknown upstream addition still needs a [baseline review](plugin/docs/12-core-tools-maintenance.md). **On**, your `alwaysVisible` (plus preset retention) is the *ceiling*: a core tool you left out has to be loaded like any other tool. Refusing it is not a deadlock — an omitted core tool is simply **not in the protected baseline**, so one ordinary `tool_load` admits it on the next request (`tolerantLoadProtected` is about something else: re-loading a tool that is *already* resident stays idempotent).
+- Eligibility, protocol receipts and the admission gate remain enforced. The four discovery entries cannot be disabled.
 
 The page also exposes **idempotent baseline loading** (`tolerantLoadProtected`) and **exact initial
 list** (`respectAlwaysVisible`) switches. The advanced JSON editors list supported keys and reject
@@ -281,7 +267,7 @@ An omitted `alwaysVisible` displays the actual schema defaults. All mutation con
 
 ### Budgets: hard caps are off by default
 
-An omitted `limit` uses 20/5 narrowed by any explicit `maxListLimit`/`maxSearchLimit`; an explicit oversized limit is rejected. Byte caps cover the entire successful JSON envelope for all four list views and search, including empty results. Error envelopes and host wrappers are outside this success cap. State may only trim `invalidated` diagnostics with a marker, never `selected`/`advertised`. See the [current budget contract](plugin/docs/00-current-contract.md#5-预算).
+An omitted `limit` uses 20/5 narrowed by any explicit `maxListLimit`/`maxSearchLimit`; an explicit oversized limit is rejected. Byte caps cover the entire successful JSON envelope for all four list views and search, including empty results. Error envelopes and host wrappers are outside this success cap. State may only trim `invalidated` diagnostics with a marker, never `selected`. See the [current contract](plugin/docs/00-current-contract.md).
 
 By default this plugin **adds no extra risk thresholds**. Every hard cap — tool count, batch size,
 schema bytes, page size, result bytes, query length, skill bytes — is `null`, meaning *disabled*.
@@ -328,7 +314,7 @@ self-managing, start here and adjust from observed behaviour:
 ```jsonc
 "budgets": {
   "maxActiveTools": 12,          // how many on-demand tools may stay resident at once
-  "maxActiveSchemaBytes": 49152, // 48 KiB of frozen schema for those tools
+  "maxActiveSchemaBytes": 49152, // 48 KiB of schema for those tools
   "maxLoadBatch": 4,             // tools per single load call
   "maxQueryCodePoints": 512,     // reject absurdly long search queries
   "maxListResultBytes": 4096     // bound name listings *and* the state projection
@@ -340,7 +326,7 @@ promise, and because nothing is ever unloaded, turning them off means a long ses
 last two are **interaction bounds**: they protect the host from one pathological call rather than
 changing ordinary usage. `maxListResultBytes` now also covers `view: "state"`: when it would be
 exceeded, the diagnostic `invalidated` list is trimmed first (with an explicit
-`invalidatedTruncated` marker) — `selected` and `advertised` are never trimmed — and only if even an
+`invalidatedTruncated` marker) — `selected` is never trimmed — and only if even an
 empty one does not fit does the call fail with `BUDGET_EXCEEDED`.
 
 What stays bounded even with every cap disabled: the default page size (`defaultListLimit`, 20),
@@ -384,9 +370,8 @@ output of these two commands as the source of truth; a number printed in this fi
 `npm run clean` is a separate deletion operation, not a test prerequisite; inspect its scope first.
 
 `test:composition` runs every `plugin/tests/composition/gate-*.test.mjs` file against a real Loader:
-adapter gates, lifecycle, recovery and fork, event-`seq`, cache epoch, settings, tool churn and the
-trusted-epoch suites. A new gate file is picked up by the glob; nothing else needs editing. See
-[07 — recovery and fork coverage](plugin/docs/07-lifecycle-recovery-coverage.md).
+adapter gates, lifecycle, resume, mask contract, settings, tool churn and the admission gate. A new
+gate file is picked up by the glob; nothing else needs editing.
 
 The composition suites boot a real Cordis Loader against an installed DSH, so they need the host to
 be present. They resolve packages from that installation; if it is not at the default location,
@@ -402,7 +387,7 @@ stands.
 
 ## Get the source
 
-The source version on this branch is **`0.5.1`**. npm publication and provenance must be checked in
+The source version on this branch is **`0.6.0`**. npm publication and provenance must be checked in
 [the registry](https://www.npmjs.com/package/dsh-tool-discovery); a GitHub build release alone does
 not establish npm availability. Which version a download carries is decided by its tarball manifest,
 not by assuming that `main`, the release name and this document always agree.
@@ -413,7 +398,7 @@ cd dsh-tool-discovery
 ```
 
 It is plain JavaScript with no build step. The manifest declares a runtime `dependencies` entry,
-`zod` (`^4.4.3`) — the trusted-epoch record table is handed to the host's storage domain as a zod
+`zod` (`^4.4.3`) — the admission record table is handed to the host's storage domain as a zod
 schema — and declares the host packages it needs as `peerDependencies`, provided by the DSH
 installation. Nothing is vendored, and there is no build step that could paper over a missing host
 package.
@@ -439,9 +424,8 @@ The GitHub `build-<sha>` asset uses a separate workflow path. Neither kind of pu
 
 ## Architecture and what it costs
 
-A stable wire plus append-only disclosure reduce the number of *unnecessary* prefix changes in the
-prompt, and known tool names can be batch-loaded so no extra research round is forced after a
-compaction. That is the design intent — **no measured saving in context or tokens is claimed**, and
+Admission-based disclosure keeps off-task tools out of the first request, and `tool_unload` can
+actively free declaration space; known tool names can be batch-loaded. That is the design intent — **no measured saving in context or tokens is claimed**, and
 none should be read into it.
 
 The other side of the trade-off: an initial list made too small increases model round-trips and
@@ -454,11 +438,11 @@ balance — not a promise of a 2K initial budget.
 - **The current GUI is unaccepted, not historically never DOM-tested.** Earlier records describe controlled React/Chromium probes; they were not reverified or rerun in this round. VM tests, historical DOM records and the current online page are different evidence layers; see [current status](plugin/docs/05-current-status.md).
 - **No measured token or latency benefit is claimed.** Smaller disclosure is the design goal; additional round-trips and end-to-end task time require measurement.
 - **Retrieval metrics remain incomplete.** Fixing category-only false positives does not establish Recall@K, negative-query precision or model selection rates. Category-only queries may need browsing.
-- Native recovery, successful compaction and completion ordering have scoped regressions; crash/fsync, full HMR and new-host end-to-end coverage still need verification. **The PTC SDK freeze gap remains open.**
+- **Only rc.1 is declared within 0.2.2.** Green regressions on the rc.1 unpacked anchor do not establish every 0.2.2 version, real providers, GUI or installation coverage.
 
 ## Further reading
 
-- [Design documents](plugin/docs/README.md) — the current contract, architecture, historical frozen protocol, acceptance
+- [Design documents](plugin/docs/README.md) — the current contract, architecture, historical protocol drafts, acceptance
   matrices and evidence status.
 - [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 

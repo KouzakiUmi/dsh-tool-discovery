@@ -1,343 +1,204 @@
-// 门禁：初始工具设置面（真实 Cordis Loader + 安装内 0.2.1-alpha.1 + 产品 adapter，
-// 且**注入 schemastery Schema**，因此 adapter 带 Config —— 走 adapter-entry-schema.mjs）。
-//
-// 覆盖：
-//   SG1  Config 在 Cordis 首次 resolveConfig **之前**就存在：entry.fiber.config.alwaysVisible
-//        是 volatile 引用（迟一秒赋 apply.Config 就拿不到，这正是本门禁要锁死的东西）。
-//   SG2  默认名单 = DSH 自带工具，且是**替换**不是并集。
-//   SG3  显式 [] 确实清空默认；三个发现入口仍被披露。
-//   SG4  活目录 meta 含当前真实工具、排除三入口；tools/change 后刷新。
-//   SG5  周期中途改配置**不**动已在跑的 runtime；新 runtime 才拿到新名单。
-//
-// 断言纪律：每条安全断言都配正控制，不做近恒真析取。
-import test, { after } from 'node:test'
-import assert from 'node:assert/strict'
-import { dshModule } from '../../contracts/install-resolver.mjs'
-import { bootAdapterComposition } from './harness.mjs'
-import { CORE_TOOL_NAMES } from '../../domain/core-tools.mjs'
-import { DEFAULT_BUDGETS, OPTIONAL_LIMIT_KEYS } from '../../domain/index.mjs'
+// rc.1 设置门禁：真实 Schema + Loader + agent + mock provider，测试私有存储。
+// SG1–5 保留配置解析、替换语义、四入口、活目录与新会话采用；SG8–10 保留预算形状/默认值。
+// 旧 SG5 frozen wire、SG6/7 canonical/可信周期/压缩换名单无等价目标：这些子系统已删除。
+// SG6/7 改测有效目标：真实自动/手动压缩不撤 admission、不阻断主请求、不回写已发送声明。
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { dshModule } from '../../contracts/install-resolver.mjs';
+import { bootAdapterComposition, liveConfigOf, createNativeTestAgent } from './harness.mjs';
+import { store, queueResponse } from '../../fixtures/mock-store.mjs';
+import { CORE_TOOL_NAMES } from '../../domain/core-tools.mjs';
+import { DEFAULT_BUDGETS, OPTIONAL_LIMIT_KEYS, ENTRY_TOOL_NAMES } from '../../domain/index.mjs';
 
-const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write')
-const handles = []
-
-after(() => { for (const dispose of handles.reverse()) dispose() })
-
-/** 装一个带 Schema 的 adapter composition。 */
-async function boot (adapterConfig) {
-  const handle = await bootAdapterComposition({
-    fixtures: ['inherited-tools', 'scope-tools'],
-    adapter: adapterConfig ?? {},
-    adapterSchema: true,
-  })
-  handles.push(handle.dispose)
-  return handle
+const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write');
+const HIDDEN = 'fixture_hidden_inherited';
+const { createUserMessage } = await import(dshModule('@deepseek-ai/dsh-llm'));
+const { defineTool } = await import(dshModule('@deepseek-ai/dsh-tools'));
+function entryOf(comp) { return comp.loader.entries().find(entry => entry.id === 'progressive-discovery'); }
+function serviceOf(comp) { return comp.ctx.get('progressiveDiscovery'); }
+const ownedHandles = new WeakMap();
+async function boot(t, adapter = {}, options = {}, invalid = false) {
+  const comp = await bootAdapterComposition({ fixtures: ['mock-provider', 'inherited-tools', 'scope-tools'], adapterSchema: true, adapter, ...options });
+  const handles = [];
+  ownedHandles.set(comp, handles);
+  t.after(async () => {
+    for (const handle of handles.reverse()) await handle.dispose();
+    await comp.closeServices();
+    await comp.dispose();
+  });
+  if (!invalid) assert.deepEqual(comp.activationErrors(), []);
+  return comp;
 }
-
-function adapterEntry (handle) {
-  return handle.loader.entries().find((e) => e.id === 'progressive-discovery')
+async function runtimeFor(t, comp, sessionId) {
+  const handle = await createNativeTestAgent(comp, sessionId);
+  ownedHandles.get(comp).push(handle);
+  const runtime = serviceOf(comp).lifecycle.runtimeFor(handle.agent.session, handle.agent);
+  return { handle, runtime };
 }
-
-function serviceOf (ctx) {
-  return ctx.get('progressiveDiscovery')
+async function turn(handle, text = 'Exercise settings.') {
+  handle.agent.followup(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] }));
+  await handle.agent.whenIdle();
 }
+function choicesOf(comp) { return entryOf(comp).fiber.runtime.Config.dict.alwaysVisible.meta.initialToolChoices.map(row => row.name); }
 
-/** 造一个最小会话/agent scope，让 lifecycle 建立 runtime。 */
-function fakeSession (id) {
-  return { id, seq: 0, inheritedEventCount: 0, header: { cwd: 'C:\\' } }
-}
+test('SG1: Config 在首次解析前存在，alwaysVisible 是 volatile 引用', async t => {
+  const comp = await boot(t);
+  const entry = entryOf(comp);
+  assert.ok(entry.fiber.runtime.Config);
+  const live = liveConfigOf(entry).alwaysVisible;
+  assert.equal(typeof live.get, 'function');
+  assert.deepEqual(live.get(), [...CORE_TOOL_NAMES]);
+});
 
-/**
- * 组装上下文。dsh-agent-loop 注册了 `provider`/`model`/`cwd` 三个 prompt variable
- * （lib/index.js:1564-1566），它们直接读 `context.agent.options.*` 与
- * `context.agent.session.header.cwd` —— 走真实 systemPrompt.assemble 就必须给全。
- */
-function assembleContext (session, agentId = 'a1') {
-  return {
-    agent: {
-      id: agentId,
-      session,
-      options: { provider: 'fixture-mock', model: 'fixture-model' },
-    },
-    scope: { id: agentId },
+test('SG2/SG3: 默认核心名单为替换语义；显式 [] 保留四入口但不自动授权隐藏工具', async t => {
+  store.reset();
+  const defaultComp = await boot(t);
+  assert.deepEqual(serviceOf(defaultComp).currentAlwaysVisible(), [...CORE_TOOL_NAMES]);
+  const comp = await boot(t, { alwaysVisible: [], respectAlwaysVisible: true });
+  assert.deepEqual(liveConfigOf(entryOf(comp)).alwaysVisible.get(), []);
+  const { handle, runtime } = await runtimeFor(t, comp, 'sg-empty');
+  assert.equal(runtime.alwaysNameSet.size, 0);
+  assert.equal(serviceOf(comp).tracker.admissionsFor('sg-empty').size, 0);
+  queueResponse({ text: 'only entries plus own-scope' }); await turn(handle);
+  assert.deepEqual(store.requests[0].tools.map(tool => tool.name).sort(), ['fixture_hidden_scope', ...ENTRY_TOOL_NAMES].sort());
+  for (const name of ENTRY_TOOL_NAMES) {
+    assert.ok(comp.ctx.tools.get(name, handle.agent));
+    assert.equal(runtime.alwaysNameSet.has(name), false, '入口不来自 alwaysVisible');
   }
-}
+});
 
-/**
- * 建 runtime 并**等它真正落定**。
- *
- * 名单断言必须发生在 `whenReady` 之后：新实现在建立 runtime 时会先把本 epoch 的
- * 可信 baseline durable 落定，落定前 `alwaysNames` 可能尚未成形。不等就断言等于
- * 拿一个中间态签字 —— 而且「轮询几毫秒看看」不是等待真实失败/成功的正确做法。
- */
-async function readyRuntime (ctx, sessionId, agentId = 'a1') {
-  const lifecycle = serviceOf(ctx).lifecycle
-  const runtime = lifecycle.ensureRuntime(fakeSession(sessionId), { id: agentId })
-  const settled = await lifecycle.whenReady(sessionId)
-  assert.equal(settled.mode, 'ready',
-    `${sessionId} 必须落 ready 才允许断言名单；实际：${JSON.stringify(settled)}`)
-  return { runtime, settled }
-}
-
-test('SG1: Config 在首次 resolveConfig 之前存在 —— alwaysVisible 是 volatile 引用', async () => {
-  const { ctx, loader } = await boot({})
-  const entry = adapterEntry({ loader })
-  assert.equal(entry.fiber._error, undefined, 'adapter 必须激活')
-  assert.ok(entry.fiber.runtime.Config !== undefined, 'fiber.runtime.Config 必须在 apply 前就位')
-
-  const resolved = entry.fiber.config.alwaysVisible
-  assert.equal(typeof resolved, 'object')
-  assert.equal(typeof resolved.get, 'function', 'alwaysVisible 必须是 volatile 引用而非普通数组')
-  assert.deepEqual(resolved.get(), [...CORE_TOOL_NAMES])
-  void ctx
-})
-
-test('SG2/SG3: 默认名单是 DSH 自带工具；显式 [] 清空默认但保留三个发现入口', async () => {
-  const withDefault = await boot({})
-  const { runtime: runtimeA } = await readyRuntime(withDefault.ctx, 's-default', 'a1')
-  assert.deepEqual(runtimeA.alwaysNames, [...CORE_TOOL_NAMES], '默认即 DSH 自带工具')
-
-  const cleared = await boot({ alwaysVisible: [] })
-  const entry = adapterEntry(cleared)
-  const live = entry.fiber.config.alwaysVisible
-  assert.equal(typeof live.get, 'function')
-  assert.deepEqual(live.get(), [], '显式 [] 必须真的清空，不得回落到 CORE')
-
-  const { runtime: runtimeB } = await readyRuntime(cleared.ctx, 's-empty', 'a2')
-  assert.deepEqual(runtimeB.alwaysNames, [], '替换语义：不给就一个都不常驻，不是并集')
-
-  // 三个发现入口独立于该字段：清空默认后它们依然存在
-  assert.ok(cleared.ctx.tools.get('tool_list', undefined) !== undefined)
-  assert.ok(cleared.ctx.tools.get('tool_search', undefined) !== undefined)
-  assert.ok(cleared.ctx.tools.get('tool_load', undefined) !== undefined)
-  assert.ok(!runtimeB.alwaysNames.includes('tool_load'), '入口不来自 alwaysVisible 字段')
-})
-
-test('SG4: 活目录 meta 含当前真实工具、排除三入口；tools/change 后刷新', async () => {
-  const comp = await boot({})
-  const { ctx, loader } = comp
-  const entry = adapterEntry(comp)
-  const meta = entry.fiber.runtime.Config.dict.alwaysVisible.meta.initialToolChoices
-  const names = meta.map((c) => c.name)
-
-  assert.ok(names.includes('fixture_hidden_inherited'), '真实注册的第三方工具必须在目录里')
-  assert.ok(names.includes('fixture_mutating'))
-  for (const fixed of ['tool_list', 'tool_search', 'tool_load']) {
-    assert.ok(!names.includes(fixed), `${fixed} 是固定入口，不得出现在可选项里`)
-  }
-  assert.deepEqual(names, [...names].sort(), '目录按名字典序，面板顺序稳定')
-
-  // 正控制：当前目录里确实还有这些工具（不是空集上的通过）
-  assert.ok(ctx.tools.get('fixture_hidden_inherited', undefined) !== undefined)
-
-  // scope 工具（注册在 agent.ctx 上，不在 global 层）也必须在目录里：
-  // 只看 view(undefined) 会把它们全漏掉，用户就无法勾选任何 scoped / MCP 工具。
-  // 它们要等真实 agent 创建（agent/created）才出现，故这里建一个真 agent。
-  const agentHandle = await ctx.agents.create({
-    sessionId: 's-scope-agent',
-    agentOptions: { provider: 'fixture-mock', model: 'fixture-model' },
-    meta: { cwd: comp.tmpRoot },
-  })
-  const scopeAgent = agentHandle.agent
-  const scopedCandidates = ['fixture_hidden_scope', 'fixture_submit_result']
-  const scopeVisible = scopedCandidates.filter((n) => ctx.tools.get(n, scopeAgent) !== undefined)
-  assert.ok(scopeVisible.length > 0, '正控制：scope 层确实有工具（否则下面断言是空转）')
-
-  // 建一个 runtime：目录由此进入该 runtime 的 catalog，meta 应随之更新。
-  const lifecycle = serviceOf(ctx).lifecycle
-  lifecycle.ensureRuntime(scopeAgent.session, scopeAgent)
-  await new Promise((r) => setImmediate(r))
-  const scoped = entry.fiber.runtime.Config.dict.alwaysVisible.meta.initialToolChoices.map((c) => c.name)
-  assert.ok(scopeVisible.every((n) => scoped.includes(n)),
-    `目录必须含 scope 工具；期望 ${JSON.stringify(scopeVisible)}，实得 ${JSON.stringify(scoped)}`)
-
-  // 再注册一个新工具并广播 tools/change，目录必须跟上
-  const { defineTool } = await import(dshModule('@deepseek-ai/dsh-tools'))
-  const dispose = ctx.tools.register(defineTool({
-    name: 'fixture_late_arrival',
-    description: 'registered after activation',
-    parameters: { text: { type: 'string', required: true, description: 'Text to echo back.' } },
-    output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: String(v) }] },
-    execute: async () => 'ok',
-  }))
+test('SG4: 应用活目录包含真实 global/own 工具，排除四入口并随注册/移除刷新', async t => {
+  const comp = await boot(t);
+  const names = choicesOf(comp);
+  assert.ok(names.includes(HIDDEN));
+  assert.ok(names.includes('fixture_mutating'));
+  for (const fixed of ENTRY_TOOL_NAMES) assert.equal(names.includes(fixed), false);
+  assert.deepEqual(names, [...names].sort());
+  assert.ok(comp.ctx.tools.get(HIDDEN), '目录非空的正控制');
+  const { handle } = await runtimeFor(t, comp, 'sg-directory');
+  assert.ok(comp.ctx.tools.get('fixture_hidden_scope', handle.agent));
+  assert.ok(choicesOf(comp).includes('fixture_hidden_scope'));
+  const dispose = comp.ctx.tools.register(defineTool({
+    name: 'fixture_late_arrival', description: 'Registered after activation.', parameters: {},
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: () => 'ok',
+  }));
   try {
-    const after = entry.fiber.runtime.Config.dict.alwaysVisible.meta.initialToolChoices.map((c) => c.name)
-    assert.ok(after.includes('fixture_late_arrival'), 'tools/change 后新工具必须进入目录')
-    assert.ok(after.includes('fixture_hidden_scope'), 'tools/change 不得把 scope 工具挤掉')
-  } finally {
-    dispose()
-  }
-})
+    assert.ok(choicesOf(comp).includes('fixture_late_arrival'));
+    assert.ok(choicesOf(comp).includes('fixture_hidden_scope'));
+  } finally { dispose(); }
+  assert.equal(choicesOf(comp).includes('fixture_late_arrival'), false, '移除不留陈旧目录行');
+});
 
-test('SG5: 周期中途改配置不动已在跑的 runtime；新 runtime 才拿到新名单', async () => {
-  const { ctx, loader } = await boot({})
-  const entry = adapterEntry({ loader })
+test('SG5: volatile 名单变更不重挂载、不回写历史；新会话采用新名单', async t => {
+  store.reset();
+  const comp = await boot(t, { alwaysVisible: [HIDDEN], respectAlwaysVisible: true });
+  const { handle: first } = await runtimeFor(t, comp, 'sg-live');
+  queueResponse({ text: 'first' }); await turn(first);
+  assert.ok(store.requests[0].tools.some(tool => tool.name === HIDDEN));
+  assert.ok(serviceOf(comp).lifecycle.runtimeFor(first.agent.session, first.agent).alwaysNameSet.has(HIDDEN), '常驻名单直接保留披露/执行资格');
+  const sentBefore = JSON.stringify(store.requests[0].tools);
+  const entry = entryOf(comp);
+  const fiber = entry.fiber;
+  await entry.update({ config: { ...entry.options.config, alwaysVisible: ['fixture_mutating'] } });
+  await comp.loader.await();
+  assert.equal(entry.fiber, fiber);
+  assert.deepEqual(liveConfigOf(entry).alwaysVisible.get(), ['fixture_mutating']);
+  assert.equal(JSON.stringify(store.requests[0].tools), sentBefore);
+  const { handle: second } = await runtimeFor(t, comp, 'sg-next');
+  queueResponse({ text: 'new session' }); await turn(second);
+  const names = store.requests[1].tools.map(tool => tool.name);
+  assert.ok(names.includes('fixture_mutating'));
+  assert.equal(names.includes(HIDDEN), false);
+  assert.ok(serviceOf(comp).lifecycle.runtimeFor(second.agent.session, second.agent).alwaysNameSet.has('fixture_mutating'));
+  assert.equal(serviceOf(comp).tracker.get('sg-next', HIDDEN), undefined);
+});
 
-  const running = (await readyRuntime(ctx, 's-live', 'a1')).runtime
-  assert.deepEqual(running.alwaysNames, [...CORE_TOOL_NAMES])
-  const frozenWireBefore = JSON.stringify(running.engine.getFrozenWire(running.scope))
-
-  // 模拟设置面板写入后 Cordis 重新 resolveConfig：volatile 引用被就地换成新值。
-  // 这与 dsh-settings 写路径最终落到 schemastery 的方式同形（共享 volatile.write 协议）。
-  entry.fiber.config.alwaysVisible[VOLATILE_WRITE](['fixture_hidden_inherited'])
-
-  assert.deepEqual(running.alwaysNames, [...CORE_TOOL_NAMES], '当前周期不得被配置变更改动')
-  assert.equal(JSON.stringify(running.engine.getFrozenWire(running.scope)), frozenWireBefore,
-    '当前周期的披露集合不得改变')
-
-  // 正控制：配置确实已经变了（否则上面两条是空转）
-  assert.deepEqual(entry.fiber.config.alwaysVisible.get(), ['fixture_hidden_inherited'])
-
-  // 下一个周期（这里用新会话代表）才拿到新名单
-  const { runtime: next } = await readyRuntime(ctx, 's-next', 'a2')
-  assert.deepEqual(next.alwaysNames, ['fixture_hidden_inherited'], '新周期采用新配置')
-})
-
-/**
- * 宿主在 pre-step 里跑完自动压缩后会返回**压缩前**那份 assembly
- * （dsh-agent-loop lib/index.js:907 / :911 / :921-923）。因此成功压缩换完名单后，
- * 真正发出去的那份 tools 数组必须被就地刷新 —— 否则新周期的初始名单第一请求就错。
- * 事件形状与 gate-cache-epoch 的 CE9 同源（start/summary/shadow/end，无 error）。
- */
-function autoCompactionEvents (sessionId, seqBase) {
-  const compactionId = 'fixture-auto-compaction'
+function compactionServices(auto) {
   return [
-    { type: 'compaction/start', seq: seqBase, data: { compactionId, turn: 1 } },
-    { type: 'compaction/summary', seq: seqBase + 1, data: { compactionId, summary: [] } },
-    { type: 'compaction/shadow', seq: seqBase + 2, data: { compactionId } },
-    { type: 'compaction/end', seq: seqBase + 3, data: { compactionId, turn: 1 } },
-  ]
+    { id: 'token-meter', name: '@deepseek-ai/dsh-token-meter', config: {} },
+    { id: 'compaction-basic', name: '@deepseek-ai/dsh-compaction-basic', config: {
+      auto, thresholdRatio: 0.01, retainTokens: 128, headroomTokens: 1024, maxTokens: 256, compactionRetries: 0,
+    } },
+  ];
 }
+for (const requireTrustedEpoch of [false, true]) test(`SG6: 旧 strict=${requireTrustedEpoch} 时真实自动压缩不撤 admission、不要求重试`, async t => {
+  store.reset();
+  const comp = await boot(t, { alwaysVisible: [], requireTrustedEpoch }, {
+    fixtures: ['mock-provider', 'inherited-tools'], extraServices: compactionServices(true),
+  });
+  const { handle } = await runtimeFor(t, comp, `sg-auto-${requireTrustedEpoch}`);
+  queueResponse({ toolCalls: [{ id: 'sg-auto-load', name: 'tool_load', arguments: { names: [HIDDEN] } }] });
+  queueResponse({ text: 'Earlier inspection. '.repeat(1000), usage: { inputTokens: 1000, outputTokens: 10000 } });
+  await turn(handle, 'Inspect the earlier context. '.repeat(100));
+  const admission = serviceOf(comp).tracker.get(handle.agent.session.id, HIDDEN);
+  assert.ok(admission);
+  const offset = store.requests.length;
+  queueResponse({ text: 'Earlier inspection summarized.' });
+  queueResponse({ text: 'Continue after compaction.' });
+  await turn(handle, 'Continue.');
+  const after = store.requests.slice(offset);
+  assert.ok(after.some(request => request.purpose === 'compaction'), '真实自动压缩正控制');
+  const main = after.filter(request => request.purpose !== 'compaction');
+  assert.equal(main.length, 1, '压缩后继续主请求，不走旧 epoch 中止重试');
+  assert.ok(main[0].tools.some(tool => tool.name === HIDDEN));
+  assert.deepEqual(serviceOf(comp).tracker.get(handle.agent.session.id, HIDDEN), admission);
+  assert.doesNotMatch(JSON.stringify(handle.agent.session.snapshotEvents()), /TOOL_EPOCH_UPDATED/);
+});
 
-for (const requireTrustedEpoch of [false, true]) test(`SG6: strict=${requireTrustedEpoch}，成功自动压缩刷新未发送投影并采用初始开关`, async () => {
-  const { ctx, loader } = await boot({ requireTrustedEpoch, alwaysVisible: ['fixture_hidden_inherited'] })
-  const entry = adapterEntry({ loader })
-  const lifecycle = serviceOf(ctx).lifecycle
-  const session = fakeSession('s-auto')
-  const { runtime } = await readyRuntime(ctx, 's-auto', 'a1')
-  assert.deepEqual(runtime.alwaysNames, ['fixture_hidden_inherited'])
+test('SG7: 真实手动压缩不回写已发送数组；admission 继续可用', async t => {
+  store.reset();
+  const comp = await boot(t, { alwaysVisible: [] }, {
+    fixtures: ['mock-provider', 'inherited-tools'], extraServices: compactionServices(false),
+  });
+  const { handle } = await runtimeFor(t, comp, 'sg-sent');
+  queueResponse({ toolCalls: [{ id: 'sg-sent-load', name: 'tool_load', arguments: { names: [HIDDEN] } }] });
+  queueResponse({ text: 'Earlier inspection. '.repeat(500) });
+  await turn(handle, 'Inspect the earlier context. '.repeat(500));
+  let sent;
+  const stop = comp.ctx.on('llm/stream', (request, next) => {
+    if (request.purpose !== 'compaction') sent ??= request.tools;
+    return next();
+  });
+  t.after(stop);
+  queueResponse({ text: 'Loaded tool is available.' }); await turn(handle);
+  assert.ok(sent.some(tool => tool.name === HIDDEN));
+  const before = JSON.stringify(sent);
+  const admission = serviceOf(comp).tracker.get('sg-sent', HIDDEN);
+  assert.ok(admission);
+  queueResponse({ text: 'Inspection summary.' });
+  const result = await comp.ctx.get('compaction').compactNow(handle.agent, new AbortController().signal);
+  assert.ok(result && result.shadowedSeqs.length > 0, '真实压缩成功且非空');
+  assert.equal(JSON.stringify(sent), before);
+  queueResponse({ toolCalls: [{ id: 'sg-sent-use', name: HIDDEN, arguments: { text: 'after compact' } }] });
+  queueResponse({ text: 'done' }); await turn(handle);
+  assert.equal(store.bodyCount('sg-sent-use'), 1);
+  assert.deepEqual(serviceOf(comp).tracker.get('sg-sent', HIDDEN), admission);
+  assert.equal(JSON.stringify(sent), before, '后续请求也不回写历史');
+});
 
-  // 改配置：下一个周期改用另一个名字。
-  entry.fiber.config.alwaysVisible[VOLATILE_WRITE](['fixture_mutating'])
-  entry.fiber.config.initialToolsEnabled[VOLATILE_WRITE](false)
-
-  // 模拟一次 assemble 之后、发送之前发生自动压缩：projection 挂上未发送刷新入口。
-  const assembled = await ctx.systemPrompt.assemble(assembleContext(session))
-  const pending = assembled.tools
-  const before = pending.map((t) => t.name)
-  assert.ok(before.includes('fixture_hidden_inherited'), '压缩前这份数组确实带着旧名单')
-  assert.equal(typeof runtime.refreshPendingProjection, 'function', '未发送刷新入口应已挂上')
-
-  // 成功压缩（CE9 同形状，start/summary/shadow/end 且无 error）
-  for (const event of autoCompactionEvents('s-auto', 10)) {
-    lifecycle.onSessionEvent(session, event)
-  }
-
-  // 新周期的名单必须先落定（durable 写完），**然后**才读那份尚未发送的数组 ——
-  // 早读一次拿到的是 durable 落定前的中间态，等于拿中间态签字。
-  //
-  // 等的必须是**这一条屏障本身**（lifecycle.awaitEpochRecord，也就是 index.mjs 在
-  // agent/pre-step 的 post-next 处等 put 落定的那条），不是 whenReady：后者在
-  // `restoring === false` 时立即返回 engine 的当前 mode，它覆盖的是**冷恢复**，不覆盖
-  // 周期边界那次 adopt 的写。就地刷新刻意排在 durable 之后（先刷新就等于披露一份还没
-  // 落盘的名单），所以只等 whenReady 读到的是必然陈旧的数组。
-  const afterSettled = await lifecycle.whenReady('s-auto')
-  assert.equal(afterSettled.mode, 'ready',
-    `压缩开新周期后必须落 ready 才允许断言新名单；实际：${JSON.stringify(afterSettled)}`)
-  const barrier = await lifecycle.awaitEpochRecord('s-auto')
-  assert.equal(barrier.state, requireTrustedEpoch ? 'trusted' : 'disabled',
-    `屏障遵守当前严格模式开关；实际：${JSON.stringify(barrier)}`)
-  const after = pending.map((t) => t.name)
-  assert.deepEqual(runtime.alwaysNames, [], '压缩即周期边界，应采用关闭初始注入的新配置')
-  assert.ok(!after.includes('fixture_hidden_inherited'), `压缩后仍披露旧工具: ${JSON.stringify(after)}`)
-  assert.ok(!after.includes('fixture_mutating'), '关闭注入不自动披露配置名单')
-  assert.deepEqual(entry.fiber.config.alwaysVisible.get(), ['fixture_mutating'], '关闭不会删除配置名单')
-  assert.ok(after.includes('tool_load'), '三个发现入口恒在')
-  // 数组是同一个（就地替换），不是换了一个新数组
-  assert.equal(Array.isArray(pending), true)
-})
-
-test('SG7: 已发送的数组不再被后来的压缩改写（canonical header 观测后清除刷新入口）', async () => {
-  const { ctx, loader } = await boot({ requireTrustedEpoch: true, alwaysVisible: ['fixture_hidden_inherited'] })
-  const entry = adapterEntry({ loader })
-  const lifecycle = serviceOf(ctx).lifecycle
-  const session = fakeSession('s-sent')
-  const { runtime } = await readyRuntime(ctx, 's-sent', 'a1')
-
-  const assembled = await ctx.systemPrompt.assemble(assembleContext(session))
-  const pending = assembled.tools
-  const namesAtSend = pending.map((t) => t.name)
-
-  // 这份数组已经作为真实出站 header 被观测到 → 刷新入口必须失效。
-  lifecycle.onSessionEvent(session, {
-    type: 'request/header',
-    seq: 5,
-    data: { header: { tools: pending.map((t) => ({ name: t.name })) } },
-  })
-  assert.equal(runtime.refreshPendingProjection, null, '已发送后不得还留着刷新入口')
-
-  entry.fiber.config.alwaysVisible[VOLATILE_WRITE](['fixture_mutating'])
-  for (const event of autoCompactionEvents('s-sent', 20)) {
-    lifecycle.onSessionEvent(session, event)
-  }
-
-  assert.deepEqual(pending.map((t) => t.name), namesAtSend, '事后压缩不得改写已发送的历史数组')
-  const sentSettled = await lifecycle.whenReady('s-sent')
-  assert.equal(sentSettled.mode, 'ready',
-    `新周期必须落 ready 才允许断言新名单；实际：${JSON.stringify(sentSettled)}`)
-  // whenReady 仅是初始恢复屏障；周期写和采用名单由真实 pre-step 屏障等待。
-  await lifecycle.awaitEpochRecord('s-sent')
-  assert.deepEqual(pending.map((t) => t.name), namesAtSend, '新周期写落定后的迟到刷新也不得改写已发送数组')
-  assert.deepEqual(runtime.alwaysNames, ['fixture_mutating'], '但下一个周期的名单确实换了')
-})
-
-// --- budgets 的 null：真实 Schema + 真实 Loader 下缺省与显式 null 都必须激活 --------
-//
-// 这里不造假 Schema：`buildConfig` 的 budgets 字段默认值就是 null（"关闭覆盖"），
-// schemastery 解析时该键缺省不落到值上（`config({}).budgets === undefined`），
-// 但**显式写 null 会真的把 null 交给 apply**。因此真实 Loader 下：
-//   缺省 Config        → budgets 缺省 → 激活
-//   显式 budgets: null → budgets 为 null → 必须同样激活
-// 形状校验曾把 null 当"非对象"拒掉，于是后一条会让整个 adapter 激活失败。
-
-/** 断言该 composition 里 adapter 已激活且 budgets 按预期生效。 */
-function budgetsOf (comp, sessionId) {
-  const entry = adapterEntry(comp)
-  assert.equal(entry.fiber._error, undefined, `adapter 必须激活: ${entry.fiber._error}`)
-  const lifecycle = serviceOf(comp.ctx).lifecycle
-  const runtime = lifecycle.ensureRuntime(fakeSession(sessionId), { id: 'a1' })
-  return { resolved: entry.fiber.config.budgets, budgets: runtime.engine.getBudgets() }
+async function budgetsOf(t, adapter, id) {
+  const comp = await boot(t, adapter);
+  const { runtime } = await runtimeFor(t, comp, id);
+  return { resolved: liveConfigOf(entryOf(comp)).budgets, budgets: runtime.engine.getBudgets() };
 }
-
-test('SG8: 缺省 Config 与显式 budgets: null 都激活，且硬限额保持默认关闭', async () => {
-  const omitted = await boot({})
-  const a = budgetsOf(omitted, 's-budget-omitted')
-  assert.equal(a.resolved, undefined, '缺省时 Loader 不产出 budgets 键（正控制：这里确实没配置）')
-  assert.deepEqual(a.budgets, { ...DEFAULT_BUDGETS }, '缺省即冻结默认值')
-
-  const explicitNull = await boot({ budgets: null })
-  const b = budgetsOf(explicitNull, 's-budget-null')
-  assert.equal(b.resolved, null, '显式 null 必须真的落到 apply 的 rawConfig 上（正控制）')
-  assert.deepEqual(b.budgets, { ...DEFAULT_BUDGETS }, 'null = 不覆盖，与缺省同解')
-  for (const key of OPTIONAL_LIMIT_KEYS) {
-    assert.equal(b.budgets[key], null, `${key} 在显式 null 下仍应是关闭`)
-  }
-})
-
-test('SG9: 显式有效预算正常生效，其余硬限额仍默认关闭', async () => {
-  const comp = await boot({ budgets: { maxActiveTools: 3 } })
-  const { resolved, budgets } = budgetsOf(comp, 's-budget-explicit')
-  assert.deepEqual(resolved, { maxActiveTools: 3 })
-  assert.equal(budgets.maxActiveTools, 3, '显式正整数启用该限额')
-  for (const key of OPTIONAL_LIMIT_KEYS.filter((k) => k !== 'maxActiveTools')) {
-    assert.equal(budgets[key], null, `未给出的 ${key} 必须保持关闭`)
-  }
-})
-
-test('SG10: budgets 为非对象（字符串）仍被拒 —— 不得因修 null 而放宽形状校验', async () => {
-  const comp = await boot({ budgets: '8' })
-  const entry = adapterEntry(comp)
-  assert.notEqual(entry.fiber._error, undefined, '非对象 budgets 必须拒绝激活')
-  assert.match(comp.activationErrors().join('\n'), /budgets|budget/i,
-    `拒绝必须指名 budgets：${comp.activationErrors().join('\n')}`)
-  assert.equal(comp.ctx.get('progressiveDiscovery'), undefined, '被拒的组合不得留下半激活服务')
-})
+test('SG8: 缺省和显式 budgets:null 均激活，硬限额默认关闭', async t => {
+  const a = await budgetsOf(t, {}, 'sg-budget-omitted');
+  assert.equal(a.resolved, undefined);
+  assert.deepEqual(a.budgets, { ...DEFAULT_BUDGETS });
+  const b = await budgetsOf(t, { budgets: null }, 'sg-budget-null');
+  assert.equal(b.resolved, null);
+  assert.deepEqual(b.budgets, { ...DEFAULT_BUDGETS });
+  for (const key of OPTIONAL_LIMIT_KEYS) assert.equal(b.budgets[key], null);
+});
+test('SG9: 显式有效预算生效，其余硬限额仍关闭', async t => {
+  const { resolved, budgets } = await budgetsOf(t, { budgets: { maxActiveTools: 3 } }, 'sg-budget-explicit');
+  assert.deepEqual(resolved, { maxActiveTools: 3 });
+  assert.equal(budgets.maxActiveTools, 3);
+  for (const key of OPTIONAL_LIMIT_KEYS.filter(key => key !== 'maxActiveTools')) assert.equal(budgets[key], null);
+});
+test('SG10: 字符串 budgets 拒绝激活，不留下半激活服务', async t => {
+  const comp = await boot(t, { budgets: '8' }, {}, true);
+  assert.ok(entryOf(comp).fiber._error);
+  assert.match(comp.activationErrors().join('\n'), /budgets|budget/i);
+  assert.equal(serviceOf(comp), undefined);
+});

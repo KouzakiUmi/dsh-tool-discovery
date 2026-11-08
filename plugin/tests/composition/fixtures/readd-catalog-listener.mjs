@@ -3,8 +3,13 @@
 //
 // 本 fixture 比 adapter entry 更早装配，因此它的 system-prompt/assemble listener
 // 在 waterfall 中更外层：会在 next() 拿到 adapter 的**最终投影结果**之后再追加全量目录。
-// adapter 必须在 canonical request/header 上观察到这一点并 fail closed。
+// 旧宿主经 canonical header 触发 fail closed；新宿主模拟 provider 注入，并在派发前拒绝。
 const apply = (ctx) => {
+  if (typeof ctx.tools.modeFor !== 'function' && typeof ctx.tools.setExecutor === 'function') {
+    // New hosts own tool schemas through providers, not the waterfall result.
+    ctx.systemPrompt.tools(() => ({ schemas: ctx.tools.schemas(undefined) }))
+    return
+  }
   ctx.on('system-prompt/assemble', async (assembly, context, next) => {
     const transformed = await next()
     const scope = context?.scope ?? context?.agent

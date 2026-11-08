@@ -1,187 +1,152 @@
-// 缓存周期（cache epoch）：两次成功上下文压缩之间，工具加载只增量追加。
-// 冻结 wire + 顺序、预算按冻结 wire 核算、执行授权与披露缓存分离、模型不得自主 unload。
+// 旧“可信周期 / 冻结 wire”测试的 rc.1 等价覆盖（docs/14-rc1-redesign.md）。
+//
+// 旧 E01-E09 断言的是 epoch、frozen wire、resetCacheEpoch 与 canonical 回执；这些
+// 机制已整体删除。本文件保留其中仍然成立的产品目标，并改成新语义：
+//   E01 加载 A 再 B：两者都在 selected 中，预算按两者累计（不再冻结 wire，顺序由宿主决定）。
+//   E02 重复 load 幂等。
+//   E03 换版后旧选择失效；重新 load 恢复（执行拒绝由 guard 层另行验证）。
+//   E04 撤权只移除执行资格并留诊断；admission 由 adapter 按返回名撤销。
+//   E05 超预算整批拒绝且不淘汰已选。
+//   E06 目录未变（含压缩后）没有特殊重置：选择原样保留。
+//   E07 入口/框架/常驻不进入 selected。
+//   E08 tool_load 不接受 unload 动作；tool_unload 是唯一卸载入口。
+// 旧 E09“历史 unload 回执兼容回放”无等价物：历史回放子系统已删除，resume 只回放
+// admission store 的 admitted 行；无该用例时以 seedSelection 的 digest 对齐测试代替。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeEngine, SCOPE_A, nextOpId, binding, sampleBindings } from './helpers.mjs';
+import { makeEngine, loadTools, unloadTools, binding, sampleBindings, SCOPE_A } from './helpers.mjs';
 
-const wireOf = (name, extra = {}) => ({
-  name,
-  description: `desc of ${name}`,
-  parameters: { type: 'object', properties: {}, additionalProperties: false, ...extra },
-});
+const namesOf = (engine, scope = SCOPE_A) => [...engine.getState(scope).selected.values()].map((s) => s.name);
+const bytesOf = (engine, scope = SCOPE_A) => engine.handleList({ view: 'state' }, scope).data.budgets.activeSchemaBytes;
 
-/** load + canonical 折叠，返回冻结 wire 列表（按披露顺序）。 */
-async function loadAndFreeze(engine, scope, input, seq) {
-  const op = nextOpId();
-  const res = await engine.handleLoad(input, scope, { operationId: op });
-  assert.equal(res.response.ok, true, JSON.stringify(res.response.error));
-  const out = engine.applyCanonicalPair({
-    seq,
-    call: { operationId: op, tool: 'tool_load', input },
-    result: { isError: false, ok: true, payload: res.response.data.receipt },
-  }, scope);
-  assert.equal(out.applied, true, out.reason);
-  // 模拟 journal 在真实出站 header 观测到披露并冻结 wire
-  engine.recordAdvertisement(scope, {
-    requestId: `${scope.sessionId}#${seq}`,
-    toolId: res.response.data.receipt.selected[0].toolId,
-    name: res.response.data.receipt.selected[0].name,
-    revision: res.response.data.receipt.selected[0].revision,
-    schemaDigest: res.response.data.receipt.selected[0].schemaDigest,
-    wire: wireOf(res.response.data.receipt.selected[0].name),
-  });
-  return res;
-}
-
-test('E01 loadA 再 loadB：frozen 序列只追加，A 的 wire 逐字不变', async () => {
+test('E01 load A 再 load B：两者都在 selected 中，预算按两者累计', async () => {
   const { engine } = await makeEngine();
-  await loadAndFreeze(engine, SCOPE_A, { names: ['glob'] }, 1);
-  const seqA = engine.getFrozenWire(SCOPE_A);
-  assert.equal(seqA.length, 1);
-  assert.equal(seqA[0].name, 'glob');
-
-  await loadAndFreeze(engine, SCOPE_A, { names: ['grep'] }, 2);
-  const seqB = engine.getFrozenWire(SCOPE_A);
-  assert.deepEqual(seqB.map((f) => f.name), ['glob', 'grep'], '只增量追加，不重排');
-  assert.deepEqual(seqB[0], seqA[0], 'A 的冻结记录逐字不变');
-  assert.deepEqual(seqB[0].wire, wireOf('glob'));
+  assert.equal((await loadTools(engine, SCOPE_A, { names: ['glob'] })).response.ok, true);
+  assert.equal((await loadTools(engine, SCOPE_A, { names: ['grep'] })).response.ok, true);
+  assert.deepEqual(namesOf(engine).sort(), ['glob', 'grep']);
+  const entries = engine.getCatalog().entries;
+  assert.equal(bytesOf(engine), entries.get('t_files_glob').wireBytes + entries.get('t_files_grep').wireBytes);
+  assert.deepEqual(engine.handleList({ view: 'state' }, SCOPE_A).data.selected.map((s) => s.name).sort(), ['glob', 'grep']);
 });
 
-test('E01b 追加顺序由首次披露决定,与字典序相反', async () => {
-  // web_fetch > unit_convert > grep：故意选自然序与加载序相反的名字,
-  // 这样任何"按名字排序"或"按宿主 incoming 顺序"实现都会被立刻抓住。
+test('E02 重复 load 已选工具幂等：不重复选择、不改 revision', async () => {
   const { engine } = await makeEngine();
-  await loadAndFreeze(engine, SCOPE_A, { names: ['web_fetch'] }, 1);
-  await loadAndFreeze(engine, SCOPE_A, { names: ['unit_convert'] }, 2);
-  await loadAndFreeze(engine, SCOPE_A, { names: ['grep'] }, 3);
-  assert.deepEqual(
-    engine.getFrozenWire(SCOPE_A).map((f) => f.name),
-    ['web_fetch', 'unit_convert', 'grep'],
-    '必须是加载顺序 web→unit→grep,而不是字典序 grep→unit→web',
-  );
-});
-
-test('E02 重复 load 已冻结工具幂等：不重复冻结、不改 wire、不改顺序', async () => {
-  const { engine } = await makeEngine();
-  await loadAndFreeze(engine, SCOPE_A, { names: ['glob'] }, 1);
-  await loadAndFreeze(engine, SCOPE_A, { names: ['grep'] }, 2);
-  const before = engine.getFrozenWire(SCOPE_A);
-
-  await loadAndFreeze(engine, SCOPE_A, { names: ['glob'] }, 3);
-  const after = engine.getFrozenWire(SCOPE_A);
-  assert.equal(after.length, 2, '重复 load 不得新增冻结项');
-  assert.deepEqual(after, before);
-});
-
-test('E03 schema 换版不得静默更新冻结 wire；执行授权照旧失效', async () => {
-  const { engine } = await makeEngine();
-  await loadAndFreeze(engine, SCOPE_A, { names: ['glob'] }, 1);
-  const frozenBefore = engine.getFrozenWire(SCOPE_A)[0];
-
-  engine.refreshCatalog(sampleBindings().map((b) => (b.toolId === 't_files_glob'
-    ? { ...b, wire: { ...b.wire, parameters: { type: 'object', properties: { pattern: { type: 'string' } } } } }
-    : b)));
-
-  const frozenAfter = engine.getFrozenWire(SCOPE_A)[0];
-  assert.deepEqual(frozenAfter, frozenBefore, '冻结 wire 不得被静默更新');
-  assert.deepEqual(frozenAfter.wire, wireOf('glob'), '仍是首次披露的那份定义');
-  // 执行授权：定义已变 → selected 被 invalidate → guard 拒绝
-  assert.equal(engine.getState(SCOPE_A).selected.size, 0);
-});
-
-test('E04 撤权不自动移除已披露 schema（披露缓存 ≠ 执行授权）', async () => {
-  const { engine } = await makeEngine();
-  await loadAndFreeze(engine, SCOPE_A, { names: ['glob'] }, 1);
-  engine.refreshCatalog(sampleBindings().filter((b) => b.toolId !== 't_files_glob'));
-
-  const frozen = engine.getFrozenWire(SCOPE_A);
-  assert.equal(frozen.length, 1, '正常缓存周期内不得自动移除已披露 schema');
-  assert.equal(frozen[0].name, 'glob');
-  assert.equal(engine.getState(SCOPE_A).selected.size, 0, '执行授权已失效');
-});
-
-test('E05 预算按冻结 wire 核算，超预算整批拒绝且不淘汰任何已冻结项', async () => {
-  const fat = binding({
-    name: 'fat_tool', toolId: 't_files_fat', namespace: 'files',
-    params: { type: 'object', properties: { blob: { type: 'string', description: 'x'.repeat(60000) } } },
-  });
-  const { engine } = await makeEngine({
-    bindings: [...sampleBindings(), fat],
-    engineConfig: { budgets: { maxActiveSchemaBytes: 2000 } },
-  });
-  await loadAndFreeze(engine, SCOPE_A, { names: ['glob'] }, 1);
-
-  const res = await engine.handleLoad({ names: ['fat_tool'] }, SCOPE_A, { operationId: nextOpId() });
-  assert.equal(res.response.ok, false);
-  assert.equal(res.response.error.code, 'BUDGET_EXCEEDED');
-
-  const frozen = engine.getFrozenWire(SCOPE_A);
-  assert.equal(frozen.length, 1, '超预算不得淘汰 A');
-  assert.equal(frozen[0].name, 'glob');
-  assert.equal(engine.getState(SCOPE_A).selected.size, 1, 'A 仍可执行');
-});
-
-test('E06 成功压缩重置：清披露缓存与 selected，epoch 推进', async () => {
-  const { engine } = await makeEngine();
-  await loadAndFreeze(engine, SCOPE_A, { names: ['glob'] }, 1);
-  const before = engine.getState(SCOPE_A).epoch;
-
-  engine.resetCacheEpoch(SCOPE_A, 'compaction-end');
-  assert.equal(engine.getFrozenWire(SCOPE_A).length, 0);
-  assert.equal(engine.getState(SCOPE_A).selected.size, 0);
-  assert.equal(engine.getState(SCOPE_A).epoch, before + 1);
-
-  // 新 load 仍可正常披露与执行
-  await loadAndFreeze(engine, SCOPE_A, { names: ['grep'] }, 5);
-  assert.deepEqual(engine.getFrozenWire(SCOPE_A).map((f) => f.name), ['grep']);
+  await loadTools(engine, SCOPE_A, { names: ['glob'] });
+  const before = engine.getState(SCOPE_A).selected.get('t_files_glob');
+  const again = await loadTools(engine, SCOPE_A, { names: ['glob'] });
+  assert.equal(again.response.ok, true);
+  assert.deepEqual(again.admitted, []);
   assert.equal(engine.getState(SCOPE_A).selected.size, 1);
+  assert.deepEqual(engine.getState(SCOPE_A).selected.get('t_files_glob'), before);
 });
 
-test('E07 常驻工具与三入口不受 reset 影响（它们从不进入 selected/frozen）', async () => {
-  const { engine } = await makeEngine({ engineConfig: { alwaysToolNames: ['misc_thing'] } });
-  await loadAndFreeze(engine, SCOPE_A, { names: ['glob'] }, 1);
-  engine.resetCacheEpoch(SCOPE_A, 'compaction-end');
-
-  const st = engine.getState(SCOPE_A);
-  for (const n of ['tool_list', 'tool_search', 'tool_load', 'misc_thing']) {
-    assert.ok(!st.selected.has(n), `${n} 不应因 reset 进入 selected`);
-    assert.ok(!st.frozen.has(n), `${n} 不应因 reset 进入 frozen`);
-  }
-  const listed = engine.handleList({ view: 'loaded', category: 'all' }, SCOPE_A);
-  assert.deepEqual(listed.data.names, [], 'reset 后 loaded 视图为空');
-});
-
-test('E08 模型不得自主 unload：action=unload 一律 INVALID_ARGS', async () => {
+test('E03 schema 换版：旧选择失效并记录原因；重新 load 恢复新定义', async () => {
   const { engine } = await makeEngine();
-  await loadAndFreeze(engine, SCOPE_A, { names: ['glob'] }, 1);
-  const res = await engine.handleLoad(
-    { action: 'unload', toolIds: ['t_files_glob'] }, SCOPE_A, { operationId: nextOpId() },
-  );
-  assert.equal(res.response.ok, false);
-  assert.equal(res.response.error.code, 'INVALID_ARGS');
-  assert.equal(engine.getState(SCOPE_A).selected.size, 1, '不得因被拒的 unload 丢失选择');
-  assert.equal(engine.getFrozenWire(SCOPE_A).length, 1, '披露缓存不受影响');
+  await loadTools(engine, SCOPE_A, { names: ['glob'] });
+  const oldRevision = engine.getState(SCOPE_A).selected.get('t_files_glob').revision;
+  const changed = sampleBindings().map((b) => (b.toolId === 't_files_glob'
+    ? { ...b, wire: { ...b.wire, parameters: { type: 'object', required: ['pattern'] } } }
+    : b));
+  const outcome = engine.refreshCatalog(changed);
+  assert.deepEqual(outcome.invalidatedNames, ['glob']);
+  assert.equal(engine.getState(SCOPE_A).selected.size, 0);
+  assert.equal(engine.getState(SCOPE_A).invalidated.get('t_files_glob').reason, 'definition-changed');
+  assert.equal(engine.getState(SCOPE_A).invalidated.get('t_files_glob').revision, oldRevision);
+
+  const reload = await loadTools(engine, SCOPE_A, { names: ['glob'] });
+  assert.equal(reload.response.ok, true);
+  const fresh = engine.getState(SCOPE_A).selected.get('t_files_glob');
+  assert.notEqual(fresh.revision, oldRevision);
+  assert.equal(fresh.revision, engine.getCatalog().entries.get('t_files_glob').revision);
 });
 
-test('E09 旧历史 unload 回执仍可兼容回放：只移出执行授权，不动披露缓存', async () => {
+test('E04 撤权移除执行资格并返回受影响名字（供 adapter 撤销 admission）', async () => {
   const { engine } = await makeEngine();
-  await loadAndFreeze(engine, SCOPE_A, { names: ['glob'] }, 1);
-  const { reducePair } = await import('../../domain/state.mjs');
-  const out = reducePair(engine.getState(SCOPE_A), {
-    seq: 2,
-    call: { operationId: 'op_old', tool: 'tool_load', input: { action: 'unload', toolIds: ['t_files_glob'] } },
-    result: {
-      isError: false,
-      ok: true,
-      payload: { kind: 'tool-discovery.selection', version: 2, operationId: 'op_old', operation: 'unload', deselected: ['t_files_glob'] },
-    },
-  }, {
-    now: () => 1,
-    catalog: engine.getCatalog(),
-    protectedToolIds: new Set(),
-    protectedNames: new Set(['tool_list', 'tool_search', 'tool_load', 'final_answer']),
+  await loadTools(engine, SCOPE_A, { names: ['glob', 'grep'] });
+  const names = engine.invalidate('t_files_glob', 'tool-removed');
+  assert.deepEqual([...new Set(names)], ['glob']);
+  assert.equal(engine.getState(SCOPE_A).selected.has('t_files_glob'), false);
+  assert.equal(engine.getState(SCOPE_A).selected.has('t_files_grep'), true, '无关工具保持选择');
+  assert.equal(engine.getState(SCOPE_A).invalidated.get('t_files_glob').reason, 'tool-removed');
+});
+
+test('E05 预算按 selected 核算：超预算整批拒绝且不淘汰任何已选项', async () => {
+  const { engine } = await makeEngine({ engineConfig: { budgets: { maxActiveTools: 1 } } });
+  assert.equal((await loadTools(engine, SCOPE_A, { names: ['glob'] })).response.ok, true);
+  const over = await loadTools(engine, SCOPE_A, { names: ['grep', 'read_file'] });
+  assert.equal(over.response.ok, false);
+  assert.equal(over.response.error.code, 'BUDGET_EXCEEDED');
+  assert.deepEqual(namesOf(engine), ['glob'], '不得淘汰已选项');
+  assert.equal(engine.handleList({ view: 'state' }, SCOPE_A).data.budgets.activeCount, 1);
+});
+
+test('E06 目录未变时没有特殊重置：选择原样保留（压缩不再触发周期重置）', async () => {
+  const { engine } = await makeEngine();
+  await loadTools(engine, SCOPE_A, { names: ['glob'] });
+  const before = engine.getState(SCOPE_A).selected.get('t_files_glob');
+  const generation = engine.getEligibilityGeneration();
+  const outcome = engine.refreshCatalog(sampleBindings());
+  assert.equal(outcome.eligibilityGeneration, generation, '内容未变的刷新走快路径');
+  assert.deepEqual(outcome.invalidatedNames, []);
+  assert.deepEqual(engine.getState(SCOPE_A).selected.get('t_files_glob'), before);
+  assert.equal('epoch' in engine.getState(SCOPE_A), false, 'state 上不再有 epoch 字段');
+  assert.equal('frozen' in engine.getState(SCOPE_A), false, 'state 上不再有 frozen 字段');
+});
+
+test('E07 常驻/入口/框架工具不进入 selected', async () => {
+  const { engine } = await makeEngine({
+    engineConfig: { alwaysToolNames: ['read_file'], frameworkToolNames: ['final_answer'] },
   });
-  assert.equal(out.applied, true, out.reason);
-  assert.equal(out.state.selected.size, 0, '执行授权被撤销');
-  assert.equal(out.state.frozen.size, 1, '披露缓存不受 unload 回放影响');
+  const resident = await loadTools(engine, SCOPE_A, { names: ['read_file'] });
+  assert.deepEqual(resident.response.data.alreadyResident, ['read_file']);
+  assert.equal(engine.getState(SCOPE_A).selected.size, 0);
+  for (const name of ['tool_list', 'tool_search', 'tool_load', 'final_answer']) {
+    assert.equal((await loadTools(engine, SCOPE_A, { names: [name] })).response.ok, false);
+  }
+  assert.equal(engine.getState(SCOPE_A).selected.size, 0);
+});
+
+test('E08 模型不得用 tool_load 自主 unload；tool_unload 撤销 admitted 名字', async () => {
+  const { engine } = await makeEngine();
+  await loadTools(engine, SCOPE_A, { names: ['glob'] });
+  const rejected = await loadTools(engine, SCOPE_A, { action: 'unload', names: ['glob'] });
+  assert.equal(rejected.response.ok, false);
+  assert.equal(rejected.response.error.code, 'INVALID_ARGS');
+  assert.equal(engine.getState(SCOPE_A).selected.size, 1);
+
+  const unloaded = await unloadTools(engine, SCOPE_A, { names: ['glob'] });
+  assert.equal(unloaded.response.ok, true);
+  assert.deepEqual(unloaded.response.data.unloaded, ['glob']);
+  assert.equal(engine.getState(SCOPE_A).selected.size, 0);
+  assert.equal(engine.getState(SCOPE_A).invalidated.size, 0, '主动卸载不写 invalidated');
+});
+
+test('E09 resume 只回放 admitted 行：digest 不符的行被丢弃，不复活旧定义', async () => {
+  const { engine } = await makeEngine();
+  const entry = engine.getCatalog().entries.get('t_files_glob');
+  const dropped = engine.seedSelection(SCOPE_A, [{
+    name: entry.name, toolId: entry.toolId, schemaDigest: 'sha256:stale', at: 1,
+  }]);
+  assert.deepEqual(dropped, { seeded: [], dropped: ['glob'] });
+  assert.equal(engine.getState(SCOPE_A).selected.size, 0);
+});
+
+test('E10 常驻名单变化：setAlwaysVisibleNames 改变后续 load 的常驻判定', async () => {
+  const { engine } = await makeEngine({ engineConfig: { alwaysToolNames: ['read_file'] } });
+  const resident = await loadTools(engine, SCOPE_A, { names: ['read_file'] });
+  assert.deepEqual(resident.response.data.alreadyResident, ['read_file']);
+  assert.equal(engine.getState(SCOPE_A).selected.has('t_files_read'), false, '常驻工具不写 selected');
+
+  // 从常驻名单移除后，同一个名字恢复为普通可加载工具。
+  engine.setAlwaysVisibleNames([]);
+  assert.equal((await loadTools(engine, SCOPE_A, { names: ['read_file'] })).response.ok, true);
+  assert.equal(engine.getState(SCOPE_A).selected.has('t_files_read'), true);
+});
+
+test('E11 目录新增不影响既有选择，缩小的重启目录会在 seed 阶段丢弃', async () => {
+  const { engine } = await makeEngine();
+  await loadTools(engine, SCOPE_A, { names: ['glob'] });
+  engine.refreshCatalog([...sampleBindings(), binding({ name: 'added', toolId: 't_added', namespace: 'files' })]);
+  assert.equal(engine.getState(SCOPE_A).selected.size, 1);
+  assert.equal(engine.getState(SCOPE_A).invalidated.size, 0);
 });

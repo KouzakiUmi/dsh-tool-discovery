@@ -1,202 +1,157 @@
+// 执行门禁（adapters/dsh/guard.mjs）的回归测试（rc.1 重设计）。
+//
+// 旧文件围绕 projection/journal/pendingLoad/compositionBypass 与 PTC 分支展开；这些
+// 机制已整体删除：披露由掩码负责，执行门禁只做 admission + 当前定义摘要检查，
+// PTC 与 native 共用同一门禁。旧 DF1-DF10 的产品目标（未加载不能执行、入口被同名
+// 覆盖要拒、常驻/framework 放行、own-scope 兜底、不泄漏内部错误）在此按新 API 保留。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeEngine, SCOPE_A, commitLoad } from './helpers.mjs';
 import { createGuard } from '../../adapters/dsh/guard.mjs';
-import { createProjection } from '../../adapters/dsh/projection.mjs';
-import { createJournal } from '../../adapters/dsh/journal.mjs';
 
-const wire = (name, description = 'old') => ({ name, description, parameters: { type: 'object', properties: {} } });
+const SCOPE = { sessionId: 'sess_guard' };
 
-function harness() {
-  const listeners = new Map();
+const definition = (name, digest = `sha256:${name}`) => ({ name, schemaDigest: digest });
+
+/**
+ * 最小宿主面：ctx.tools 的 get/view/guard；lifecycle.sessions 为真实的 Map；
+ * tracker 用纯内存桩（guard 只调用 get）。
+ */
+function harness({ entries = [], tracker = new Map(), alwaysNames = [], gateOwnScope = true,
+  restrictable = [], visibleCore = [], control = new Map(), getTool, frameworkRetained = [],
+  respectAlwaysVisible = () => false, runtimeMissing = false } = {}) {
+  let handler;
+  const catalogEntries = new Map(entries.map((e) => [e.toolId ?? `t_${e.name}`, e]));
+  const byName = new Map();
+  for (const e of entries) {
+    const arr = byName.get(e.name) ?? [];
+    arr.push(e);
+    byName.set(e.name, arr);
+  }
   const runtime = {
-    scope: SCOPE_A, restoring: false, compositionBypass: null, requireTrustedEpoch: false,
-    initialToolsEnabled: false, alwaysNameSet: new Set(['baseline']),
-    engine: { getState: () => ({ mode: 'ready', selected: new Map() }), getFrozenWire: () => [] },
-    journal: { pendingLoadNames: () => new Set(), currentRequestId: () => 'r1' },
+    engine: { getCatalog: () => ({ entries: catalogEntries, byName }) },
+    alwaysNameSet: new Set(alwaysNames),
+    gateOwnScope,
   };
-  const ctx = { on: (name, fn) => { listeners.set(name, fn); return () => {}; },
-    tools: { modeFor: () => 'native', get: (name) => ({ name }), guard: (fn) => { listeners.set('guard', fn); return () => {}; } } };
-  const lifecycle = { runtimeFor: () => runtime };
-  const agent = { session: { id: SCOPE_A.sessionId } };
-  createProjection({ ctx, lifecycle });
-  return { ctx, runtime, lifecycle, agent, project: async (tools) => listeners.get('system-prompt/assemble')({}, { agent }, async () => ({ tools })), listeners };
-}
-
-function journalFor(engine, extra = {}) {
-  return createJournal({ engine, scope: SCOPE_A, session: { id: SCOPE_A.sessionId, inheritedEventCount: 0 }, alwaysVisible: ['baseline'], ...extra });
-}
-
-const header = (seq, tools) => ({ seq, type: 'request/header', data: { header: { tools } } });
-const compact = (start = 1, error) => [
-  { seq: start, type: 'compaction/start', data: { compactionId: 'compact', turn: null } },
-  { seq: start + 1, type: 'compaction/summary', data: { compactionId: 'compact', turn: null } },
-  { seq: start + 2, type: 'compaction/end', data: { compactionId: 'compact', turn: null, ...(error === undefined ? {} : { error }) } },
-];
-
-test('DF1 engine forwards pendingLoad without granting execution', async () => {
-  const { engine } = await makeEngine();
-  const result = engine.evaluateCall(SCOPE_A, { name: 'read_file', pendingLoad: true });
-  assert.equal(result.allowed, false);
-  assert.equal(result.code, 'TOOL_NOT_ADVERTISED');
-  assert.equal(result.visibility, 'pending-fold');
-  assert.equal(engine.evaluateCall(SCOPE_A, { name: 'read_file' }).code, 'TOOL_NOT_LOADED');
-});
-
-test('DF2 disabled initial injection rejects guessed core names without changing baseline', async () => {
-  const h = harness();
-  const { engine } = await makeEngine();
-  h.runtime.engine = engine;
-  createGuard({ ctx: h.ctx, lifecycle: h.lifecycle });
-  const before = [...h.runtime.alwaysNameSet];
-  assert.match(h.listeners.get('guard')({ name: 'read', agent: h.agent }), /TOOL_NOT_LOADED/);
-  assert.deepEqual([...h.runtime.alwaysNameSet], before);
-  h.runtime.initialToolsEnabled = true;
-  assert.equal(h.listeners.get('guard')({ name: 'read', agent: h.agent }), undefined);
-});
-
-test('DF3 actual header freezes baseline bytes and order; preview does not freeze', async () => {
-  const h = harness();
-  const { engine } = await makeEngine();
-  h.runtime.journal = journalFor(engine, { alwaysVisibleProvider: () => h.runtime.alwaysNameSet });
-  h.runtime.alwaysNameSet.add('second');
-  await h.project([wire('baseline', 'preview')]);
-  h.runtime.journal.onEvent(header(0, [wire('baseline'), wire('second')]));
-  const projected = await h.project([wire('second', 'changed'), wire('baseline', 'changed')]);
-  assert.deepEqual(projected.tools, [wire('baseline'), wire('second')]);
-  assert.equal(engine.getState(SCOPE_A).selected.size, 0, 'header wire never confers selection authority');
-});
-
-test('DF4 failed compaction preserves baseline freeze; success releases it', async () => {
-  const h = harness();
-  const { engine } = await makeEngine();
-  h.runtime.journal = journalFor(engine);
-  h.runtime.journal.onEvent(header(0, [wire('baseline')]));
-  for (const event of compact(1, 'failed')) h.runtime.journal.onEvent(event);
-  assert.equal((await h.project([wire('baseline', 'new')])).tools[0].description, 'old');
-  for (const event of compact(4)) h.runtime.journal.onEvent(event);
-  assert.equal((await h.project([wire('baseline', 'new')])).tools[0].description, 'new');
-});
-
-test('DF6 fork inherited header never freezes child baseline wire', async () => {
-  const { engine } = await makeEngine();
-  const h = harness();
-  const events = [header(0, [wire('baseline', 'parent')]), header(1, [wire('baseline', 'child')])];
-  h.runtime.journal = journalFor(engine, { session: { id: SCOPE_A.sessionId, inheritedEventCount: 1 },
-    query: { readSession: async () => ({ inheritedEventCount: 1, events }) } });
-  await h.runtime.journal.restore();
-  assert.deepEqual((await h.project([wire('baseline', 'changed')])).tools, [wire('baseline', 'child')]);
-});
-
-test('DF7 later baseline additions append after already disclosed selected tools', async () => {
-  const { engine } = await makeEngine();
-  const h = harness(); h.runtime.engine = engine;
-  h.runtime.journal = journalFor(engine, { alwaysVisibleProvider: () => h.runtime.alwaysNameSet });
-  assert.equal((await commitLoad(engine, SCOPE_A, { names: ['read_file'] })).applied, true);
-  // Use the catalog's real definition so advertised validation is not a no-op.
-  const loadedWire = [...engine.getCatalog().entries.values()].find(e => e.name === 'read_file').wire;
-  h.runtime.journal.onEvent(header(0, [wire('baseline'), loadedWire]));
-  h.runtime.alwaysNameSet.add('new_baseline');
-  const projected = await h.project([wire('new_baseline'), loadedWire, wire('baseline', 'changed')]);
-  assert.deepEqual(projected.tools.map(t => t.name), ['baseline', 'read_file', 'new_baseline']);
-  assert.deepEqual(projected.tools.slice(0, 2), [wire('baseline'), loadedWire]);
-});
-
-test('DF5 cold recovery freezes only own current-epoch header bytes, never header authorization', async () => {
-  const { engine } = await makeEngine();
-  const events = [header(0, [wire('baseline', 'previous')]), ...compact(1), header(4, [wire('hidden'), wire('baseline', 'current')])];
-  const h = harness();
-  h.runtime.journal = journalFor(engine, { query: { readSession: async () => ({ inheritedEventCount: 0, events }) } });
-  assert.equal((await h.runtime.journal.restore()).mode, 'ready');
-  const projected = await h.project([wire('hidden'), wire('baseline', 'changed')]);
-  assert.deepEqual(projected.tools, [wire('baseline', 'current')]);
-  assert.equal(engine.getState(SCOPE_A).selected.size, 0);
-});
-
-test('DF8 non-native admits the transport and the preset baseline, not every name', () => {
-  const listeners = new Map();
-  const runtime = {
-    scope: SCOPE_A, restoring: false, compositionBypass: null, requireTrustedEpoch: false,
-    initialToolsEnabled: true, alwaysNameSet: new Set(['preset_only']),
-    engine: { evaluateCall: () => ({ allowed: false, reason: 'not loaded', code: 'TOOL_NOT_LOADED', visibility: 'hidden' }) },
-    journal: { pendingLoadNames: () => new Set(), currentRequestId: () => 'r1' },
-  };
+  const sessions = new Map(runtimeMissing ? [] : [[SCOPE.sessionId, runtime]]);
   const ctx = {
     tools: {
-      modeFor: () => 'ptc',
-      get: (name) => ({ name }),
-      guard: (fn) => { listeners.set('guard', fn); return () => {}; },
+      get: (name) => (getTool ?? ((n) => control.get(n)))(name),
+      view: () => ({
+        visible: new Map(visibleCore.map((name) => [name, definition(name)])),
+        restrictableNames: new Set(restrictable),
+      }),
+      guard: (fn) => { handler = fn; return () => { handler = undefined; }; },
     },
   };
   createGuard({
     ctx,
-    lifecycle: { runtimeFor: () => runtime },
+    lifecycle: { sessions },
+    tracker: {
+      get: (sessionId, name) => tracker.get(`${sessionId}:${name}`),
+    },
+    frameworkRetained,
+    respectAlwaysVisible,
+    controlDefinitions: control,
     log: () => {},
-    ptcEnabled: () => true,
-    sdkNames: () => ['preset_only', 'tool_list'],
   });
-  const agent = { session: { id: SCOPE_A.sessionId } };
-  const guard = listeners.get('guard');
-  assert.equal(guard({ name: 'run_code', agent }), undefined);
-  assert.equal(guard({ name: 'tool_list', agent }), undefined);
-  assert.equal(guard({ name: 'preset_only', agent }), undefined);
-  assert.match(guard({ name: 'hidden_tool', agent }), /TOOL_NOT_LOADED/);
+  const agent = { session: { id: SCOPE.sessionId } };
+  return (name) => handler({ name, agent });
+}
+
+const admitted = (name, digest = `sha256:${name}`) => new Map([[`${SCOPE.sessionId}:${name}`, {
+  name, toolId: `t_${name}`, schemaDigest: digest, at: 1,
+}]]);
+
+test('DF1 受控目录内未准入的工具 → 一句话拒绝（not admitted）', () => {
+  const run = harness({ entries: [definition('glob')], tracker: new Map() });
+  assert.match(run('glob'), /not admitted: load it with tool_load first/);
 });
 
-test('DF9 PTC compatibility off bypasses the guard', () => {
-  const listeners = new Map();
-  let created = 0;
-  const ctx = {
-    tools: {
-      modeFor: () => 'ptc',
-      get: (name) => ({ name }),
-      guard: (fn) => { listeners.set('guard', fn); return () => {}; },
-    },
-  };
-  createGuard({
-    ctx,
-    lifecycle: { runtimeFor: () => { created += 1; return {}; } },
-    ptcEnabled: () => false,
-  });
-  const agent = { session: { id: 's' } };
-  assert.equal(listeners.get('guard')({ name: 'hidden_tool', agent }), undefined);
-  assert.equal(created, 0);
+test('DF2 已准入且定义摘要一致 → 放行', () => {
+  const run = harness({ entries: [definition('glob')], tracker: admitted('glob') });
+  assert.equal(run('glob'), undefined);
 });
 
-// DF10（PTC 分支缺 bypass 门禁）：与 native 分支同一道闸 —— 位置对齐
-// （alwaysNameSet 早退之后、evaluateCall 之前）。否则 bypass 会话在 PTC 模式下
-// 仍可凭已曝光/已加载工具执行。
-test('DF10 PTC 模式下 bypass 会话拒绝已曝光工具并记 guard:bypass-closed 日志', () => {
-  const logs = [];
-  const listeners = new Map();
-  const runtime = {
-    scope: SCOPE_A, restoring: false, compositionBypass: { names: ['leaked_tool'] }, requireTrustedEpoch: false,
-    initialToolsEnabled: true, alwaysNameSet: new Set(['preset_only']),
-    // 引擎本身放行（allowed:true）：拒绝只能来自 bypass 门禁，而非 evaluateCall
-    engine: { evaluateCall: () => ({ allowed: true }) },
-    journal: { pendingLoadNames: () => new Set(), currentRequestId: () => 'r1' },
-  };
-  const ctx = {
-    tools: {
-      modeFor: () => 'ptc',
-      get: (name) => ({ name }),
-      guard: (fn) => { listeners.set('guard', fn); return () => {}; },
-    },
-  };
-  createGuard({
-    ctx,
-    lifecycle: { runtimeFor: () => runtime },
-    log: (event, detail) => logs.push([event, detail]),
-    ptcEnabled: () => true,
+test('DF3 已准入但定义已换版/被同名覆盖 → 要求重新 load', () => {
+  const run = harness({
+    entries: [definition('glob', 'sha256:new')],
+    tracker: admitted('glob', 'sha256:old'),
   });
-  const agent = { session: { id: SCOPE_A.sessionId } };
-  const guard = listeners.get('guard');
-  assert.match(guard({ name: 'loaded_tool', agent }), /INCOMPATIBLE_COMPOSITION/,
-    'bypass 会话在 PTC 模式下必须拒绝（与 native 分支同语义）');
-  const bypassLogs = logs.filter(([event]) => event === 'guard:bypass-closed');
-  assert.equal(bypassLogs.length, 1, '必须保留 bypass-closed 审计日志');
-  assert.deepEqual(bypassLogs[0][1].leaked, ['leaked_tool']);
-  assert.equal(bypassLogs[0][1].name, 'loaded_tool');
-  // 与 native 分支放行顺序一致：alwaysNameSet 早退仍在门禁之前
-  assert.equal(guard({ name: 'preset_only', agent }), undefined);
+  assert.match(run('glob'), /changed after admission: load it again with tool_load/);
+});
+
+test('DF4 admission 的 toolId/name 对不上当前目录 → 同样按换版拒绝', () => {
+  const run = harness({ entries: [definition('glob')], tracker: new Map([
+    [`${SCOPE.sessionId}:glob`, { name: 'glob', toolId: 't_other', schemaDigest: 'sha256:glob', at: 1 }],
+  ]) });
+  assert.match(run('glob'), /changed after admission/);
+});
+
+test('DF5 被 tool_unload 撤销后（tracker 无记录）→ 拒绝执行', () => {
+  const run = harness({ entries: [definition('glob')], tracker: new Map() });
+  assert.match(run('glob'), /not admitted/);
+});
+
+test('DF6 入口名被同名覆盖 → 拒绝，不让模型无声调用影子实现', () => {
+  const registered = definition('tool_load');
+  const control = new Map([['tool_load', registered]]);
+  const run = harness({ control });
+  assert.equal(run('tool_load'), undefined, '登记的定义就是自己时放行');
+  // ctx.tools.get 返回别的对象（被覆盖）。
+  const shadowed = harness({
+    control: new Map([['tool_load', registered]]),
+    getTool: () => definition('other'),
+    entries: [registered],
+  });
+  assert.match(shadowed('tool_load'), /shadowed by another registration/);
+});
+
+test('DF7 frameworkRetained 与 alwaysVisible（含 preset）永不放行前检查', () => {
+  const run = harness({
+    entries: [definition('glob')],
+    frameworkRetained: ['final_answer'],
+    alwaysNames: ['preset_only'],
+  });
+  assert.equal(run('final_answer'), undefined);
+  assert.equal(run('preset_only'), undefined);
+});
+
+test('DF8 respectAlwaysVisible=false 时核心工具只要当前可见就放行；true 时回到准入检查', () => {
+  const open = harness({ entries: [definition('read')], visibleCore: ['read'] });
+  assert.equal(open('read'), undefined);
+  const exact = harness({
+    entries: [definition('read')], visibleCore: ['read'], respectAlwaysVisible: () => true,
+  });
+  assert.match(exact('read'), /not admitted/);
+});
+
+test('DF9 gateOwnScopeTools=false 只放开遮不住的 own-scope 名字；可遮名字仍须准入', () => {
+  // 默认 true：目录外但 host 可遮的名字（global/父 scope）仍须准入。
+  const run = harness({ entries: [], restrictable: ['own_tool'], gateOwnScope: true });
+  assert.match(run('own_tool'), /not admitted/);
+  // 显式 false：可遮名字仍然受管（它是 global/父 scope 工具，不是 own-scope）。
+  const openRestrictable = harness({ entries: [], restrictable: ['own_tool'], gateOwnScope: false });
+  assert.match(openRestrictable('own_tool'), /not admitted/);
+  // 遮不住的 own-scope 私有注册：false 时完全不受管。
+  const open = harness({ entries: [], restrictable: [], gateOwnScope: false });
+  assert.equal(open('own_tool'), undefined);
+});
+
+test('DF10 目录外且不可 restrict 的 own-scope 名字：放行，由宿主语义兜底', () => {
+  const run = harness({ entries: [] });
+  assert.equal(run('host_private_tool'), undefined);
+});
+
+test('DF11 runtime 尚未建立时：入口仍受覆盖检查，其它名字保守放行', () => {
+  const control = new Map([['tool_list', definition('tool_list')]]);
+  const run = harness({ runtimeMissing: true, control });
+  assert.equal(run('tool_list'), undefined);
+  assert.equal(run('ordinary_tool'), undefined);
+});
+
+test('DF12 拒绝文案不泄漏内部错误或路径', () => {
+  const run = harness({ entries: [definition('glob')], tracker: new Map() });
+  const message = run('glob');
+  assert.equal(typeof message, 'string');
+  assert.doesNotMatch(message, /private path|STATE_NOT_READY|Error:/);
 });

@@ -4,9 +4,9 @@
 import { createText } from './locale.mjs';
 
 /** @type {2} */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
-export const ENTRY_TOOL_NAMES = Object.freeze(['tool_list', 'tool_search', 'tool_load']);
+export const ENTRY_TOOL_NAMES = Object.freeze(['tool_list', 'tool_search', 'tool_load', 'tool_unload']);
 export const LOAD_TOOL_NAME = 'tool_load';
 
 /** 02 §3 受控类别(顺序即导航默认顺序)。 */
@@ -99,6 +99,7 @@ export function errorCodes (locale) {
     TOOL_NOT_ADVERTISED: { message: text.t(['error', 'TOOL_NOT_ADVERTISED']), retryable: true, recovery: 'wait_for_next_request' },
     INCOMPATIBLE_PRESENTATION: { message: text.t(['error', 'INCOMPATIBLE_PRESENTATION']), retryable: false, recovery: 'use_native_only' },
     INCOMPATIBLE_COMPOSITION: { message: text.t(['error', 'INCOMPATIBLE_COMPOSITION']), retryable: false, recovery: 'fix_composition' },
+    ENGINE_DISPOSED: { message: text.t(['error', 'ENGINE_DISPOSED']), retryable: false, recovery: 'retry_when_ready' },
   });
 }
 

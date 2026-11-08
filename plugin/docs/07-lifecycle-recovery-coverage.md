@@ -14,6 +14,9 @@
 > [08 可信周期基线](<08-trusted-epoch-baselines.md>)；在源码真实落地并复跑之前，**既不宣称已修，
 > 也不因此调整本文任何已证实 / 未证实的判定**。
 
+
+> **0.6.0 之后**：本文引用的 epoch/journal/projection/trusted-epoch/PTC/描述精简子系统及其测试文件已随旧投影路径整体移除；文中以 `代码` 形式出现的路径即被移除文件，仅作历史引用。
+
 ## 1. 这一轮补的是什么
 
 原基线上，恢复相关的两条关键结论缺少可信实证：
@@ -113,8 +116,8 @@ provider wire**。
 
 ## 6. 相关文件
 
-- 测试：[`gate-adapter-recovery.test.mjs`](../tests/composition/gate-adapter-recovery.test.mjs)（13 项）、[`gate-adapter-lifecycle.test.mjs`](../tests/composition/gate-adapter-lifecycle.test.mjs)（`L01` 强化）、[`gate-adapter-event-seq.test.mjs`](../tests/composition/gate-adapter-event-seq.test.mjs)（8 项）
-- 实现：[`adapters/dsh/journal.mjs`](../adapters/dsh/journal.mjs)
+- 测试：`../tests/composition/gate-adapter-recovery.test.mjs`（13 项）、[`gate-adapter-lifecycle.test.mjs`](../tests/composition/gate-adapter-lifecycle.test.mjs)（`L01` 强化）、`../tests/composition/gate-adapter-event-seq.test.mjs`（8 项）
+- 实现：`../adapters/dsh/journal.mjs`
 - 状态与判据：[02 协议](<02-protocol-and-data-model.md>) §6.1 状态机、§11 恢复规则、[03 矩阵 §7](<03-implementation-and-acceptance.md>)、[05 当前状态](<05-current-status.md>)
 
 > 私有实施报告与运行日志**不随文档公开**，本文件只引用**公开测试与具体判据**。

@@ -101,38 +101,69 @@ export function validateBinding(b) {
  * @returns {CatalogEntry}
  */
 export function buildEntry(b) {
-  // 冻结的只能是内核自有快照，不能递归冻结 adapter/宿主共享的 parameters。
-  // 先按身份核算的同一 canonical JSON 口径深复制；非法 JSON 值仍明确拒绝。
-  // 同一份 wire 只序列化一次：schemaDigest 与 wireBytes 必须落在**同一份** canonical
-  // 文本上（canonicalJson 是 JSON 的规范形，`parse → 再序列化` 是它的不动点，
-  // 故 `sha256Hex(wireJson)` 与 `digestOf(wire)` 逐字相等，字节数同理）。
+  return entryFromPrepared(prepareBinding(b));
+}
+
+/**
+ * 校验 + 规范化 + 单次 canonical 化的绑定记录（prepareCatalog 的内部产物）。
+ * wire 只序列化这一次：schemaDigest / wireBytes / 深复制 / 身份指纹全部从这
+ * 同一份 canonical 文本派生，buildEntry / identityFingerprintOf / buildCatalog
+ * 不再各自重算。
+ * @typedef {Object} PreparedBinding
+ * @property {CatalogBindingDTO} binding 已 validate 的原绑定
+ * @property {string} wireJson canonical 化的 wire 文本
+ * @property {string} schemaDigest wire 的 canonical 摘要（即指纹里的 wireDigest）
+ * @property {string} revision
+ * @property {string[]} categories
+ * @property {string} skillRevision
+ * @property {string} skillText
+ * @property {string} searchDocumentId
+ */
+
+/**
+ * 单条绑定的规范化：canonical 化 wire 一次，派生全部身份字段。
+ * @param {CatalogBindingDTO} b 已 validate
+ * @returns {PreparedBinding}
+ */
+function prepareBinding(b) {
   const wireJson = canonicalJson(b.wire);
-  const wire = JSON.parse(wireJson);
   const schemaDigest = `sha256:${sha256Hex(wireJson)}`;
   const skillRevision = b.skill ? b.skill.skillRevision : 'none';
   // revision 同时覆盖 wire 身份、技能版本与可证明的注册绑定代次。
   const revision = `r_${digestOf({ schemaDigest, skillRevision, bindingGeneration: b.bindingGeneration ?? null })}`;
   const categories = classifyBinding(b);
-  const summary = b.description;
+  const skillText = b.skill ? `${b.skill.usage} ${b.skill.limitations.join(' ')}` : '';
   const searchDocumentId = `d_${digestOf({
     name: b.name,
     categories,
-    summary,
-    skillText: b.skill ? `${b.skill.usage} ${b.skill.limitations.join(' ')}` : '',
+    summary: b.description,
+    skillText,
   })}`;
+  return { binding: b, wireJson, schemaDigest, revision, categories, skillRevision, skillText, searchDocumentId };
+}
+
+/**
+ * 由已规范化的记录构造目录条目（不再做校验与序列化）。
+ * @param {PreparedBinding} rec
+ * @returns {CatalogEntry}
+ */
+function entryFromPrepared(rec) {
+  const b = rec.binding;
   return {
     toolId: b.toolId,
     name: b.name,
-    categories,
-    summary,
-    schemaDigest,
-    skillRevision,
-    revision,
-    searchDocumentId,
+    categories: rec.categories,
+    summary: b.description,
+    schemaDigest: rec.schemaDigest,
+    skillRevision: rec.skillRevision,
+    revision: rec.revision,
+    searchDocumentId: rec.searchDocumentId,
     shadowOf: b.shadowOf ?? null,
     bindingGeneration: b.bindingGeneration ?? null,
-    wire,
-    wireBytes: utf8Bytes(wireJson),
+    // 冻结的只能是内核自有快照，不能递归冻结 adapter/宿主共享的 parameters；
+    // 深复制走身份核算的同一份 canonical 文本（parse → 再序列化是不动点）。
+    wire: JSON.parse(rec.wireJson),
+    wireBytes: utf8Bytes(rec.wireJson),
     skill: b.skill ? { ...b.skill, limitations: b.skill.limitations.slice() } : null,
   };
 }
@@ -156,14 +187,17 @@ function identityDigest(rec) {
     toolId: rec.toolId,
     name: rec.name,
     description: rec.description,
-    wire: rec.wire,
+    // wire 以其 canonical 摘要入场（schemaDigest 就是 wire 的身份），指纹阶段
+    // 不再把 parameters 整体 canonical 化第二遍 —— wire 全文在 prepare 时只
+    // 序列化一次。
+    wireDigest: rec.wireDigest ?? rec.schemaDigest,
     shadowOf: rec.shadowOf ?? null,
     bindingGeneration: rec.bindingGeneration ?? null,
     skillRevision: rec.skillRevision,
     // 与 buildEntry 派生 searchDocumentId / orderDigestByView 时用的完全同一份值。
     categories: rec.categories ?? null,
     skillText: rec.skill === undefined || rec.skill === null
-      ? ''
+      ? (rec.skillText ?? '')
       : `${rec.skill.usage} ${rec.skill.limitations.join(' ')}`,
   });
 }
@@ -179,18 +213,38 @@ function identityDigest(rec) {
  * @returns {string}
  */
 export function identityFingerprintOf(rawBindings) {
-  return digestOf(rawBindings.map((b) => identityDigest({
-    toolId: b.toolId,
-    name: b.name,
-    description: b.description,
-    wire: b.wire,
-    shadowOf: b.shadowOf,
-    bindingGeneration: b.bindingGeneration,
-    skillRevision: b.skill ? b.skill.skillRevision : 'none',
-    // 与 buildEntry 同一个口径:category 与 skill 都是派生态。
-    categories: classifyBinding(b),
-    skill: b.skill,
+  return prepareCatalog(rawBindings).fingerprint;
+}
+
+/**
+ * 校验 + 规范化全部绑定，返回身份指纹与 prepared 记录。
+ * 指纹判同 → 丢弃 prepared（不建目录）；判异 → catalogFromPrepared 直接构建，
+ * wire 全文零二次序列化、零二次分类。
+ * @param {any[]} rawBindings
+ * @returns {{ fingerprint: string, prepared: PreparedBinding[] }}
+ */
+export function prepareCatalog(rawBindings) {
+  if (!Array.isArray(rawBindings)) throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'bindingsNotArray']));
+  const seen = new Set();
+  const prepared = [];
+  for (const raw of rawBindings) {
+    const b = validateBinding(raw);
+    if (seen.has(b.toolId)) throw new DomainError('INCOMPATIBLE_COMPOSITION', text.format(['detail', 'duplicateToolId'], { toolId: b.toolId }));
+    seen.add(b.toolId);
+    prepared.push(prepareBinding(b));
+  }
+  const fingerprint = digestOf(prepared.map((rec) => identityDigest({
+    toolId: rec.binding.toolId,
+    name: rec.binding.name,
+    description: rec.binding.description,
+    wireDigest: rec.schemaDigest,
+    shadowOf: rec.binding.shadowOf,
+    bindingGeneration: rec.binding.bindingGeneration,
+    skillRevision: rec.skillRevision,
+    categories: rec.categories,
+    skillText: rec.skillText,
   })));
+  return { fingerprint, prepared };
 }
 
 /**
@@ -200,18 +254,22 @@ export function identityFingerprintOf(rawBindings) {
  * @returns {import('./catalog.mjs').CatalogSnapshot}
  */
 export function buildCatalog(rawBindings, opts) {
-  if (!Array.isArray(rawBindings)) throw new DomainError('INCOMPATIBLE_COMPOSITION', t(['detail', 'bindingsNotArray']));
-  const seen = new Set();
+  return catalogFromPrepared(prepareCatalog(rawBindings).prepared, opts);
+}
+
+/**
+ * 由 prepared 记录直接构建快照（prepareCatalog 的构建分支，零重复序列化）。
+ * @param {PreparedBinding[]} prepared
+ * @param {{ now: number; generation: string; categoryConfig?: Record<string, unknown> }} opts
+ */
+export function catalogFromPrepared(prepared, opts) {
   /** @type {Map<string, import('./catalog.mjs').CatalogEntry>} */
   const entries = new Map();
   /** @type {Map<string, import('./catalog.mjs').CatalogEntry[]>} */
   const byName = new Map();
 
-  for (const raw of rawBindings) {
-    const b = validateBinding(raw);
-    if (seen.has(b.toolId)) throw new DomainError('INCOMPATIBLE_COMPOSITION', text.format(['detail', 'duplicateToolId'], { toolId: b.toolId }));
-    seen.add(b.toolId);
-    const entry = buildEntry(b);
+  for (const rec of prepared) {
+    const entry = entryFromPrepared(rec);
     entries.set(entry.toolId, entry);
     const arr = byName.get(entry.name) || [];
     arr.push(entry);
@@ -252,10 +310,10 @@ export function buildCatalog(rawBindings, opts) {
   // available:all:最常用的浏览视图。缺了这一项,category:'all' 的游标会退化成绑定
   // 常量 'empty'(engine 取不到摘要时的兜底),于是任何改动了排序的目录变更都杀不掉它。
   // 摘要按**名称序列**算:翻页项就是名称(同名 shadow 已去重),而不是 toolId 序列。
-  orderDigestByView.set('available:all', digestOf(orderedNamesFor(
-    /** @type {any} */ ({ entries, categories }),
-    'all',
-  )));
+  // 名称序列在构建期一次性算好（orderedAll）：快照冻结后 orderedNamesFor 直接
+  // 复用,不再每次 list 重新展开 + 排序。
+  const orderedAll = dedupeNames(entries, Array.from(entries.keys()).sort());
+  orderDigestByView.set('available:all', digestOf(orderedAll));
   orderDigestByView.set('categories:all', digestOf(Array.from(categories.keys()).sort()));
 
   const snapshot = {
@@ -265,13 +323,14 @@ export function buildCatalog(rawBindings, opts) {
     byName,
     categories,
     orderDigestByView,
+    orderedAll,
     // 快照自身的身份指纹,与 identityFingerprintOf 同一口径 —— refreshCatalog
     // 拿它和新绑定集比,决定是否真的需要重建。
     identityFingerprint: digestOf(Array.from(entries.values(), (e) => identityDigest({
       toolId: e.toolId,
       name: e.name,
       description: e.summary,
-      wire: e.wire,
+      wireDigest: e.schemaDigest,
       shadowOf: e.shadowOf,
       bindingGeneration: e.bindingGeneration,
       skillRevision: e.skillRevision,
@@ -280,6 +339,20 @@ export function buildCatalog(rawBindings, opts) {
     }))),
   };
   return deepFreeze(snapshot);
+}
+
+/** 按 toolId 序列投影成去重后的名称序列（同名 shadow 只留先到的名字）。 */
+function dedupeNames(entries, ids) {
+  const seen = new Set();
+  const names = [];
+  for (const id of ids) {
+    const e = /** @type {import('./catalog.mjs').CatalogEntry} */ (entries.get(id));
+    if (!e || seen.has(e.name)) continue;
+    seen.add(e.name);
+    names.push(e.name);
+  }
+  names.sort();
+  return names;
 }
 
 /**
@@ -316,20 +389,11 @@ export function resolveByName(snapshot, name) {
  * @returns {string[]}
  */
 export function orderedNamesFor(snapshot, category) {
-  const ids = category === 'all'
+  // 'all' 的名称序列在快照构建期已算好并冻结;数组被深冻结,直接返回安全。
+  if (category === 'all' && Array.isArray(snapshot.orderedAll)) return snapshot.orderedAll;
+  return dedupeNames(snapshot.entries, category === 'all'
     ? Array.from(snapshot.entries.keys()).sort()
-    : (snapshot.categories.get(category) || []);
-  const seen = new Set();
-  /** @type {string[]} */
-  const names = [];
-  for (const id of ids) {
-    const e = /** @type {import('./catalog.mjs').CatalogEntry} */ (snapshot.entries.get(id));
-    if (!e || seen.has(e.name)) continue;
-    seen.add(e.name);
-    names.push(e.name);
-  }
-  names.sort();
-  return names;
+    : (snapshot.categories.get(category) || []));
 }
 
 /**
@@ -356,11 +420,6 @@ export function hasNameConflict(snapshot, name) {
   if (!arr || arr.length < 2) return false;
   const first = arr[0].schemaDigest;
   return arr.some((e) => e.schemaDigest !== first);
-}
-
-/** 供测试:两个快照是否在同一顺序摘要上等价。 */
-export function sameOrderDigest(snapshot, viewKey, orderDigest) {
-  return snapshot.orderDigestByView.get(viewKey) === orderDigest;
 }
 
 /** re-export,便于调用方只从 catalog 引入比较原语。 */

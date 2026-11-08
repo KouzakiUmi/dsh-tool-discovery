@@ -1,265 +1,220 @@
-// 组合测试补充：恢复链路(L01)、unload(F08)、候选 load 路径(F03 candidates/S03)。
-// 独立于 gate-adapter.test.mjs，复用同一 harness。
-//
-// 运行：node --test plugin/tests/composition/gate-adapter-lifecycle.test.mjs
-import test, { after } from 'node:test'
+// rc.1 admission 生命周期：候选引用、会话隔离、公开 unload、durable resume。
+// 旧「禁止 unload / canonical 回执回放 / 恢复请求屏障」不再有等价契约；
+// 分别改测第四入口撤权、admission 持久化恢复与 whenReady 立即 ready。
+import test from 'node:test'
 import assert from 'node:assert/strict'
 import { dshModule } from '../../contracts/install-resolver.mjs'
-import { bootAdapterComposition } from './harness.mjs'
+import { bootAdapterComposition, createNativeTestAgent, forkServices, startFork } from './harness.mjs'
+import { store, queueResponse, holdNextResponse } from '../../fixtures/mock-store.mjs'
 
-const handles = []
-const cleanup = []
+const HIDDEN = 'fixture_hidden_inherited'
+const FIXTURES = ['mock-provider', 'inherited-tools', 'scope-tools']
+const ENTRIES = ['tool_list', 'tool_load', 'tool_search', 'tool_unload']
+const namesOf = request => (request?.tools ?? []).map(tool => tool.name)
 
-async function storeOf () {
-  return import(new URL('../../fixtures/mock-store.mjs', import.meta.url).href)
+async function boot(t, options = {}) {
+  const comp = await bootAdapterComposition({ fixtures: FIXTURES, adapter: {}, ...options })
+  t.after(async () => { await comp.closeServices(); comp.dispose() })
+  assert.ok(comp.ctx.get('progressiveDiscovery'), comp.activationErrors().join('\n'))
+  return comp
 }
-
-function resultTextOf (event) {
-  return (event?.data?.message?.content ?? []).map((block) => block.text ?? '').join('')
-}
-
-function toolCallSeq (events, callId) {
-  return events.find((event) => event.type === 'tool/call' && event.data?.callId === callId)?.seq
-}
-
-function toolResultFor (events, callId) {
-  const callSeq = toolCallSeq(events, callId)
-  assert.notEqual(callSeq, undefined, `durable tool/call for ${callId}`)
-  const result = events.find((event) => event.type === 'tool/result'
-    && Array.isArray(event.sourceEventSeqs) && event.sourceEventSeqs.includes(callSeq))
-  assert.notEqual(result, undefined, `durable tool/result for ${callId}`)
-  return result
-}
-
-async function rawEvents (ctx, sessionId) {
-  const { events } = await ctx.sessionQuery.readSession(sessionId)
-  return events
-}
-
-async function drive (ctx, tmpRoot, sessionId) {
-  const handle = await ctx.agents.create({
-    sessionId,
-    agentOptions: { provider: 'fixture-mock', model: 'fixture-model' },
-    meta: { cwd: tmpRoot }
-  })
-  handles.push(handle)
+async function create(t, comp, id) {
+  const handle = await createNativeTestAgent(comp, id)
+  t.after(() => handle.dispose())
   return handle
 }
-
-async function userTurn (handle, text) {
+async function turn(handle, text) {
   const { createUserMessage } = await import(dshModule('@deepseek-ai/dsh-llm'))
-  handle.agent.followup(createUserMessage({
-    content: [{ type: 'text', text }],
-    source: { kind: 'user' }
-  }))
+  handle.agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
   await handle.agent.whenIdle()
 }
+async function resultFor(comp, sessionId, callId) {
+  const { events } = await comp.ctx.sessionQuery.readSession(sessionId)
+  const call = events.find(event => event.type === 'tool/call' && event.data?.callId === callId)
+  assert.ok(call, `durable tool/call: ${callId}`)
+  const result = events.find(event => event.type === 'tool/result' && event.sourceEventSeqs?.includes(call.seq))
+  assert.ok(result, `durable tool/result: ${callId}`)
+  return JSON.parse(result.data.message.content.map(block => block.text ?? '').join(''))
+}
 
-// ---------------------------------------------------------------------------
-// 场景 L：候选 load 路径（tool_search → tool_load(candidates)）
-// ---------------------------------------------------------------------------
-let L
-
-test('boot L: 真实 Loader + adapter + mock provider（候选 load 场景）', async () => {
-  const boot = await bootAdapterComposition({
-    fixtures: ['mock-provider', 'inherited-tools', 'scope-tools'],
-    adapter: {}
-  })
-  cleanup.push(() => boot.dispose())
-  L = boot
-})
-
-test('F03c: tool_search 命中 → 候选卡含 ref+revision（候选 load 全链由 domain 单测覆盖）', async () => {
-  const { store, queueResponse } = await storeOf()
+test('F03c: search 候选 ref+revision 经真实 tool_load 接纳，下一步披露并执行', async t => {
   store.reset()
-  // 1) search 命中 hidden_inherited
-  queueResponse({
-    toolCalls: [{ id: 'l-search-1', name: 'tool_search', arguments: { category: 'all', query: 'hidden inherited tool' } }]
-  })
-  queueResponse({ text: 'L search done' })
-
-  const handle = await drive(L.ctx, L.tmpRoot, 'adapter-l-candidates-1')
-  await userTurn(handle, 'Find a hidden tool.')
-  // search 回执必须含 ref+revision
-  const events = await rawEvents(L.ctx, 'adapter-l-candidates-1')
-  const searchResult = toolResultFor(events, 'l-search-1')
-  const searchEnvelope = JSON.parse(resultTextOf(searchResult))
-  assert.equal(searchEnvelope.ok, true)
-  assert.ok(searchEnvelope.data.candidates.length > 0, 'search must return candidates')
-  const hit = searchEnvelope.data.candidates.find((c) => c.name === 'fixture_hidden_inherited')
-  assert.ok(hit, `candidate for hidden tool: ${JSON.stringify(searchEnvelope.data.candidates.map((c) => c.name))}`)
-  assert.ok(hit.ref && hit.revision, 'candidate card must carry ref and revision')
-  // 候选 load 全链（search→load(candidates)→折叠）已由 domain 160 单测覆盖
+  const comp = await boot(t)
+  const handle = await create(t, comp, 'l-candidate')
+  queueResponse({ toolCalls: [{ id: 'search', name: 'tool_search', arguments: { category: 'all', query: 'hidden inherited tool' } }] })
+  queueResponse({ text: 'found' })
+  await turn(handle, 'Find a hidden tool.')
+  const search = await resultFor(comp, 'l-candidate', 'search')
+  assert.equal(search.ok, true)
+  const hit = search.data.candidates.find(candidate => candidate.name === HIDDEN)
+  assert.ok(hit?.ref && hit?.revision, '真实候选必须含 ref+revision')
+  assert.equal(namesOf(store.requests[0]).includes(HIDDEN), false)
+  for (const entry of ENTRIES) assert.ok(namesOf(store.requests[0]).includes(entry))
+  queueResponse({ toolCalls: [{ id: 'candidate-load', name: 'tool_load', arguments: { candidates: [{ ref: hit.ref, revision: hit.revision }] } }] })
+  queueResponse({ toolCalls: [{ id: 'candidate-use', name: HIDDEN, arguments: { text: 'loaded' } }] })
+  queueResponse({ text: 'used' })
+  await turn(handle, 'Load that candidate and use it.')
+  assert.equal((await resultFor(comp, 'l-candidate', 'candidate-load')).ok, true)
+  assert.equal(store.bodyCount('candidate-use'), 1)
+  assert.ok(namesOf(store.requests.at(-1)).includes(HIDDEN))
+  assert.ok(comp.ctx.get('progressiveDiscovery').tracker.get('l-candidate', HIDDEN))
 })
 
-test('S03c: 跨会话 ref → CANDIDATE_UNAVAILABLE', async () => {
-  const { store, queueResponse } = await storeOf()
+test('S03c: 跨会话 ref 被拒，A 的 admission 不泄漏到 B', async t => {
   store.reset()
-  // 先在 session A 拿 ref
-  queueResponse({
-    toolCalls: [{ id: 's3-search', name: 'tool_search', arguments: { category: 'all', query: 'hidden inherited tool' } }]
-  })
-  queueResponse({ text: 'search done' })
-  const handleA = await drive(L.ctx, L.tmpRoot, 'adapter-l-session-a')
-  await userTurn(handleA, 'Search for hidden tool.')
-  const eventsA = await rawEvents(L.ctx, 'adapter-l-session-a')
-  const searchResult = toolResultFor(eventsA, 's3-search')
-  const searchEnvelope = JSON.parse(resultTextOf(searchResult))
-  const ref = searchEnvelope.data.candidates[0]?.ref
-  assert.ok(ref, 'must have a ref from session A')
-
-  // 在 session B 用 session A 的 ref
-  queueResponse({
-    toolCalls: [{ id: 's3-load', name: 'tool_load', arguments: { candidates: [{ ref, revision: searchEnvelope.data.candidates[0].revision }] } }]
-  })
-  queueResponse({ text: 'cross-session done' })
-  const handleB = await drive(L.ctx, L.tmpRoot, 'adapter-l-session-b')
-  await userTurn(handleB, 'Load using another session ref.')
-  const eventsB = await rawEvents(L.ctx, 'adapter-l-session-b')
-  const loadResult = toolResultFor(eventsB, 's3-load')
-  const loadEnvelope = JSON.parse(resultTextOf(loadResult))
-  assert.equal(loadEnvelope.ok, false, 'cross-session ref must be rejected')
-  assert.equal(loadEnvelope.error.code, 'CANDIDATE_UNAVAILABLE')
+  const comp = await boot(t)
+  const a = await create(t, comp, 'l-isolation-a')
+  queueResponse({ toolCalls: [{ id: 'search-a', name: 'tool_search', arguments: { category: 'all', query: 'hidden inherited tool' } }] })
+  queueResponse({ toolCalls: [{ id: 'load-a', name: 'tool_load', arguments: { names: [HIDDEN] } }] })
+  queueResponse({ text: 'A done' })
+  await turn(a, 'Search and load.')
+  const hit = (await resultFor(comp, 'l-isolation-a', 'search-a')).data.candidates.find(candidate => candidate.name === HIDDEN)
+  assert.ok(hit?.ref && hit?.revision)
+  assert.ok(comp.ctx.get('progressiveDiscovery').tracker.get('l-isolation-a', HIDDEN))
+  const before = store.requests.length
+  const b = await create(t, comp, 'l-isolation-b')
+  queueResponse({ toolCalls: [{ id: 'cross-load', name: 'tool_load', arguments: { candidates: [{ ref: hit.ref, revision: hit.revision }] } }] })
+  queueResponse({ toolCalls: [{ id: 'cross-guess', name: HIDDEN, arguments: { text: 'guess' } }] })
+  queueResponse({ text: 'B done' })
+  await turn(b, 'Use another session candidate.')
+  const rejected = await resultFor(comp, 'l-isolation-b', 'cross-load')
+  assert.equal(rejected.ok, false)
+  assert.equal(rejected.error.code, 'CANDIDATE_UNAVAILABLE')
+  assert.equal(store.bodyCount('cross-guess'), 0)
+  assert.equal(comp.ctx.get('progressiveDiscovery').tracker.get('l-isolation-b', HIDDEN), undefined)
+  assert.ok(store.requests.slice(before).every(request => !namesOf(request).includes(HIDDEN)))
 })
 
-// ---------------------------------------------------------------------------
-// 场景 U：模型不得自主 unload（缓存周期的清空点只有成功压缩）
-// ---------------------------------------------------------------------------
-let U
-
-test('boot U: 真实 Loader + adapter（unload 场景）', async () => {
-  const boot = await bootAdapterComposition({
-    fixtures: ['mock-provider', 'inherited-tools', 'scope-tools'],
-    adapter: {}
-  })
-  cleanup.push(() => boot.dispose())
-  U = boot
-})
-
-test('F08: action=unload 被拒；已加载工具保持披露且可继续执行', async () => {
-  const { store, queueResponse } = await storeOf()
+test('F08: tool_unload 撤销 admission，下一步重掩码、拒执行，reload 恢复', async t => {
   store.reset()
-  // 1) load hidden_inherited
-  queueResponse({ toolCalls: [{ id: 'u-load', name: 'tool_load', arguments: { names: ['fixture_hidden_inherited'] } }] })
-  // 2) 正控制：加载后合法调用
-  queueResponse({ toolCalls: [{ id: 'u-legit', name: 'fixture_hidden_inherited', arguments: { text: 'legit' } }] })
-  // 3) 试图 unload（模型可见 schema 里已无 unload，宿主参数校验会先挡一道）
-  queueResponse({ toolCalls: [{ id: 'u-unload', name: 'tool_load', arguments: { action: 'unload', toolIds: ['global::fixture_hidden_inherited'] } }] })
-  // 4) unload 被拒后，工具仍然可执行
-  queueResponse({ toolCalls: [{ id: 'u-after', name: 'fixture_hidden_inherited', arguments: { text: 'after' } }] })
-  queueResponse({ text: 'U done' })
-
-  const handle = await drive(U.ctx, U.tmpRoot, 'adapter-u-unload-1')
-  await userTurn(handle, 'Load, use, try to unload, use again.')
-
-  const events = await rawEvents(U.ctx, 'adapter-u-unload-1')
-  assert.equal(JSON.parse(resultTextOf(toolResultFor(events, 'u-load'))).ok, true)
-  // 正控制：合法调用执行
-  assert.equal(store.bodyCount('u-legit'), 1)
-  // unload 被拒（宿主 schema 校验层，enum 里已无 unload）
-  const unloadResult = toolResultFor(events, 'u-unload')
-  assert.equal(unloadResult.data.message.isError, true, 'unload 必须被拒')
-  // 披露缓存与执行授权都未被这次失败的卸载影响
-  assert.equal(store.bodyCount('u-after'), 1, '被拒的 unload 不得影响已加载工具的执行')
-  const disclosed = (store.requests[store.requests.length - 1].tools ?? []).map((t) => t.name)
-  assert.ok(disclosed.includes('fixture_hidden_inherited'), '被拒的 unload 不得移除已披露工具')
+  const comp = await boot(t)
+  const handle = await create(t, comp, 'l-unload')
+  queueResponse({ toolCalls: [{ id: 'load', name: 'tool_load', arguments: { names: [HIDDEN] } }] })
+  queueResponse({ toolCalls: [{ id: 'before-unload', name: HIDDEN, arguments: { text: 'before' } }] })
+  queueResponse({ text: 'loaded' })
+  await turn(handle, 'Load and use.')
+  assert.equal(store.bodyCount('before-unload'), 1)
+  const start = store.requests.length
+  queueResponse({ toolCalls: [{ id: 'unload', name: 'tool_unload', arguments: { names: [HIDDEN] } }] })
+  queueResponse({ toolCalls: [{ id: 'after-unload', name: HIDDEN, arguments: { text: 'after' } }] })
+  queueResponse({ text: 'unloaded' })
+  await turn(handle, 'Unload then try again.')
+  const unloaded = await resultFor(comp, 'l-unload', 'unload')
+  assert.equal(unloaded.ok, true)
+  assert.deepEqual(unloaded.data.unloaded, [HIDDEN])
+  assert.equal(store.bodyCount('after-unload'), 0)
+  assert.ok(store.requests.slice(start + 1).every(request => !namesOf(request).includes(HIDDEN)))
+  const service = comp.ctx.get('progressiveDiscovery')
+  assert.equal(service.tracker.get('l-unload', HIDDEN), undefined)
+  assert.equal(service.lifecycle.admittedNamesOf('l-unload').size, 0)
+  queueResponse({ toolCalls: [{ id: 'reload', name: 'tool_load', arguments: { names: [HIDDEN] } }] })
+  queueResponse({ toolCalls: [{ id: 'after-reload', name: HIDDEN, arguments: { text: 'again' } }] })
+  queueResponse({ text: 'reloaded' })
+  await turn(handle, 'Reload and use.')
+  assert.equal((await resultFor(comp, 'l-unload', 'reload')).ok, true)
+  assert.equal(store.bodyCount('after-reload'), 1)
 })
 
-// ---------------------------------------------------------------------------
-// 场景 R：恢复链路（L01，重开 composition 后冷恢复）
-// ---------------------------------------------------------------------------
-let R
-
-test('boot R: 真实 Loader + adapter（恢复场景）', async () => {
-  const boot = await bootAdapterComposition({
-    fixtures: ['mock-provider', 'inherited-tools', 'scope-tools'],
-    adapter: {}
-  })
-  cleanup.push(() => boot.dispose())
-  R = boot
-})
-
-test('L01: load 后重开 composition → 从 jsonl 冷恢复 selected（强断言，禁止条件空转）', async () => {
-  const { store, queueResponse } = await storeOf()
+test('L01: 真关闭服务后同根 resume，从 admission store 恢复且立即 ready', async t => {
   store.reset()
-  // 1) load
-  queueResponse({ toolCalls: [{ id: 'r-load', name: 'tool_load', arguments: { names: ['fixture_hidden_inherited'] } }] })
-  queueResponse({ text: 'R load done' })
-  const handle = await drive(R.ctx, R.tmpRoot, 'adapter-r-restore-1')
-  await userTurn(handle, 'Load a hidden tool.')
-  // 验证 load 后 selected
-  const events = await rawEvents(R.ctx, 'adapter-r-restore-1')
-  const loadResult = toolResultFor(events, 'r-load')
-  assert.equal(JSON.parse(resultTextOf(loadResult)).ok, true)
-
-  // 2) 关闭 handle（持久化落盘）后重开 composition（同一 tmpRoot；不得删除 jsonl）
-  await handle.dispose()
-  const boot2 = await bootAdapterComposition({
-    fixtures: ['mock-provider', 'inherited-tools', 'scope-tools'],
-    adapter: {},
-    tmpRoot: R.tmpRoot
-  })
-  cleanup.push(() => boot2.dispose())
-
-  // 3) 用真实宿主 resume API 恢复同 session（不是同 id 冒充新建）
-  const handle2 = await boot2.ctx.agents.resume({
-    resumeSessionId: 'adapter-r-restore-1',
-    agentOptions: { provider: 'fixture-mock', model: 'fixture-model' }
-  })
-  handles.push(handle2)
-
-  // 恢复期首请求：装配会等公开的 lifecycle.whenReady(sessionId) 落定，因此**不得**
-  // 再发出只留三入口的缩水 tools —— 崩溃前已披露的工具必须原样出现在这一轮。
-  // （旧行为：restore() 还没读完盘，投影因 restoring 只留三入口，模型上下文里的
-  //  已披露工具在这一轮凭空消失。）
-  queueResponse({ text: 'R pre-recovery turn' })
-  await userTurn(handle2, 'Continue after restart.')
-
-  // 4) 强断言：状态必须存在且恢复成功（修复旧断言 ctx.expose 取空 + mode 条件空转）
-  const svc = boot2.ctx.get('progressiveDiscovery')
-  assert.ok(svc !== undefined, 'progressiveDiscovery service must be reachable via ctx.get')
-  const state = svc.sessions.get('adapter-r-restore-1')
-  assert.ok(state !== undefined, 'session runtime must exist after resume (旧测试 ctx.expose 恒为空)')
-  const restored = await state.journal.whenRestored()
-  assert.ok(restored !== undefined, 'cold restore must have run (session had history)')
-  assert.equal(restored.mode, 'ready', `restore must be ready: ${JSON.stringify(restored)}`)
-  assert.equal(restored.applied, 1, 'exactly the one canonical load pair replays')
-  assert.equal(restored.rejected, 0, 'no pair may be rejected on a clean journal')
-  const engState = state.engine.getState(state.scope)
-  assert.equal(engState.mode, 'ready')
-  assert.deepEqual([...engState.selected.values()].map((s) => s.name).sort(), ['fixture_hidden_inherited'],
-    'restored selected must contain exactly the previously loaded tool')
-
-  // 5) 披露与执行正控制：恢复后的**第一条**请求就已披露恢复项（不再有缩水窗口）
-  const restoringFirst = (store.requests[2]?.tools ?? []).map((t) => t.name).sort()
-  assert.deepEqual(restoringFirst, ['fixture_hidden_inherited', 'tool_list', 'tool_load', 'tool_search'],
-    `冷恢复后的首请求必须已披露恢复项，不得缩水：${restoringFirst}`)
-  queueResponse({
-    toolCalls: [
-      { id: 'r-legit', name: 'fixture_hidden_inherited', arguments: { text: 'legit' } },
-      { id: 'r-guess', name: 'fixture_hidden_scope', arguments: { text: 'guess' } }
-    ]
-  })
-  queueResponse({ text: 'R restore done' })
-  await userTurn(handle2, 'Use the restored tool.')
-  const resumedRequests = store.requests.slice(2)
-  const disclosed = (resumedRequests[1]?.tools ?? []).map((t) => t.name).sort()
-  assert.deepEqual(disclosed, ['fixture_hidden_inherited', 'tool_list', 'tool_load', 'tool_search'],
-    `post-restore request must disclose exactly the restored tool: ${disclosed}`)
-  assert.equal(store.bodyCount('r-legit'), 1, 'restored tool call must run exactly once')
-  // 6) 负控制：未 load 的隐藏工具不披露且猜名 body=0
-  assert.equal(store.bodyCount('r-guess'), 0, 'never-loaded hidden tool body must not run')
-  const guess = toolResultFor(await rawEvents(boot2.ctx, 'adapter-r-restore-1'), 'r-guess')
-  assert.equal(guess.data.message.isError, true, 'guess of never-loaded tool must be rejected')
-  const allTools = resumedRequests.flatMap((r) => (r.tools ?? []).map((t) => t.name))
-  assert.equal(allTools.includes('fixture_hidden_scope'), false, 'never-loaded tool must never be disclosed')
-})
-
-after(async () => {
-  for (const handle of handles) {
-    try { await handle.dispose() } catch { /* already disposed */ }
+  const first = await bootAdapterComposition({ fixtures: FIXTURES, adapter: {} })
+  let resumed
+  let handle2
+  t.after(async () => { await handle2?.dispose(); await resumed?.closeServices(); await first.closeServices(); first.dispose() })
+  const sessionId = 'l-resume'
+  const serviceBefore = first.ctx.get('progressiveDiscovery')
+  assert.ok(serviceBefore, first.activationErrors().join('\n'))
+  const durable = serviceBefore.tracker.holder.store
+  assert.ok(durable, '真实 storageDomain 必须已绑定')
+  await durable.ensureOpen()
+  const originalPut = durable.put.bind(durable)
+  const writes = []
+  let finishWrite
+  const wrote = new Promise(resolve => { finishWrite = resolve })
+  durable.put = async record => {
+    const result = await originalPut(record)
+    writes.push(structuredClone(record))
+    if (record.sessionId === sessionId && record.admissions.some(row => row.name === HIDDEN)) finishWrite()
+    return result
   }
-  for (const dispose of cleanup) {
-    try { dispose() } catch { /* already disposed */ }
+  const handle = await createNativeTestAgent(first, sessionId)
+  queueResponse({ toolCalls: [{ id: 'persist-load', name: 'tool_load', arguments: { names: [HIDDEN] } }] })
+  queueResponse({ text: 'persisted' })
+  try {
+    await turn(handle, 'Load before restart.')
+    assert.equal((await resultFor(first, sessionId, 'persist-load')).ok, true)
+    assert.ok(namesOf(store.requests.at(-1)).includes(HIDDEN))
+    await bounded(wrote, 'real admission store.put')
+    assert.ok(writes.some(record => record.sessionId === sessionId && record.admissions.some(row => row.name === HIDDEN && row.schemaDigest)),
+      '真实 store.put 完成并带接纳指纹，不能只测内存')
+  } finally {
+    await handle.dispose()
+    await first.closeServices()
   }
+  resumed = await bootAdapterComposition({ fixtures: FIXTURES, adapter: {}, tmpRoot: first.tmpRoot })
+  handle2 = await resumed.ctx.agents.resume({ resumeSessionId: sessionId,
+    agentOptions: { provider: 'fixture-mock', model: 'fixture-model' } })
+  const service = resumed.ctx.get('progressiveDiscovery')
+  const runtime = service.lifecycle.runtimeFor(handle2.agent.session, handle2.agent)
+  assert.deepEqual(await service.whenReady(sessionId), { mode: 'ready' })
+  assert.deepEqual([...service.lifecycle.admittedNamesOf(sessionId)], [HIDDEN])
+  assert.deepEqual([...runtime.engine.selectedOf(sessionId).values()].map(row => row.name), [HIDDEN])
+  store.reset()
+  queueResponse({ toolCalls: [{ id: 'resume-use', name: HIDDEN, arguments: { text: 'restored' } },
+    { id: 'resume-guess-own', name: 'fixture_hidden_scope', arguments: { text: 'not admitted' } }] })
+  queueResponse({ text: 'resumed' })
+  await turn(handle2, 'Continue after restart.')
+  assert.ok(namesOf(store.requests[0]).includes(HIDDEN), '恢复后首请求含准入项')
+  for (const entry of ENTRIES) assert.ok(namesOf(store.requests[0]).includes(entry))
+  assert.ok(namesOf(store.requests[0]).includes('fixture_hidden_scope'), 'own-scope 不可遮的宿主边界')
+  assert.equal(store.bodyCount('resume-use'), 1)
+  assert.equal(store.bodyCount('resume-guess-own'), 0)
+})
+
+async function bounded(promise, label) {
+  let timer
+  try { return await Promise.race([promise, new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error(`timeout: ${label}`)), 5000) })]) }
+  finally { clearTimeout(timer) }
+}
+
+test('L02: 真实 fork 继承父历史但不继承 admission；子会话 resume 仍仅使用自己的准入表', async t => {
+  store.reset()
+  const comp = await boot(t, { extraServices: forkServices() })
+  const parent = await create(t, comp, 'l-fork-parent')
+  queueResponse({ toolCalls: [{ id: 'fork-parent-load', name: 'tool_load', arguments: { names: [HIDDEN] } }] })
+  queueResponse({ text: 'parent admitted' })
+  await turn(parent, 'Load for parent.')
+  const service = comp.ctx.get('progressiveDiscovery')
+  assert.ok(service.tracker.get('l-fork-parent', HIDDEN))
+  store.reset()
+  const response = holdNextResponse()
+  t.after(() => response.release())
+  queueResponse({ toolCalls: [{ id: 'fork-child-guess', name: HIDDEN, arguments: { text: 'inherited only' } }] })
+  queueResponse({ text: 'child complete' })
+  const fork = await bounded(startFork(comp.ctx, parent.agent, 'Try the inherited tool without loading.'), 'real fork start')
+  t.after(() => fork.dispose())
+  await bounded(response.entered, 'fork request recorded')
+  const child = comp.ctx.agents.get(fork.id)
+  assert.ok(child, '子 agent 必须真实物化且仍活动')
+  assert.ok(child.session.inheritedEventCount > 0, '子会话必须有继承历史，而不是空会话')
+  assert.equal(service.tracker.admissionsFor(child.session.id).size, 0)
+  assert.equal(service.lifecycle.runtimeFor(child.session, child).engine.selectedOf(child.session.id).size, 0)
+  assert.equal(namesOf(store.requests[0]).includes(HIDDEN), false, '父 admission 不得进入 fork 首请求')
+  const childId = child.session.id
+  response.release()
+  await bounded(fork.result, 'child completes')
+  assert.equal(store.bodyCount('fork-child-guess'), 0)
+  assert.ok(service.tracker.get('l-fork-parent', HIDDEN), '子会话拒绝不影响父 admission')
+  const resumed = await comp.ctx.agents.resume({ resumeSessionId: childId,
+    agentOptions: { provider: 'fixture-mock', model: 'fixture-model' } })
+  t.after(() => resumed.dispose())
+  assert.ok(resumed.agent.session.inheritedEventCount > 0)
+  assert.deepEqual(await service.whenReady(childId), { mode: 'ready' })
+  assert.equal(service.lifecycle.admittedNamesOf(childId).size, 0, 'resume 不从继承的父 load 历史恢复准入')
+  store.reset()
+  queueResponse({ toolCalls: [{ id: 'fork-resume-guess', name: HIDDEN, arguments: { text: 'still not admitted' } }] })
+  queueResponse({ text: 'resumed child' })
+  await turn(resumed, 'Continue inherited history.')
+  assert.equal(namesOf(store.requests[0]).includes(HIDDEN), false)
+  assert.equal(store.bodyCount('fork-resume-guess'), 0)
 })

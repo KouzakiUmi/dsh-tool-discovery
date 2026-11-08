@@ -108,12 +108,10 @@ export async function makeEngine(overrides = {}) {
   const engine = createDiscoveryEngine({
     bindings: overrides.bindings ?? sampleBindings(),
     categoryConfig: CATEGORY_CONFIG,
-    entryToolNames: ['tool_list', 'tool_search', 'tool_load'],
     frameworkToolNames: ['final_answer'],
     clock,
     random: fakeRandom(),
     generation: 'g1',
-    newSessionMode: overrides.newSessionMode ?? 'ready',
     ...(overrides.engineConfig || {}),
   });
   return { engine, clock };
@@ -123,51 +121,23 @@ export const SCOPE_A = Object.freeze({ sessionId: 'sess_A', actorId: 'actor_A' }
 export const SCOPE_B = Object.freeze({ sessionId: 'sess_B', actorId: 'actor_B' });
 export const SCOPE_FORK = Object.freeze({ sessionId: 'sess_A_fork', actorId: 'actor_A_fork' });
 
-let opCounter = 0;
-let seqCounter = 0;
-/** 宿主产生的 operationId(不是模型可控的任意事务 ID)。 */
-export function nextOpId(prefix = 'op') {
-  opCounter += 1;
-  return `${prefix}_${String(opCounter).padStart(4, '0')}`;
-}
-
-/** 宿主 journal seq。每条成功折叠的 canonical 对应一个递增 seq。 */
-export function nextSeq() {
-  seqCounter += 1;
-  return seqCounter;
-}
-
 /**
- * handleLoad 只产生 pending；selected 必须等 adapter 确认 canonical 对之后才变。
- * 本助手模拟“宿主已确认最终成功回执”这一步，供需要观察 selected 的单测使用。
+ * tool_load 在 rc.1 设计里**立即提交**：返回 `{response, admitted|null}`，
+ * admitted 非 null 时 adapter 负责写 admission 并更新掩码。本助手只做接线。
  * @param {any} engine
  * @param {any} scope
  * @param {any} input
  */
-export async function commitLoad(engine, scope, input) {
-  const op = nextOpId();
-  const res = await engine.handleLoad(input, scope, { operationId: op });
-  if (!res.response.ok) return { response: res.response, applied: false };
-  const out = engine.applyCanonicalPair({
-    seq: nextSeq(),
-    call: { operationId: op, tool: 'tool_load', input },
-    result: { isError: false, ok: true, payload: res.response.data.receipt },
-  }, scope);
-  return { response: res.response, applied: out.applied, reason: out.reason };
+export function loadTools(engine, scope, input) {
+  return engine.handleLoad(input, scope);
 }
 
 /**
- * 构造一对 canonical tool/call → tool/result(模拟宿主已确认的对)。
- * @param {{seq:number, operationId:string, input:any, payload:any, isError?:boolean, ok?:boolean}} o
+ * tool_unload 撤销 admitted 名字：返回 `{response, revoked|null}`。
+ * @param {any} engine
+ * @param {any} scope
+ * @param {any} input `{names: [...]}`
  */
-export function pair(o) {
-  return {
-    seq: o.seq,
-    call: { operationId: o.operationId, tool: 'tool_load', input: o.input },
-    result: {
-      isError: o.isError ?? false,
-      ok: o.ok ?? true,
-      payload: o.payload,
-    },
-  };
+export function unloadTools(engine, scope, input) {
+  return engine.handleUnload(input, scope);
 }

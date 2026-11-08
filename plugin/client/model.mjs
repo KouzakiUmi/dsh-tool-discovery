@@ -87,7 +87,7 @@ export function groupRows (rows, coreNames) {
  *            selectedCount: number, missingCount: number}}
  */
 export function buildRows (meta, selected) {
-  const fixed = ['tool_list', 'tool_search', 'tool_load'];
+  const fixed = ['tool_list', 'tool_search', 'tool_load', 'tool_unload'];
   const available = new Set();
   for (const choice of meta?.choices ?? []) {
     if (typeof choice?.name === 'string' && !fixed.includes(choice.name)) available.add(choice.name);

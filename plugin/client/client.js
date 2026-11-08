@@ -26,10 +26,10 @@ window.__ModuleLoader__.load({
     var exports = module.exports;
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
     const React = require('react');
-    const { createElement: h, useState, useRef, useEffect, useSyncExternalStore, useCallback } = React;
+    const { createElement: h, useState, useRef, useEffect, useSyncExternalStore, useCallback, useMemo } = React;
 
     // ---- 纯逻辑（与 plugin/client/model.mjs 同构） ----------------------------
-    const FIXED_ENTRIES = ['tool_list', 'tool_search', 'tool_load'];
+    const FIXED_ENTRIES = ['tool_list', 'tool_search', 'tool_load', 'tool_unload'];
 
     function filterRows (rows, query) {
       if (!Array.isArray(rows)) return [];
@@ -144,18 +144,20 @@ window.__ModuleLoader__.load({
 
     const en = {
       nav: 'Tool discovery',
-      hero: 'The first request carries the three small entries below plus full schemas for the configured initial set (core tools and the current preset’s retained tools by default). Other tools disclose their real native schemas on the turn after explicit selection, and every call still follows the host’s own approval and sandbox chain.',
+      hero: 'The first request carries the four small entries below plus full schemas for the configured initial set (core tools and the current preset’s retained tools by default). Other tools disclose their real native schemas on the turn after explicit selection, and every call still follows the host’s own approval and sandbox chain.',
       about: 'Design invariants & permissions',
-      entriesGroup: 'Three entries',
+      entriesGroup: 'Four entries',
       entryListAnswer: 'Which tools are discoverable in this category?',
       entryListResult: 'Returns paginated full tool names',
       entrySearchAnswer: 'Which tool suits this task?',
       entrySearchResult: 'Returns top-K candidate cards (short purpose + ref/revision)',
       entryLoadAnswer: 'I want these tools.',
-      entryLoadResult: 'Returns a versioned success receipt; the real schema is disclosed next turn',
+      entryLoadResult: 'Admits the tools; their real schemas appear in the next request',
+      entryUnloadAnswer: 'I no longer need these tools.',
+      entryUnloadResult: 'Removes admitted tools from the next request’s declarations',
       activeNo: 'Does not change the active set',
-      activeYes: 'Changes the active set after a successful load',
-      invariants: 'Two invariants bound the design: within one cache epoch the disclosed set only grows (the wire recorded at first disclosure never changes), and only a successful compaction resets the epoch — the model cannot unload, action "unload" is rejected. Disclosure is not execution permission: every call still passes the host’s own approval, sandbox, and permission chain.',
+      activeYes: 'Changes the active set',
+      invariants: 'The design admits tools per session: tool_load discloses a tool from the next request, tool_unload retracts it, and retraction survives revocation and version changes. Disclosure is not execution permission: every call still passes the host’s own approval, sandbox, and permission chain — plus an admission gate that requires the name to have been loaded this session.',
       statFixed: 'fixed entries',
       statCatalog: 'catalog tools',
       statSelected: 'initial list',
@@ -164,20 +166,22 @@ window.__ModuleLoader__.load({
       statNoMeta: 'catalog metadata unavailable',
       features: 'Optional features',
       initialTools: 'Inject initial tools',
-      initialToolsHelp: 'Enabled by default. When disabled, configured initial tools are not injected automatically; tool_load can still load them. Takes effect in a new session or after successful compaction.',
+      initialToolsHelp: 'Enabled by default. When disabled, configured initial tools are not injected automatically; tool_load can still load them. Reconciles on the next request.',
       presetTools: 'Always allow tools specified by the preset',
-      presetToolsHelp: 'On by default. Includes only the current bound preset’s registered tools, even when manual injection is off. Does not grant tools from other presets or bypass native permissions. Applies in a new session or after successful compaction.',
-      compactDescriptions: 'Concise DSH default tool descriptions',
-      compactDescriptionsHelp: 'Master switch, off by default. Native mode only; replaces matching official descriptions without changing parameters or execution. Unknown definitions and PTC stay unchanged. Saves without reload; changes apply in new sessions or after successful compaction.',
-      descriptionTools: 'Individual tool description switches',
-      descriptionToolsHelp: 'The original five tools default on under the master switch; additional tools default off. Each switch controls only the description, not tool availability or permission. Settings are captured at the next cache-epoch boundary.',
-      descriptionMasterOff: 'The master switch is off. You can prepare individual choices below, but no new epoch will use concise descriptions until it is enabled.',
-      ptcCompat: 'PTC compatibility',
-      ptcCompatHelp: 'Off by default. PTC sessions bypass this plugin and keep the host SDK. On: discovery runs inside run_code. The three entries and the current preset’s initial tools are injected into the next run_code SDK, not the model tool list. Takes effect on the next turn.',
-      strictEpoch: 'Require trusted epoch records (advanced)',
-      strictEpochHelp: 'Off by default. Enabling reloads the plugin and requires durable epoch records. Existing main sessions without a record need a successful user /compact; subagent enforcement is off by default. Keep off for uninterrupted use; eligibility and protocol checks still apply.',
-      childEpoch: 'Also require trusted epochs for subagents (advanced)',
-      childEpochHelp: 'Off by default. Effective only when strict epoch verification is on. Subagents cannot perform user /compact, so enabling may block legacy child sessions. Changing this reloads the plugin; native ownership, not session labels, identifies children.',
+      presetToolsHelp: 'On by default. Includes only the current bound preset’s registered tools, even when manual injection is off. Does not grant tools from other presets or bypass native permissions. Reconciles on the next request.',
+      gateOwnScope: 'Gate agent’s own registrations',
+      gateOwnScopeHelp: 'On by default. Tools a runtime registers into the agent’s own scope cannot be masked by the host, so admission is their only gate: on = they must also pass tool_load before executing. Off = own-scope tools outside the catalog execute freely.',
+      compactDescriptions: 'Concise DSH default tool descriptions (deprecated)',
+      compactDescriptionsHelp: 'Has no effect on DSH 0.2.2: provider-owned declarations cannot be rewritten. Kept for configuration compatibility.',
+      descriptionTools: 'Individual tool description switches (deprecated)',
+      descriptionToolsHelp: 'Has no effect on DSH 0.2.2 together with the master switch.',
+      descriptionMasterOff: 'Deprecated on this host version; the switches below are inert.',
+      ptcCompat: 'PTC compatibility (deprecated)',
+      ptcCompatHelp: 'Has no effect on DSH 0.2.2: discovery now runs uniformly in native and PTC sessions — the same masks apply to the SDK projection inside run_code.',
+      strictEpoch: 'Require trusted epoch records (removed)',
+      strictEpochHelp: 'Removed on DSH 0.2.2: the epoch/baseline subsystem no longer exists — admission is per session. This field is kept for configuration compatibility and has no effect.',
+      childEpoch: 'Also require trusted epochs for subagents (removed)',
+      childEpochHelp: 'Removed together with the trusted-epoch setting on DSH 0.2.2. Has no effect.',
       title: 'Manual initial tool list',
       intro: 'Lists application-wide registered tools, not session loading state. When manual injection is on, checked tools are advertised initially. Preset retention is controlled separately; registration does not guarantee permission in every session.',
       groupNote: 'Grouping: built-in = DSH default list, MCP = mcp__ prefix, everything else is plugin/third-party (the registry does not record the owning plugin).',
@@ -193,8 +197,8 @@ window.__ModuleLoader__.load({
       missing: 'not registered in the application catalog — uncheck to remove',
       unknown: 'global registration status not confirmed',
       fixed: 'Always present',
-      fixedNote: 'The three discovery entries are always advertised and cannot be removed.',
-      pending: 'Takes effect in the next new session, or after a successful compaction. The current session keeps the list it started with.',
+      fixedNote: 'The four discovery entries are always advertised and cannot be removed.',
+      pending: 'The list reconciles on the next request. Existing on-demand admissions remain until unloaded.',
       saved: 'Saved.',
       failed: 'Not saved — the host rejected the write. Retry.',
       tolerantLoad: 'Allow idempotent loading of initial tools',
@@ -202,7 +206,7 @@ window.__ModuleLoader__.load({
       exactList: 'Use an exact initial tool list (including DSH core tools)',
       exactListHelp: 'Off by default: when initial injection is enabled, registered core tools are also included. Turn on to require tool_load for unlisted core tools. Changing this reloads the plugin.',
       advanced: 'Advanced configuration',
-      reload: 'These fields reload the plugin when saved; this may reset in-memory state and block existing sessions in strict mode.',
+      reload: 'These fields reload the plugin when saved; in-memory state may reset.',
       locale: 'Model-facing language', auto: 'Follow interface', en: 'English', zh: 'Chinese',
       budgets: 'Budget overrides (JSON)',
       budgetsHelp: 'null disables overrides. Use an object of budget keys and positive integers or null for individual hard limits. Small limits can block normal tasks or add model round-trips; they do not guarantee lower token costs.',
@@ -213,9 +217,9 @@ window.__ModuleLoader__.load({
       invalidValue: 'Invalid configuration: check known keys, positive integer limits, or category title/capabilitySummary fields.',
       loading: 'Configuration is loading or unavailable.', readOnly: 'This configuration is read-only.', saving: 'Saving…',
       // 生效时机徽标（FEATURE_EFFECT 驱动；title 提供悬停全文）。
-      fxReload: 'reloads plugin', fxSession: 'new session / compaction', fxTurn: 'next turn',
+      fxReload: 'reloads plugin', fxSession: 'new session', fxTurn: 'next turn',
       fxReloadTitle: 'Saving this field reloads the plugin; in-memory state may reset.',
-      fxSessionTitle: 'Applies in the next new session, or after a successful compaction; the current session keeps its list.',
+      fxSessionTitle: 'Applies when a new session creates its runtime.',
       fxTurnTitle: 'Takes effect on the next turn.',
       matchCount: (n) => `${n} match${n === 1 ? '' : 'es'}`,
       jsonInvalidNow: 'Invalid JSON — the saved button is disabled until it parses.',
@@ -224,18 +228,20 @@ window.__ModuleLoader__.load({
     };
     const zh = {
       nav: '工具发现',
-      hero: '首轮携带下面三个小入口，以及配置的初始集合的完整 schema（默认含核心工具与当前 preset 保留的工具）。其它工具在显式选定后的下一轮披露真实原生 schema；每次调用仍走宿主原生的审批与沙箱链。',
+      hero: '首轮携带下面四个小入口，以及配置的初始集合的完整 schema（默认含核心工具与当前 preset 保留的工具）。其它工具在显式选定后的下一轮披露真实原生 schema；每次调用仍走宿主原生的审批与沙箱链。',
       about: '设计约束与权限说明',
-      entriesGroup: '三个入口',
+      entriesGroup: '四个入口',
       entryListAnswer: '某类别里有哪些可发现工具？',
       entryListResult: '返回分页的完整工具名',
       entrySearchAnswer: '哪个工具适合当前任务？',
       entrySearchResult: '返回 Top-K 候选卡（短用途 + ref/revision）',
       entryLoadAnswer: '我要用哪些工具？',
-      entryLoadResult: '返回版本化成功回执；下一轮披露真实 schema',
+      entryLoadResult: '准入这些工具；下一轮起披露真实 schema',
+      entryUnloadAnswer: '我不再需要哪些工具？',
+      entryUnloadResult: '把已准入的工具移出下一轮的工具声明',
       activeNo: '不改变激活集合',
-      activeYes: '成功 load 后改变激活集合',
-      invariants: '两条不变量框住整个设计：一个缓存周期内已披露集合只增不改（首披露时记录的 wire 不再变化），只有一次成功的压缩才会重置周期——模型不能卸载，action "unload" 会被拒绝。披露不是执行许可：每次调用仍走宿主原生的审批、沙箱与权限链。',
+      activeYes: '改变激活集合',
+      invariants: '设计按会话准入工具：tool_load 使工具从下一请求起披露，tool_unload 撤回，撤回对撤权与换版同样有效。披露不是执行许可：每次调用仍走宿主原生的审批、沙箱与权限链——外加一道准入门禁，要求该名字在本会话内已 load。',
       statFixed: '常驻入口',
       statCatalog: '目录工具',
       statSelected: '初始名单',
@@ -244,20 +250,22 @@ window.__ModuleLoader__.load({
       statNoMeta: '目录元数据不可用',
       features: '可选功能',
       initialTools: '自动注入初始工具',
-      initialToolsHelp: '默认开启。关闭后不自动注入下方配置的工具，仍可通过 tool_load 加载。在新会话或成功压缩后生效。',
+      initialToolsHelp: '默认开启。关闭后不自动注入下方配置的工具，仍可通过 tool_load 加载。在下一请求对齐。',
       presetTools: '永远放行 preset 规定的工具',
-      presetToolsHelp: '默认开启。保留当前会话实际绑定 preset 登记的工具，即使关闭手动初始注入；不会放行其它 preset 的工具或绕过原生权限。在新会话或成功压缩后采用。',
-      compactDescriptions: 'DSH 默认工具提示词精简',
-      compactDescriptionsHelp: '总开关默认关闭，仅 native 模式生效。替换指纹匹配的官方工具描述，不改参数与执行；未知定义及 PTC 保持原样。保存不重载，在新会话或成功压缩后采用。',
-      descriptionTools: '逐工具描述精简开关',
-      descriptionToolsHelp: '总开关开启时，原有五项默认精简，新增工具默认关闭。可逐项选择；只影响描述，不影响工具是否披露或执行权限。配置在下一缓存周期边界采用。',
-      descriptionMasterOff: '总开关已关闭。仍可预先设置以下选项，但须开启总开关，新周期才会采用精简文案。',
-      ptcCompat: 'PTC 模式兼容',
-      ptcCompatHelp: '默认关闭。关闭时 PTC 会话不经过本插件，宿主 SDK 保持原样。开启后发现协议在 run_code 内工作：三个入口和当前 preset 的初始工具写入下一轮 run_code SDK，而不是模型可直接调用的工具表。下一轮生效。',
-      strictEpoch: '强制可信周期校验（高级）',
-      strictEpochHelp: '默认关闭。开启会重新加载插件并要求持久化可信周期记录；没有记录的存量主会话需要成功执行用户 /compact；默认不对子代理强制校验。希望不中断使用时请保持关闭；工具资格和协议校验仍然有效。',
-      childEpoch: '对子代理强制可信周期校验（高级）',
-      childEpochHelp: '默认关闭，仅在强制可信周期校验开启时生效。子代理不能自行执行用户 /compact，开启可能阻断旧子会话；切换会重新加载插件。身份按宿主运行时父子所有权判断，不信会话自称。',
+      presetToolsHelp: '默认开启。保留当前会话实际绑定 preset 登记的工具，即使关闭手动初始注入；不会放行其它 preset 的工具或绕过原生权限。在下一请求对齐。',
+      gateOwnScope: '对 agent 自身注册的工具同样要求准入',
+      gateOwnScopeHelp: '默认开启。注册到 agent 自身 scope 的工具宿主无法遮蔽，准入是它唯一的闸门：开启 = 也要先 tool_load 才能执行；关闭 = 目录之外的自身注册工具直接放行。',
+      compactDescriptions: 'DSH 默认工具提示词精简（已废弃）',
+      compactDescriptionsHelp: '在 DSH 0.2.2 上无效：provider 持有的声明无法改写。仅为配置兼容保留。',
+      descriptionTools: '逐工具描述精简开关（已废弃）',
+      descriptionToolsHelp: '在 DSH 0.2.2 上随总开关一并无效。',
+      descriptionMasterOff: '此宿主版本已废弃：以下开关不再生效。',
+      ptcCompat: 'PTC 模式兼容（已废弃）',
+      ptcCompatHelp: '在 DSH 0.2.2 上无效：发现现在统一在 native 与 PTC 会话中工作——run_code 内的 SDK 投影遵守同一套掩码。',
+      strictEpoch: '强制可信周期校验（已移除）',
+      strictEpochHelp: '在 DSH 0.2.2 上已移除：周期/基线子系统不复存在——准入按会话管理。仅为配置兼容保留，无效果。',
+      childEpoch: '对子代理强制可信周期校验（已移除）',
+      childEpochHelp: '在 DSH 0.2.2 上随可信周期设置一并移除。无效果。',
       title: '手动初始工具名单',
       intro: '以下是应用全局登记目录，不是会话加载状态。开启手动初始注入后，勾选工具会直接披露；preset 保留由独立开关控制。全局已登记不代表每个会话都具有执行权限。',
       groupNote: '分组依据：内置 = DSH 默认名单，MCP = mcp__ 前缀命名，其余归为插件与第三方（注册表不记录工具归属的具体插件）。',
@@ -273,8 +281,8 @@ window.__ModuleLoader__.load({
       missing: '未在应用全局目录登记（取消勾选可移除）',
       unknown: '全局登记状态尚未确认',
       fixed: '始终存在',
-      fixedNote: '三个发现入口始终披露，不可删除。',
-      pending: '改动在下一个新会话、或一次成功压缩之后生效；当前会话保持它开始时的名单。',
+      fixedNote: '四个发现入口始终披露，不可删除。',
+      pending: '名单在下一请求对齐；已有按需准入保持到显式卸载。',
       saved: '已保存。',
       failed: '未保存——宿主拒绝了这次写入，可重试。',
       tolerantLoad: '容忍重复加载初始工具',
@@ -282,7 +290,7 @@ window.__ModuleLoader__.load({
       exactList: '使用精确初始名单（含 DSH 核心工具）',
       exactListHelp: '默认关闭：初始注入开启时还会加入已登记的核心工具。开启后，名单外的核心工具也需 tool_load。修改会重新加载插件。',
       advanced: '高级配置',
-      reload: '保存这些字段会重新加载插件，可能重置内存状态；严格模式下可能阻断存量会话。',
+      reload: '保存这些字段会重新加载插件，可能重置内存状态。',
       locale: '模型可见文案语言', auto: '跟随界面', en: '英语', zh: '中文',
       budgets: '预算覆盖（JSON）',
       budgetsHelp: 'null 表示不覆盖。对象可填写预算键与正整数，单项硬限额可用 null 关闭。较小上限可能阻断正常任务或增加模型往返，不保证降低 token 成本。',
@@ -293,9 +301,9 @@ window.__ModuleLoader__.load({
       invalidValue: '配置无效：请检查支持的键、正整数上限、或类别的 title/capabilitySummary 字段。',
       loading: '配置正在加载或暂不可用。', readOnly: '当前配置为只读。', saving: '正在保存…',
       // 生效时机徽标（FEATURE_EFFECT 驱动；title 提供悬停全文）。
-      fxReload: '保存即重载', fxSession: '新会话/压缩后', fxTurn: '下一轮生效',
+      fxReload: '保存即重载', fxSession: '新会话生效', fxTurn: '下一轮生效',
       fxReloadTitle: '保存该字段会重新加载插件，内存状态可能重置。',
-      fxSessionTitle: '在下一个新会话、或一次成功压缩之后生效；当前会话保持它开始时的名单。',
+      fxSessionTitle: '新会话创建 runtime 时采用。',
       fxTurnTitle: '下一轮生效。',
       matchCount: (n) => `匹配 ${n} 项`,
       jsonInvalidNow: 'JSON 无效——解析成功前保存按钮保持禁用。',
@@ -336,8 +344,9 @@ window.__ModuleLoader__.load({
     //   reload = 保存即重载插件；session = 新会话/成功压缩后；turn = 下一轮。
     //   null = 无徽标（不该出现，防御性回退）。与 config.mjs 的 volatile 标记一一对应。
     const FEATURE_EFFECT = {
-      initialToolsEnabled: 'session',
-      alwaysAllowPresetTools: 'session',
+      initialToolsEnabled: 'turn',
+      alwaysAllowPresetTools: 'turn',
+      gateOwnScopeTools: 'session',
       compactBuiltinToolDescriptions: 'session',
       ptcCompatibility: 'turn',
       requireTrustedEpoch: 'reload',
@@ -350,6 +359,7 @@ window.__ModuleLoader__.load({
       return [
         ['initialToolsEnabled', 'initialTools', 'initialToolsHelp', value?.initialToolsEnabled !== false],
         ['alwaysAllowPresetTools', 'presetTools', 'presetToolsHelp', value?.alwaysAllowPresetTools !== false],
+        ['gateOwnScopeTools', 'gateOwnScope', 'gateOwnScopeHelp', value?.gateOwnScopeTools !== false],
         ['compactBuiltinToolDescriptions', 'compactDescriptions', 'compactDescriptionsHelp', value?.compactBuiltinToolDescriptions === true],
         ['ptcCompatibility', 'ptcCompat', 'ptcCompatHelp', value?.ptcCompatibility === true],
         ['requireTrustedEpoch', 'strictEpoch', 'strictEpochHelp', value?.requireTrustedEpoch === true],
@@ -613,11 +623,14 @@ window.__ModuleLoader__.load({
       const disabled = busy === true || snapshot?.status !== 'ready' || snapshot?.writable === false;
       const locale = snapshot?.value?.locale ?? 'auto';
       const selected = Array.isArray(snapshot?.value?.alwaysVisible) ? snapshot.value.alwaysVisible : [];
-      const built = buildRows(snapshot?.meta, selected);
-      const visible = filterRows(built.rows, query);
+      // 派生数据 memo：selected 每次渲染都是新数组，按它做依赖永远失配；
+      // 统一锚到 snapshot（useSyncExternalStore 未变更时引用不变），
+      // query/collapsed 之外的重渲染（draft、notice 更新）不再重排目录。
+      const built = useMemo(() => buildRows(snapshot?.meta, selected), [snapshot]);
+      const visible = useMemo(() => filterRows(built.rows, query), [built, query]);
       const searching = query.trim() !== '';
-      const groups = groupRows(visible, snapshot?.meta?.default);
-      const features = Object.fromEntries(featureChoices(snapshot?.value).map((row) => [row[0], row]));
+      const groups = useMemo(() => groupRows(visible, snapshot?.meta?.default), [visible, snapshot]);
+      const features = useMemo(() => Object.fromEntries(featureChoices(snapshot?.value).map((row) => [row[0], row])), [snapshot]);
 
       const featureRow = (key, hairline) => {
         const row = features[key];
@@ -677,7 +690,8 @@ window.__ModuleLoader__.load({
           h('div', { style: S.cards },
             ...[['tool_list', 'entryListAnswer', 'entryListResult', false],
               ['tool_search', 'entrySearchAnswer', 'entrySearchResult', false],
-              ['tool_load', 'entryLoadAnswer', 'entryLoadResult', true]].map(([name, answer, result, activates]) =>
+              ['tool_load', 'entryLoadAnswer', 'entryLoadResult', true],
+              ['tool_unload', 'entryUnloadAnswer', 'entryUnloadResult', true]].map(([name, answer, result, activates]) =>
               h('div', { key: name, style: S.entryCard },
                 h('code', { style: S.entryName }, name),
                 h('p', { style: S.entryText }, t(answer)),
@@ -688,6 +702,7 @@ window.__ModuleLoader__.load({
           h('h3', { style: S.cardTitle }, t('features')),
           featureRow('initialToolsEnabled', false),
           featureRow('alwaysAllowPresetTools', true),
+          featureRow('gateOwnScopeTools', true),
           featureRow('compactBuiltinToolDescriptions', true),
           featureRow('ptcCompatibility', true)),
 

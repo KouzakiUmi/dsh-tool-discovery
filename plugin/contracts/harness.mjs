@@ -6,7 +6,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { dshModule, installBaseUrl, fixtureFileUrl, installRoot } from './install-resolver.mjs'
+import { dshModule, hasDshModule, installBaseUrl, fixtureFileUrl, installRoot } from './install-resolver.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES_DIR = path.resolve(HERE, '..', 'fixtures')
@@ -14,9 +14,16 @@ export const TMP_ROOT = path.resolve(HERE, '..', 'fixtures', 'tmp')
 
 /** 安装内公共服务 entry（裸包名由 Loader 在安装解析域内导入）。 */
 export function serviceEntries (persistenceRoot) {
+  // 0.2.2 起 `tools` 配置的 `mode` / `maxParallelSubCalls` 被 `z.never()` 收回：
+  // 执行模式改由「在该作用域挂载 native / PTC executor」决定，传旧键会直接装配失败。
+  // 因此新宿主（存在 executor 包）挂 executor entry，旧宿主保持原来的 mode 配置。
+  const executorEntries = hasDshModule('@deepseek-ai/dsh-tool-executor-native')
+    ? [{ id: 'tool-executor-native', name: '@deepseek-ai/dsh-tool-executor-native', config: {} }]
+    : []
   return [
     { id: 'system-prompt', name: '@deepseek-ai/dsh-system-prompt', config: {} },
-    { id: 'tools', name: '@deepseek-ai/dsh-tools', config: { mode: 'native' } },
+    { id: 'tools', name: '@deepseek-ai/dsh-tools', config: executorEntries.length === 0 ? { mode: 'native' } : {} },
+    ...executorEntries,
     { id: 'sessions', name: '@deepseek-ai/dsh-session', config: {} },
     { id: 'session-projections', name: '@deepseek-ai/dsh-session-projection', config: {} },
     { id: 'session-persistence-jsonl', name: '@deepseek-ai/dsh-session-persistence-jsonl', config: { root: persistenceRoot } },
@@ -34,19 +41,14 @@ export function fixtureEntries () {
     { id: 'fx-mock-provider', name: fixtureFileUrl(path.join(FIXTURES_DIR, 'mock-provider.mjs')), config: {} },
     { id: 'fx-inherited-tools', name: fixtureFileUrl(path.join(FIXTURES_DIR, 'inherited-tools.mjs')), config: {} },
     { id: 'fx-scope-tools', name: fixtureFileUrl(path.join(FIXTURES_DIR, 'scope-tools.mjs')), config: {} },
-    { id: 'fx-control-tools', name: fixtureFileUrl(path.join(FIXTURES_DIR, 'control-tools.mjs')), config: {} },
-    {
-      id: 'fx-projection-guard',
-      name: fixtureFileUrl(path.join(FIXTURES_DIR, 'projection-guard.mjs')),
-      // 可信显式配置：仅这些框架强制输出/终止工具可被投影保留。不按名称猜测豁免。
-      config: { frameworkRetained: ['fixture_final_output'] }
-    }
+    { id: 'fx-control-tools', name: fixtureFileUrl(path.join(FIXTURES_DIR, 'control-tools.mjs')), config: {} }
   ]
 }
 
+// sessionQuery 仍装配供宿主 resume/历史取证使用，但不是发现插件的激活依赖。
 export const REQUIRED_SERVICES = [
   'loader', 'systemPrompt', 'tools', 'sessions', 'sessionProjections',
-  'sessionPersistence', 'sessionQuery', 'approval', 'llm', 'agents', 'agentLoop'
+  'sessionPersistence', 'approval', 'llm', 'agents', 'agentLoop'
 ]
 
 // 本进程创建的临时根。进程退出时统一兜底清除，避免个别用例漏清而在 fixtures/tmp 下累积；

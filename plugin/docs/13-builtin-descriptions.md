@@ -2,6 +2,11 @@
 
 更新日期：2026-10-26。本文描述工作区实现，不表示已发布或在线安装。
 
+**宿主差异**：以下 native 描述精简仅适用于可改写工具声明的旧宿主。DSH 0.2.2-rc.1 的 native 声明由宿主 provider 管理，本功能不生效；设置保持可见，启用时记录诊断。
+
+
+> **0.6.0 之后**：本文引用的 epoch/journal/projection/trusted-epoch/PTC/描述精简子系统及其测试文件已随旧投影路径整体移除；文中以 `代码` 形式出现的路径即被移除文件，仅作历史引用。
+
 ## 1. 总开关与逐工具开关
 
 “设置 → 工具发现”保留总开关 **DSH 默认工具提示词精简**，并提供可折叠的 **逐工具描述精简开关**。每个受支持工具都有自己的开关，不按类别捆绑。
@@ -67,7 +72,7 @@
 4. 搜索继续使用完整原始描述，避免为精简展示而丢失检索词。
 5. 定义变更/撤权照常使执行选择失效；保留冻结展示不等于恢复调用权限。
 
-实现入口为 [builtin-descriptions.mjs](<../adapters/dsh/builtin-descriptions.mjs>)，原五项文案在 [v1 数据](<../adapters/dsh/builtin-descriptions-data.mjs>)，扩展文案在 [v2 数据](<../adapters/dsh/builtin-descriptions-v2.mjs>)，逐项默认值及稳定位序在 [选项定义](<../adapters/dsh/builtin-description-options.mjs>)。
+实现入口为 `../adapters/dsh/builtin-descriptions.mjs`，原五项文案在 `../adapters/dsh/builtin-descriptions-data.mjs`，扩展文案在 `../adapters/dsh/builtin-descriptions-v2.mjs`，逐项默认值及稳定位序在 `../adapters/dsh/builtin-description-options.mjs`。
 
 ## 5. 生效与旧版本恢复
 
@@ -96,8 +101,8 @@
 
 - [原五项样本](<../tests/fixtures/builtin-descriptions-rc3.json>) 与 [扩展注册样本](<../tests/fixtures/builtin-descriptions-extra-rc3.json>)来自官方 rc.3 注册过程；不执行工具、不启动子代理或终端、不读取凭据。
 - [扩展捕获助手](<../tests/helpers/capture-extra-builtins.mjs>)供目标安装对照，不根据当前安装自动“批准”新指纹。
-- [逐项单测](<../tests/unit/builtin-description-options.test.mjs>)覆盖全部开关、掩码、v1/v2 回放、正负向匹配及 UI 单叶写入。
-- [生命周期单测](<../tests/unit/builtin-descriptions.test.mjs>)与[真实宿主组合测试](<../tests/composition/gate-builtin-descriptions.test.mjs>)覆盖实际请求、执行门禁、volatile 不重载、冷启动、真实手动/自动压缩。
+- `../tests/unit/builtin-description-options.test.mjs`覆盖全部开关、掩码、v1/v2 回放、正负向匹配及 UI 单叶写入。
+- `../tests/unit/builtin-descriptions.test.mjs`与`../tests/composition/gate-builtin-descriptions.test.mjs`覆盖实际请求、执行门禁、volatile 不重载、冷启动、真实手动/自动压缩。
 
 字符与 UTF-8 字节可复现，但不是实际模型 token 数。收益由真正披露的工具和匹配到的变体决定；不把互斥变体的字数相加冒充一次请求成本，也不承诺整个提示词固定降幅。真实模型行为、安全边界与任务完成率还需要独立 A/B 评估。
 

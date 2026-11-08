@@ -1,28 +1,16 @@
+// 纯函数回归：字节预算的惰性前缀、分页游标与搜索结果卡片的懒构造。
+//
+// 旧文件的 freezeTool 用例（冻结 wire 保留嵌套 JSON 顺序、toJSON/getter 快照、
+// 循环 JSON 拒绝）随 rc.1 删除冻结 wire 子系统而删除：宿主拥有声明，插件不再
+// 保存逐字 wire 回执；目录快照的不可变/深复制性质由 registry.test.mjs 与
+// review-state-races.test.mjs 覆盖。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fitPrefixLength } from '../../domain/budgets.mjs';
 import { paginateNames } from '../../domain/list.mjs';
-import { makeEngine, binding, SCOPE_A, commitLoad } from './helpers.mjs';
-import { createState, freezeTool } from '../../domain/state.mjs';
-import { digestOf, canonicalJson } from '../../domain/canonical.mjs';
+import { makeEngine, loadTools, binding, SCOPE_A } from './helpers.mjs';
 
 const bytes = (value) => Buffer.byteLength(JSON.stringify(value), 'utf8');
-
-test('freeze preserves nested observed JSON order and takes an independent copy', () => {
-  const wire = { name: 'ordered', description: 'description', parameters: {
-    type: 'object', properties: { z: { type: 'string', description: 'z' }, a: { enum: ['b', 'a'] } }, required: ['z', 'a'],
-  } };
-  const original = JSON.stringify(wire);
-  assert.notEqual(original, canonicalJson(wire), 'fixture must detect canonical key sorting');
-  const rec = { toolId: 'ordered', name: 'ordered', revision: 'r1', schemaDigest: digestOf(wire), wire };
-  const state = freezeTool(createState(), rec);
-  const frozen = state.frozen.get('ordered');
-  assert.equal(JSON.stringify(frozen.wire), original);
-  assert.equal(frozen.bytes, bytes(wire));
-  wire.parameters.properties.z.description = 'mutated';
-  wire.parameters.required.reverse();
-  assert.equal(JSON.stringify(frozen.wire), original);
-});
 
 test('bounded prefix examines only a byte-bounded prefix of a huge page', () => {
   let touched = 0;
@@ -70,45 +58,7 @@ test('search byte cap constructs cards lazily and returned refs remain loadable'
   assert.ok(response.data.candidates.length > 0 && response.data.candidates.length < 100);
   assert.ok(bytes(response) <= 800);
   assert.equal(response.data.truncated, true);
-  assert.equal((await commitLoad(engine, SCOPE_A, { candidates: [{ ref: response.data.candidates[0].ref }] })).applied, true);
-});
-
-const freezeWire = (wire, schemaDigest = digestOf(wire), state = createState()) => freezeTool(state,
-  { toolId: 'edge', name: 'edge', revision: 'r', schemaDigest, wire });
-
-test('JSON snapshot retains escaping, numeric-key order and null-prototype data', () => {
-  const properties = Object.assign(Object.create(null), { z: { enum: ['"', '\\', '\n', '中文', '\ud800', '\u2028'] }, 10: {}, 2: {} });
-  const wire = { parameters: { properties, type: 'object' }, description: 'x\t\r', name: 'edge' };
-  assert.equal(JSON.stringify(freezeWire(wire).frozen.get('edge').wire), JSON.stringify(wire));
-});
-
-test('stable getters/proxies snapshot as JSON data; later mutation cannot rewrite it', () => {
-  const parameters = new Proxy({ type: 'object', properties: {} }, {});
-  const wire = { name: 'edge', get description() { return 'stable'; }, parameters };
-  const expected = JSON.stringify(wire);
-  const frozen = freezeWire(wire).frozen.get('edge').wire;
-  parameters.type = 'string';
-  assert.equal(JSON.stringify(frozen), expected);
-  assert.equal(Object.getOwnPropertyDescriptor(frozen, 'description').get, undefined);
-});
-
-test('toJSON transformations and changing getters never enter frozen state', () => {
-  const state = createState();
-  const wire = { name: 'edge', parameters: { type: 'object' } };
-  Object.defineProperty(wire.parameters, 'toJSON', { value: () => ({ type: 'string' }) });
-  assert.throws(() => freezeWire(wire, digestOf(wire), state), { code: 'INCOMPATIBLE_COMPOSITION' });
-  let reads = 0;
-  const moving = { name: 'edge', get description() { return String(reads++); }, parameters: {} };
-  assert.throws(() => freezeWire(moving, digestOf(moving), state), { code: 'INCOMPATIBLE_COMPOSITION' });
-  assert.equal(state.frozen.size, 0);
-});
-
-test('circular JSON fails without mutating state', () => {
-  const state = createState();
-  const wire = { name: 'edge', parameters: {} };
-  wire.parameters.self = wire;
-  assert.throws(() => freezeWire(wire, 'unused', state));
-  assert.equal(state.frozen.size, 0);
+  assert.equal((await loadTools(engine, SCOPE_A, { candidates: [{ ref: response.data.candidates[0].ref }] })).response.ok, true);
 });
 
 test('an oversized first item is inspected once then fails without reading the page tail', () => {

@@ -357,8 +357,20 @@ export function documentTokens(entry) {
  * @param {ReadonlyArray<import('./catalog.mjs').CatalogEntry>} entries
  * @returns {SearchIndex}
  */
-export function buildSearchIndex(entries) {
-  const items = entries.map((entry) => ({ entry, doc: documentTokens(entry) }));
+export function buildSearchIndex(entries, prevIndex = null) {
+  // doc 的全部输入(name/categories/summary/skill)都在 searchDocumentId 里：
+  // toolId + searchDocumentId 未变的条目直接复用上一版的 doc，增量刷新只重分
+  // 词真正变过的条目——这是 searchDocumentId 的设计用途（文件头注释）。
+  const prevDocs = new Map();
+  if (prevIndex) {
+    for (const { entry, doc } of prevIndex.items) {
+      prevDocs.set(entry.toolId, { docId: entry.searchDocumentId, doc });
+    }
+  }
+  const items = entries.map((entry) => {
+    const prev = prevDocs.get(entry.toolId);
+    return { entry, doc: prev !== undefined && prev.docId === entry.searchDocumentId ? prev.doc : documentTokens(entry) };
+  });
   /** @type {Map<string, number>} */
   const df = new Map();
   for (const { doc } of items) {
@@ -481,7 +493,10 @@ export function search(index, args) {
 
     // 类别只辅助排序，不能单独证明某个工具能完成任务。
     // 否则类别摘要里的 create/创建会把“创建音乐”召回成所有办公工具。
-    const toolEvidence = [...reasons].some((reason) => reason !== MATCH_REASONS.CATEGORY_TOKEN);
+    let toolEvidence = false;
+    for (const reason of reasons) {
+      if (reason !== MATCH_REASONS.CATEGORY_TOKEN) { toolEvidence = true; break; }
+    }
     if (score > 0 && toolEvidence) scores.set(idx, { score, reasons });
   }
 

@@ -1,24 +1,20 @@
-// 候选引用、load/unload 事务、幂等与预算测试(F03-F05/F14-F19/F20, S03/S04)
+// 候选引用、load/unload 事务、幂等与预算测试（F03-F05/F14-F19/F20, S03/S04）。
+//
+// rc.1 重设计后：tool_load 校验通过即**立即提交** selected 并返回 admitted，
+// 没有 pending 操作、canonical 回执、operationId、取消或冻结 wire。因此旧文件里
+// “折叠回执后才激活”“取消未决操作”“reducePair 冷恢复”等用例已删除——它们的
+// 产品目标（未加载不能执行、换版后必须重载、批量全有或全无）由新语义的等价
+// 断言与 adapters/dsh 的 admission+guard 测试覆盖（见 design-invariants.test.mjs）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeEngine, SCOPE_A, SCOPE_B, SCOPE_FORK, nextOpId, fakeClock, binding, sampleBindings } from './helpers.mjs';
+import {
+  makeEngine, loadTools, unloadTools, SCOPE_A, SCOPE_B, SCOPE_FORK,
+  fakeClock, binding, sampleBindings,
+} from './helpers.mjs';
 import { domainText } from '../../domain/locale.mjs';
 
 const searchOnce = (engine, scope, q = 'glob', cat = 'files') =>
   engine.handleSearch({ category: cat, query: q }, scope);
-
-/** 完成一次 load 的 canonical 折叠,返回 reducer 结果。 */
-async function doLoad(engine, scope, input, seq = 1) {
-  const op = nextOpId();
-  const res = await engine.handleLoad(input, scope, { operationId: op });
-  if (!res.response.ok) return { response: res.response, applied: false };
-  const out = engine.applyCanonicalPair({
-    seq,
-    call: { operationId: op, tool: 'tool_load', input },
-    result: { isError: false, ok: true, payload: res.response.data.receipt },
-  }, scope);
-  return { response: res.response, applied: out.applied, reason: out.reason };
-}
 
 test('F02 search 只返回候选卡,不泄漏 parameters 且不改 selected', async () => {
   const { engine } = await makeEngine();
@@ -36,32 +32,30 @@ test('F02 search 只返回候选卡,不泄漏 parameters 且不改 selected', as
   assert.equal(engine.getState(SCOPE_A).selected.size, 0, 'search 不改变激活集合');
 });
 
-test('F03 候选 load 成功,回执 selectionSource=candidate', async () => {
+test('F03 候选 load 立即提交：admitted 带 toolId/name/revision/schemaDigest', async () => {
   const { engine } = await makeEngine();
-  const r = searchOnce(engine, SCOPE_A);
-  const c = r.data.candidates[0];
-  const { response, applied } = await doLoad(engine, SCOPE_A, { candidates: [{ ref: c.ref, revision: c.revision }] });
+  const c = searchOnce(engine, SCOPE_A).data.candidates[0];
+  const { response, admitted } = await loadTools(engine, SCOPE_A, { candidates: [{ ref: c.ref, revision: c.revision }] });
   assert.equal(response.ok, true);
-  assert.equal(response.data.receipt.selectionSource, 'candidate');
-  assert.equal(response.data.receipt.operation, 'load');
+  assert.deepEqual(response.data.loaded, [c.name]);
   assert.equal(response.data.takesEffect, 'next_request');
   assert.equal(response.data.schemaDelivery, 'native_tools_only');
-  assert.equal(applied, true);
-  assert.equal(engine.getState(SCOPE_A).selected.size, 1);
+  assert.equal(admitted.length, 1);
+  assert.deepEqual(Object.keys(admitted[0]).sort(), ['name', 'revision', 'schemaDigest', 'toolId']);
+  const sel = engine.getState(SCOPE_A).selected.get(c.toolId);
+  assert.equal(sel.selectionSource, 'candidate');
+  assert.equal(sel.revision, c.revision);
 });
 
 test('F03b 同批次两个候选对同一 toolId 携带冲突 revision → candidateRevisionConflict', async () => {
   const { engine } = await makeEngine();
-  // 同一工具发两张候选卡（两次检索各铸一个 ref）→ 两个 ref 解析到同一 toolId。
   const c1 = searchOnce(engine, SCOPE_A).data.candidates[0];
   const c2 = searchOnce(engine, SCOPE_A).data.candidates.find((c) => c.toolId === c1.toolId);
   assert.ok(c2 && c2.ref !== c1.ref, '前置：需要同一工具的第二条 ref');
 
-  const conflict = await engine.handleLoad(
-    { candidates: [{ ref: c1.ref, revision: c1.revision }, { ref: c2.ref, revision: 'r_conflict' }] },
-    SCOPE_A,
-    { operationId: nextOpId() },
-  );
+  const conflict = await loadTools(engine, SCOPE_A, {
+    candidates: [{ ref: c1.ref, revision: c1.revision }, { ref: c2.ref, revision: 'r_conflict' }],
+  });
   assert.equal(conflict.response.ok, false);
   assert.equal(conflict.response.error.code, 'INVALID_ARGS');
   assert.equal(
@@ -71,92 +65,79 @@ test('F03b 同批次两个候选对同一 toolId 携带冲突 revision → candi
   );
   assert.equal(engine.getState(SCOPE_A).selected.size, 0);
 
-  // 既有行为不变①：单候选显式传错 revision 仍是 STALE_CANDIDATE。
-  const stale = await engine.handleLoad(
-    { candidates: [{ ref: c1.ref, revision: 'r_wrong' }] }, SCOPE_A, { operationId: nextOpId() },
-  );
+  // 单候选显式传错 revision 仍是 STALE_CANDIDATE。
+  const stale = await loadTools(engine, SCOPE_A, { candidates: [{ ref: c1.ref, revision: 'r_wrong' }] });
   assert.equal(stale.response.error.code, 'STALE_CANDIDATE');
-  // 既有行为不变②：同一工具携带**相同** revision 的两张卡是幂等的正常路径。
-  const same = await engine.handleLoad(
-    { candidates: [{ ref: c1.ref, revision: c1.revision }, { ref: c2.ref, revision: c1.revision }] },
-    SCOPE_A,
-    { operationId: nextOpId() },
-  );
+  // 同一工具携带**相同** revision 的两张卡是幂等的正常路径。
+  const same = await loadTools(engine, SCOPE_A, {
+    candidates: [{ ref: c1.ref, revision: c1.revision }, { ref: c2.ref, revision: c1.revision }],
+  });
   assert.equal(same.response.ok, true, JSON.stringify(same.response.error));
-  assert.equal(same.response.data.receipt.selected.length, 1, '同一 toolId 只应出现一次');
+  assert.equal(same.response.data.loaded.length, 1, '同一 toolId 只应出现一次');
+  assert.equal(engine.getState(SCOPE_A).selected.size, 1);
 });
 
-test('完整 native schema 不进 skills/history(F02/§6)', async () => {
+test('完整 native schema 不进 skills；技能只含 usage/limitations', async () => {
   const { engine } = await makeEngine();
-  const r = searchOnce(engine, SCOPE_A);
-  const c = r.data.candidates[0];
-  const { response } = await doLoad(engine, SCOPE_A, { candidates: [{ ref: c.ref, revision: c.revision }] });
+  const c = searchOnce(engine, SCOPE_A).data.candidates[0];
+  const { response } = await loadTools(engine, SCOPE_A, { candidates: [{ ref: c.ref, revision: c.revision }] });
   const skillText = JSON.stringify(response.data.skills);
   assert.ok(!skillText.includes('parameters'), '技能不得复述 schema');
   assert.ok(!skillText.includes('"type":"object"'));
-  assert.ok(response.data.skills.length === 1);
+  assert.equal(response.data.skills.length, 1);
   assert.ok(response.data.skills[0].usage);
   assert.ok(Array.isArray(response.data.skills[0].limitations));
 });
 
-test('S03 另一个 agent 的 ref → CANDIDATE_UNAVAILABLE', async () => {
+test('S03 另一个 agent 的 ref / fork 继承的 ref → CANDIDATE_UNAVAILABLE', async () => {
   const { engine } = await makeEngine();
-  const r = searchOnce(engine, SCOPE_A);
-  const c = r.data.candidates[0];
-  const res = await engine.handleLoad({ candidates: [{ ref: c.ref, revision: c.revision }] }, SCOPE_B, { operationId: nextOpId() });
-  assert.equal(res.response.ok, false);
-  assert.equal(res.response.error.code, 'CANDIDATE_UNAVAILABLE');
-});
-
-test('S03 fork 不继承父 ref', async () => {
-  const { engine } = await makeEngine();
-  const r = searchOnce(engine, SCOPE_A);
-  const c = r.data.candidates[0];
-  const res = await engine.handleLoad({ candidates: [{ ref: c.ref, revision: c.revision }] }, SCOPE_FORK, { operationId: nextOpId() });
-  assert.equal(res.response.error.code, 'CANDIDATE_UNAVAILABLE');
+  const c = searchOnce(engine, SCOPE_A).data.candidates[0];
+  for (const scope of [SCOPE_B, SCOPE_FORK]) {
+    const res = await loadTools(engine, scope, { candidates: [{ ref: c.ref, revision: c.revision }] });
+    assert.equal(res.response.ok, false);
+    assert.equal(res.response.error.code, 'CANDIDATE_UNAVAILABLE');
+    assert.equal(engine.getState(scope).selected.size, 0);
+  }
 });
 
 test('候选 ref 过期 → CANDIDATE_UNAVAILABLE', async () => {
   const clock = fakeClock();
   const { engine } = await makeEngine({ clock });
-  const r = searchOnce(engine, SCOPE_A);
-  const c = r.data.candidates[0];
+  const c = searchOnce(engine, SCOPE_A).data.candidates[0];
   clock.advance(900_001);
-  const res = await engine.handleLoad({ candidates: [{ ref: c.ref, revision: c.revision }] }, SCOPE_A, { operationId: nextOpId() });
+  const res = await loadTools(engine, SCOPE_A, { candidates: [{ ref: c.ref, revision: c.revision }] });
   assert.equal(res.response.error.code, 'CANDIDATE_UNAVAILABLE');
 });
 
 test('STALE_CANDIDATE:revision 与当前定义不一致', async () => {
   const { engine } = await makeEngine();
-  const r = searchOnce(engine, SCOPE_A);
-  const c = r.data.candidates[0];
-  const res = await engine.handleLoad({ candidates: [{ ref: c.ref, revision: 'r_bogus' }] }, SCOPE_A, { operationId: nextOpId() });
+  const c = searchOnce(engine, SCOPE_A).data.candidates[0];
+  const res = await loadTools(engine, SCOPE_A, { candidates: [{ ref: c.ref, revision: 'r_bogus' }] });
   assert.equal(res.response.error.code, 'STALE_CANDIDATE');
 });
 
 test('目录代次变化后旧 ref 失效', async () => {
   const { engine } = await makeEngine();
-  const r = searchOnce(engine, SCOPE_A);
-  const c = r.data.candidates[0];
-  // 目录**真的**变了(后装一个新工具)才升代次。传入与当前目录逐字相同的绑定集
-  // 现在走 refreshCatalog 的快路径,不再作废 ref —— 那正是本次修复要保住的行为。
+  const c = searchOnce(engine, SCOPE_A).data.candidates[0];
+  // 目录**真的**变了才升代次；逐字相同的绑定集走快路径，不作废 ref。
   engine.refreshCatalog([...sampleBindings(), binding({ name: 'new_tool', toolId: 't_new_tool', namespace: 'files' })]);
-  const res = await engine.handleLoad({ candidates: [{ ref: c.ref, revision: c.revision }] }, SCOPE_A, { operationId: nextOpId() });
+  const res = await loadTools(engine, SCOPE_A, { candidates: [{ ref: c.ref, revision: c.revision }] });
   assert.equal(res.response.error.code, 'CANDIDATE_UNAVAILABLE');
 });
 
-test('F14 已知名称直接 load,不强制先搜索', async () => {
+test('F14 已知名称直接 load,不强制先搜索；selectionSource=name', async () => {
   const { engine } = await makeEngine();
-  const { response, applied } = await doLoad(engine, SCOPE_A, { names: ['glob'] });
+  const { response, admitted } = await loadTools(engine, SCOPE_A, { names: ['glob'] });
   assert.equal(response.ok, true);
-  assert.equal(response.data.receipt.selectionSource, 'name');
-  assert.equal(applied, true);
+  assert.deepEqual(response.data.loaded, ['glob']);
+  assert.equal(admitted[0].name, 'glob');
+  assert.equal(engine.getState(SCOPE_A).selected.get('t_files_glob').selectionSource, 'name');
 });
 
 test('F15 名称不存在 → TOOL_UNAVAILABLE,不泄漏私有存在性', async () => {
   const { engine } = await makeEngine();
   for (const n of ['not_registered_zz', 'glob_extra', 'GLOB', 'glo']) {
-    const res = await engine.handleLoad({ names: [n] }, SCOPE_A, { operationId: nextOpId() });
+    const res = await loadTools(engine, SCOPE_A, { names: [n] });
     assert.equal(res.response.error.code, 'TOOL_UNAVAILABLE', `名称 ${n} 应为 TOOL_UNAVAILABLE`);
     assert.ok(!JSON.stringify(res.response).includes('not_registered'), '不得泄漏内部信息');
   }
@@ -165,27 +146,24 @@ test('F15 名称不存在 → TOOL_UNAVAILABLE,不泄漏私有存在性', async 
 test('F15 不做模糊/前缀/通配展开', async () => {
   const { engine } = await makeEngine();
   for (const n of ['glo*', '*', 'glob*', 'read_file2']) {
-    const res = await engine.handleLoad({ names: [n] }, SCOPE_A, { operationId: nextOpId() });
+    const res = await loadTools(engine, SCOPE_A, { names: [n] });
     assert.equal(res.response.ok, false, `${n} 不得被模糊解析`);
   }
 });
 
 test('F18 candidates 与 names 混用 → INVALID_ARGS 且无半批状态', async () => {
   const { engine } = await makeEngine();
-  const r = searchOnce(engine, SCOPE_A);
-  const c = r.data.candidates[0];
-  const res = await engine.handleLoad(
-    { candidates: [{ ref: c.ref, revision: c.revision }], names: ['grep'] },
-    SCOPE_A,
-    { operationId: nextOpId() },
-  );
+  const c = searchOnce(engine, SCOPE_A).data.candidates[0];
+  const res = await loadTools(engine, SCOPE_A, {
+    candidates: [{ ref: c.ref, revision: c.revision }], names: ['grep'],
+  });
   assert.equal(res.response.error.code, 'INVALID_ARGS');
   assert.equal(engine.getState(SCOPE_A).selected.size, 0, '不得形成半批状态');
 });
 
 test('F05 批次全有或全无:第二项不可用则整批不提交', async () => {
   const { engine } = await makeEngine();
-  const res = await engine.handleLoad({ names: ['glob', 'not_registered_zz'] }, SCOPE_A, { operationId: nextOpId() });
+  const res = await loadTools(engine, SCOPE_A, { names: ['glob', 'not_registered_zz'] });
   assert.equal(res.response.ok, false);
   assert.equal(res.response.error.code, 'TOOL_UNAVAILABLE');
   assert.equal(engine.getState(SCOPE_A).selected.size, 0, '整批不提交');
@@ -199,7 +177,7 @@ test('F05 预算半批失败:整批不提交', async () => {
     params: { type: 'object', properties: { blob: { type: 'string', description: 'x'.repeat(60000) } } },
   });
   const { engine } = await makeEngine({ bindings: [...sampleBindings(), fat], engineConfig: { budgets: { maxActiveSchemaBytes: 2000 } } });
-  const res = await engine.handleLoad({ names: ['glob', 'fat_tool'] }, SCOPE_A, { operationId: nextOpId() });
+  const res = await loadTools(engine, SCOPE_A, { names: ['glob', 'fat_tool'] });
   assert.equal(res.response.ok, false);
   assert.equal(res.response.error.code, 'BUDGET_EXCEEDED');
   assert.equal(engine.getState(SCOPE_A).selected.size, 0, '超预算整批不提交,glob 也不得被单独提交');
@@ -207,63 +185,70 @@ test('F05 预算半批失败:整批不提交', async () => {
 
 test('F04 同版本重复 load 幂等:不重复计费、不重复追加', async () => {
   const { engine } = await makeEngine();
-  const first = await doLoad(engine, SCOPE_A, { names: ['glob'] }, 1);
-  assert.equal(first.applied, true);
-  const second = await doLoad(engine, SCOPE_A, { names: ['glob'] }, 2);
+  const first = await loadTools(engine, SCOPE_A, { names: ['glob'] });
+  assert.deepEqual(first.response.data.loaded, ['glob']);
+  const second = await loadTools(engine, SCOPE_A, { names: ['glob'] });
   assert.equal(second.response.ok, true);
-  assert.equal(second.applied, true);
+  assert.deepEqual(second.response.data.loaded, []);
+  assert.deepEqual(second.admitted, []);
   const st = engine.getState(SCOPE_A);
   assert.equal(st.selected.size, 1, '不重复追加');
-  const s = engine.handleList({ view: 'state' }, SCOPE_A);
-  assert.equal(s.data.budgets.activeCount, 1, '预算不双算');
+  assert.equal(engine.handleList({ view: 'state' }, SCOPE_A).data.budgets.activeCount, 1, '预算不双算');
 });
 
-test('F19 同名已加载的新显式 load 重新验证,不复用 stale 版本', async () => {
+test('F19 同名已加载的显式 load 在换版后按新定义重新验证', async () => {
   const { engine } = await makeEngine();
-  await doLoad(engine, SCOPE_A, { names: ['glob'] }, 1);
-  // schema 变化 → 旧选择失效,新的显式 load 必须用新 revision
+  await loadTools(engine, SCOPE_A, { names: ['glob'] });
   const changed = sampleBindings().map((b) => (b.toolId === 't_files_glob'
     ? { ...b, wire: { ...b.wire, parameters: { type: 'object', required: ['pattern'], properties: { pattern: { type: 'string' } } } } }
     : b));
   engine.refreshCatalog(changed);
   const st = engine.getState(SCOPE_A);
   assert.equal(st.selected.size, 0, '定义变化后旧选择失效');
-  const { response, applied } = await doLoad(engine, SCOPE_A, { names: ['glob'] }, 2);
+  assert.equal(st.invalidated.get('t_files_glob').reason, 'definition-changed');
+  const { response, admitted } = await loadTools(engine, SCOPE_A, { names: ['glob'] });
   assert.equal(response.ok, true);
-  assert.equal(applied, true);
+  assert.equal(admitted.length, 1);
   assert.equal(engine.getState(SCOPE_A).selected.size, 1);
+  assert.equal(engine.getState(SCOPE_A).selected.get('t_files_glob').revision,
+    engine.getCatalog().entries.get('t_files_glob').revision);
 });
 
-test('F08 模型不得自主 unload:action=unload 被拒且不改变任何状态', async () => {
+test('tool_load 不再内建 unload 动作：action:"unload" 被拒且不改变状态', async () => {
   const { engine } = await makeEngine();
-  await doLoad(engine, SCOPE_A, { names: ['glob'] }, 1);
-  assert.equal(engine.getState(SCOPE_A).selected.size, 1);
-  const { response, applied } = await doLoad(engine, SCOPE_A, { action: 'unload', toolIds: ['t_files_glob'] }, 2);
-  assert.equal(response.ok, false, 'unload 不再是模型可用路径');
-  assert.equal(response.error.code, 'INVALID_ARGS');
-  assert.equal(applied, false, '被拒的调用不得产生 canonical 折叠');
+  await loadTools(engine, SCOPE_A, { names: ['glob'] });
+  const res = await loadTools(engine, SCOPE_A, { action: 'unload', toolIds: ['t_files_glob'] });
+  assert.equal(res.response.ok, false, 'unload 走独立的 tool_unload 入口');
+  assert.equal(res.response.error.code, 'INVALID_ARGS');
   assert.equal(engine.getState(SCOPE_A).selected.size, 1, '已加载的工具保持加载');
+  const out = await unloadTools(engine, SCOPE_A, { names: ['glob'] });
+  assert.equal(out.response.ok, true);
+  assert.equal(engine.getState(SCOPE_A).selected.size, 0);
 });
 
-test('F20 入口与框架保留项不可 load', async () => {
+test('F20 入口与框架保留项不可 load；tool_unload 已是入口', async () => {
   const { engine } = await makeEngine();
-  for (const n of ['tool_list', 'tool_search', 'tool_load', 'final_answer']) {
-    const res = await engine.handleLoad({ names: [n] }, SCOPE_A, { operationId: nextOpId() });
+  for (const n of ['tool_list', 'tool_search', 'tool_load', 'tool_unload', 'final_answer']) {
+    const res = await loadTools(engine, SCOPE_A, { names: [n] });
     assert.equal(res.response.ok, false, `${n} 不得被加载`);
     assert.equal(res.response.error.code, 'INVALID_ARGS');
   }
-  const un = await engine.handleLoad({ action: 'unload', toolIds: ['t_entry_list', 't_fw_final'] }, SCOPE_A, { operationId: nextOpId() });
-  assert.equal(un.response.ok, false);
-  assert.equal(un.response.error.code, 'INVALID_ARGS');
 });
 
-test('operationId 必须由宿主提供', async () => {
-  const { engine } = await makeEngine();
-  const res = await engine.handleLoad({ names: ['glob'] }, SCOPE_A, {});
-  assert.equal(res.response.ok, false);
-  assert.equal(res.response.error.code, 'INCOMPATIBLE_COMPOSITION');
-  const res2 = await engine.handleLoad({ names: ['glob'] }, SCOPE_A, undefined);
-  assert.equal(res2.response.ok, false);
+test('alwaysVisible 名字 tolerant 加载：只报告 alreadyResident，不写 selected/admitted', async () => {
+  const { engine } = await makeEngine({ engineConfig: { alwaysToolNames: ['read_file'] } });
+  const tolerated = await loadTools(engine, SCOPE_A, { names: ['read_file'] });
+  assert.equal(tolerated.response.ok, true);
+  assert.deepEqual(tolerated.response.data.alreadyResident, ['read_file']);
+  assert.deepEqual(tolerated.response.data.loaded, []);
+  assert.deepEqual(tolerated.admitted, []);
+  assert.equal(engine.getState(SCOPE_A).selected.size, 0, '常驻工具不进 selected');
+
+  const strict = await makeEngine({
+    engineConfig: { alwaysToolNames: ['read_file'], tolerantLoadProtected: false },
+  });
+  const rejected = await loadTools(strict.engine, SCOPE_A, { names: ['read_file'] });
+  assert.equal(rejected.response.error.code, 'INVALID_ARGS');
 });
 
 test('会话身份必须来自宿主:缺失即拒绝', async () => {
@@ -271,31 +256,25 @@ test('会话身份必须来自宿主:缺失即拒绝', async () => {
   const r = engine.handleList({ view: 'state' }, { actorId: 'x' });
   assert.equal(r.ok, false);
   assert.equal(r.error.code, 'INCOMPATIBLE_COMPOSITION');
+  const s = await loadTools(engine, { actorId: 'x' }, { names: ['glob'] });
+  assert.equal(s.response.ok, false);
+  assert.equal(s.response.error.code, 'INCOMPATIBLE_COMPOSITION');
 });
 
 test('load/unload 串行:并发调用不产生交叉状态', async () => {
   const { engine } = await makeEngine();
+  // 新会话首次调用前没有 state：三次并发必须全部成功（engine 的锁必须与
+  // requireState 建的是同一把，否则后两者会被误判 STATE_NOT_READY）。
   const results = await Promise.all([
-    engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: 'op_a' }),
-    engine.handleLoad({ names: ['grep'] }, SCOPE_A, { operationId: 'op_b' }),
-    engine.handleLoad({ names: ['read_file'] }, SCOPE_A, { operationId: 'op_c' }),
+    loadTools(engine, SCOPE_A, { names: ['glob'] }),
+    loadTools(engine, SCOPE_A, { names: ['grep'] }),
+    loadTools(engine, SCOPE_A, { names: ['read_file'] }),
   ]);
-  for (const r of results) assert.equal(r.response.ok, true);
-  const opIds = results.map((r) => r.operation.operationId);
-  assert.deepEqual(opIds, ['op_a', 'op_b', 'op_c'], '必须按提交顺序串行');
-});
-
-test('F16 提交前 recheck:验证期间定义变化 → SELECTION_CHANGED', async () => {
-  const { engine } = await makeEngine();
-  const r = searchOnce(engine, SCOPE_A);
-  const c = r.data.candidates[0];
-  // 先让候选存在,再在提交前触发目录刷新:通过直接改 catalog 后的 recheck 路径验证
-  const res = await engine.handleLoad({ candidates: [{ ref: c.ref, revision: c.revision }] }, SCOPE_A, { operationId: nextOpId() });
-  // 正常路径不应报错
-  assert.equal(res.response.ok, true);
-  // 之后再刷新目录,旧选择应失效而不是被悄悄改选
-  engine.refreshCatalog(sampleBindings().filter((b) => b.toolId !== 't_files_glob'));
-  assert.equal(engine.getState(SCOPE_A).selected.size, 0);
+  for (const r of results) assert.equal(r.response.ok, true, JSON.stringify(r.response.error));
+  assert.deepEqual(
+    [...engine.getState(SCOPE_A).selected.values()].map((s) => s.name).sort(),
+    ['glob', 'grep', 'read_file'],
+  );
 });
 
 test('S04 shadow 绑定:按名称有歧义时不猜', async () => {
@@ -305,26 +284,32 @@ test('S04 shadow 绑定:按名称有歧义时不猜', async () => {
     binding({ name: 'dup_tool', toolId: 't_dup_b', namespace: 'files', params: { required: ['x'] } }),
   ];
   const { engine } = await makeEngine({ bindings });
-  const res = await engine.handleLoad({ names: ['dup_tool'] }, SCOPE_A, { operationId: nextOpId() });
+  const res = await loadTools(engine, SCOPE_A, { names: ['dup_tool'] });
   assert.equal(res.response.ok, false);
   assert.equal(res.response.error.code, 'TOOL_UNAVAILABLE', '同名歧义不得静默选第一个');
 });
 
-test('技能载荷不得复述 schema', async () => {
+test('技能载荷不得复述 schema；技能缺失时 skills 为空数组', async () => {
   const bad = binding({
     name: 'bad_skill',
     toolId: 't_bad_skill',
     skill: { skillRevision: 's1', usage: 'see parameters schema', limitations: ['x'] },
   });
-  // 技能对象本身合法,但投影时不含 schema 字段
-  const { engine } = await makeEngine({ bindings: [...sampleBindings(), bad] });
-  const res = await engine.handleLoad({ names: ['bad_skill'] }, SCOPE_A, { operationId: nextOpId() });
+  const { engine } = await makeEngine({
+    bindings: [...sampleBindings(), bad, binding({ name: 'no_skill', toolId: 't_no_skill', namespace: 'files', skill: null })],
+  });
+  const res = await loadTools(engine, SCOPE_A, { names: ['bad_skill'] });
   assert.equal(res.response.ok, true);
   assert.ok(!JSON.stringify(res.response.data.skills).includes('"parameters"'));
+  const plain = await loadTools(engine, SCOPE_A, { names: ['no_skill'] });
+  assert.equal(plain.response.ok, true);
+  assert.deepEqual(plain.response.data.skills, []);
 });
 
 // ---------------------------------------------------------------------------
-// D1/D2 回归:候选路径与折叠侧的入口/框架保护必须与 names 路径对称。
+// D1:候选路径与 names 路径的入口/框架保护必须对称。
+// （旧 D1 的 reducePair 冷恢复分支已随 reducer 删除；新设计里入口从不进入
+// admission store，冷路径只回放 admitted 行，因此不再需要单独的折叠保护。）
 // ---------------------------------------------------------------------------
 
 test('D1 候选路径 load 入口项 → INVALID_ARGS(与 names 路径对称)', async () => {
@@ -332,11 +317,7 @@ test('D1 候选路径 load 入口项 → INVALID_ARGS(与 names 路径对称)', 
   const r = engine.handleSearch({ category: 'all', query: 'tool_list' }, SCOPE_A);
   const hit = (r.data?.candidates ?? []).find((c) => c.name === 'tool_list');
   assert.ok(hit, 'search(all) 应能命中入口名(目录未排除)');
-  const res = await engine.handleLoad(
-    { candidates: [{ ref: hit.ref, revision: hit.revision }] },
-    SCOPE_A,
-    { operationId: nextOpId() },
-  );
+  const res = await loadTools(engine, SCOPE_A, { candidates: [{ ref: hit.ref, revision: hit.revision }] });
   assert.equal(res.response.ok, false);
   assert.equal(res.response.error.code, 'INVALID_ARGS');
   assert.equal(engine.getState(SCOPE_A).selected.size, 0, '入口项不得进入 selected');
@@ -347,70 +328,23 @@ test('D1 候选路径 load 框架项 → INVALID_ARGS', async () => {
   const r = engine.handleSearch({ category: 'all', query: 'final_answer' }, SCOPE_A);
   const hit = (r.data?.candidates ?? []).find((c) => c.name === 'final_answer');
   assert.ok(hit, 'search(all) 应能命中框架名');
-  const res = await engine.handleLoad(
-    { candidates: [{ ref: hit.ref, revision: hit.revision }] },
-    SCOPE_A,
-    { operationId: nextOpId() },
-  );
+  const res = await loadTools(engine, SCOPE_A, { candidates: [{ ref: hit.ref, revision: hit.revision }] });
   assert.equal(res.response.ok, false);
   assert.equal(res.response.error.code, 'INVALID_ARGS');
   assert.equal(engine.getState(SCOPE_A).selected.size, 0);
 });
 
-test('D1 折叠侧 reducePair 拒选中入口项(冷恢复路径)', async () => {
+test('D2 refreshCatalog 后新绑定的框架项仍受保护', async () => {
   const { engine } = await makeEngine();
-  const entry = engine.getCatalog().entries.get('t_entry_list');
-  assert.ok(entry);
-  const { reducePair, createState } = await import('../../domain/state.mjs');
-  const st = createState('s_d1_cold');
-  const out = reducePair(st, {
-    seq: 1,
-    call: {
-      operationId: 'op_cold',
-      tool: 'tool_load',
-      input: { names: ['tool_list'] },
-    },
-    result: {
-      isError: false,
-      ok: true,
-      payload: {
-        kind: 'tool-discovery.selection',
-        version: 2,
-        operationId: 'op_cold',
-        operation: 'load',
-        selectionSource: 'name',
-        selected: [{
-          toolId: entry.toolId,
-          name: entry.name,
-          revision: entry.revision,
-          schemaDigest: entry.schemaDigest,
-          skillRevision: entry.skillRevision,
-        }],
-      },
-    },
-  }, {
-    now: () => 1_700_000_000_000,
-    catalog: engine.getCatalog(),
-    protectedToolIds: new Set([entry.toolId]),
-    protectedNames: new Set(['tool_list', 'tool_search', 'tool_load', 'final_answer']),
-  });
-  assert.equal(out.applied, false, '折叠不得选中入口项');
-  assert.equal(out.reason, 'protected-tool');
-  assert.equal(out.state.selected.size, 0);
-});
-
-test('D2 refreshCatalog 后新绑定的框架项仍受保护(unload 路径已关闭)', async () => {
-  const { engine } = await makeEngine();
-  // 刷新目录,框架项换新 toolId
   engine.refreshCatalog([
     binding({ name: 'glob', toolId: 't_files_glob', namespace: 'files', description: 'enumerate file entries by path pattern' }),
     binding({ name: 'final_answer', toolId: 't_fw_final_v2', description: 'framework required terminator' }),
     binding({ name: 'tool_list', toolId: 't_entry_list_v2', description: 'entry point list' }),
     binding({ name: 'tool_search', toolId: 't_entry_search_v2', description: 'entry point search' }),
     binding({ name: 'tool_load', toolId: 't_entry_load_v2', description: 'entry point load' }),
+    binding({ name: 'tool_unload', toolId: 't_entry_unload_v2', description: 'entry point unload' }),
   ]);
-  // 新绑定的框架项换了 toolId,仍不得被当成可加载目标(D2 的保护口径)。
-  const res = await engine.handleLoad({ names: ['final_answer'] }, SCOPE_A, { operationId: nextOpId() });
+  const res = await loadTools(engine, SCOPE_A, { names: ['final_answer'] });
   assert.equal(res.response.ok, false);
   assert.equal(res.response.error.code, 'INVALID_ARGS', '新绑定的框架项不可被 load');
 });
@@ -418,62 +352,27 @@ test('D2 refreshCatalog 后新绑定的框架项仍受保护(unload 路径已关
 test('engine.handleLoad 支持解绑调用(不依赖 this 绑定)', async () => {
   const { engine } = await makeEngine();
   const unboundHandleLoad = engine.handleLoad;
-  const res = await unboundHandleLoad({ names: ['glob'] }, SCOPE_A, { operationId: nextOpId() });
+  const res = await unboundHandleLoad({ names: ['glob'] }, SCOPE_A);
   assert.equal(res.response.ok, true);
-  assert.equal(res.response.data.receipt.selected[0].name, 'glob');
+  assert.equal(res.response.data.loaded[0], 'glob');
 });
 
-test('reservedOnly 只去重 schema 预留；未提交技能必须重发并完整计入本次字节上限', async () => {
-  const { engine } = await makeEngine({ engineConfig: { budgets: { maxActiveTools: 2 } } });
-  const first = await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: nextOpId() });
-  assert.equal(first.response.ok, true);
+test('技能去重与技能字节预算：只为本次新增项交付指南，超限整批拒绝', async () => {
+  const { engine } = await makeEngine();
+  const first = await loadTools(engine, SCOPE_A, { names: ['glob'] });
   assert.deepEqual(first.response.data.skills.map((s) => s.toolId), ['t_files_glob']);
-  // 首次结果还可能失败：第二个响应不能依赖它交付指南，但 schema 预留仍只占两项。
-  const second = await engine.handleLoad({ names: ['glob', 'grep'] }, SCOPE_A, { operationId: nextOpId() });
+  // 已选同版本不重复回灌；混合批次只为新工具交付。
+  const second = await loadTools(engine, SCOPE_A, { names: ['glob', 'grep'] });
   assert.equal(second.response.ok, true);
-  assert.deepEqual(second.response.data.skills.map((s) => s.toolId), ['t_files_glob', 't_files_grep']);
+  assert.deepEqual(second.response.data.skills.map((s) => s.toolId), ['t_files_grep']);
   assert.equal(engine.handleList({ view: 'state' }, SCOPE_A).data.budgets.activeCount, 2);
 
-  // 技能限额按各卡 UTF-8 字节之和，不含外层数组分隔符（与 list/search 外壳限额不同）。
-  const maxSkillBytesPerLoad = second.response.data.skills.reduce((sum, skill) =>
-    sum + Buffer.byteLength(JSON.stringify(skill), 'utf8'), 0) - 1;
-  const { engine: limited } = await makeEngine({ engineConfig: { budgets: { maxSkillBytesPerLoad } } });
-  const a = await limited.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: nextOpId() });
-  assert.equal(a.response.ok, true, '一份指南能放下');
-  const b = await limited.handleLoad({ names: ['glob', 'grep'] }, SCOPE_A, { operationId: nextOpId() });
-  assert.equal(b.response.ok, false, '两份技能卡总字节超限');
-  assert.equal(b.response.error.code, 'BUDGET_EXCEEDED', '重发指南不能因 pending 绕过技能限额');
-  assert.equal(limited.getPendingSize(), 1, '第二个失败只保留第一个在途操作');
-});
-
-test('evaluateCall 在同名多 shadow 绑定同时选中时按 ctx.toolId 精确匹配', async () => {
-  const bindings = [
-    ...sampleBindings(),
-    binding({ name: 'dup_tool', toolId: 't_dup_a', namespace: 'files', params: { required: ['a'] } }),
-    binding({ name: 'dup_tool', toolId: 't_dup_b', namespace: 'files', params: { required: ['b'] } }),
-  ];
-  const { engine } = await makeEngine({ bindings });
-  const r = engine.handleSearch({ category: 'files', query: 'dup_tool' }, SCOPE_A);
-  const candA = r.data.candidates.find((c) => c.toolId === 't_dup_a');
-  const candB = r.data.candidates.find((c) => c.toolId === 't_dup_b');
-  assert.ok(candA && candB);
-  await doLoad(engine, SCOPE_A, {
-    candidates: [
-      { ref: candA.ref, revision: candA.revision },
-      { ref: candB.ref, revision: candB.revision },
-    ],
-  }, 1);
-  const entryB = engine.getCatalog().entries.get('t_dup_b');
-  engine.recordAdvertisement(SCOPE_A, {
-    requestId: 'req_1',
-    toolId: 't_dup_b',
-    name: 'dup_tool',
-    revision: entryB.revision,
-    schemaDigest: entryB.schemaDigest,
-    wire: entryB.wire,
-  });
-  const allowB = engine.evaluateCall(SCOPE_A, { name: 'dup_tool', toolId: 't_dup_b', requestId: 'req_1' });
-  assert.equal(allowB.allowed, true);
+  const skillBytes = Buffer.byteLength(JSON.stringify(second.response.data.skills[0]), 'utf8');
+  const { engine: limited } = await makeEngine({ engineConfig: { budgets: { maxSkillBytesPerLoad: skillBytes - 1 } } });
+  const rejected = await loadTools(limited, SCOPE_A, { names: ['grep'] });
+  assert.equal(rejected.response.ok, false, '技能卡无法交付时整批拒绝');
+  assert.equal(rejected.response.error.code, 'BUDGET_EXCEEDED');
+  assert.equal(limited.getState(SCOPE_A).selected.size, 0, '拒绝后不得留下半批选择');
 });
 
 test('createDiscoveryEngine 显式传入 config.locale 时不受全局 setDomainLocale 覆盖', async () => {
@@ -487,89 +386,4 @@ test('createDiscoveryEngine 显式传入 config.locale 时不受全局 setDomain
   } finally {
     setDomainLocale('en');
   }
-});
-
-test('PTC 守卫分支放行 frameworkRetained 与动态 CORE_TOOL_NAMES', async () => {
-  const { createGuard } = await import('../../adapters/dsh/guard.mjs');
-  const { BASELINE_STATE } = await import('../../adapters/dsh/trusted-epoch.mjs');
-  const { engine } = await makeEngine();
-  let guardHandler;
-  const agent = { id: 'actor', session: { id: SCOPE_A.sessionId } };
-  const runtime = {
-    scope: SCOPE_A,
-    agentScope: agent,
-    engine,
-    alwaysNameSet: new Set(),
-    frameworkRetained: new Set(['final_answer']),
-    initialToolsEnabled: true,
-    ledger: { state: BASELINE_STATE.TRUSTED, reason: 'ok' },
-    compositionBypass: null,
-  };
-  const ctx = {
-    tools: {
-      modeFor: () => 'ptc',
-      get: (name) => (name === 'read' ? { name: 'read' } : undefined),
-      guard: (fn) => { guardHandler = fn; },
-    },
-  };
-  createGuard({
-    ctx,
-    lifecycle: { runtimeFor: () => runtime },
-    frameworkRetained: ['final_answer'],
-    ptcEnabled: () => true,
-    respectAlwaysVisible: () => false,
-    log: () => {},
-  });
-  // 1) frameworkRetained 在 PTC 模式下直接放行
-  assert.equal(await guardHandler({ name: 'final_answer', agent }), undefined);
-  // 2) 动态 CORE_TOOL_NAMES(read)在 respectAlwaysVisible=false 且宿主当前可见时放行
-  assert.equal(await guardHandler({ name: 'read', agent }), undefined);
-});
-
-test('引擎配置非法时返回结构化 DomainError，不得以 ReferenceError 逃逸', async () => {
-  const { createDiscoveryEngine } = await import('../../domain/index.mjs');
-  const base = { categoryConfig: {}, clock: { now: () => 0 }, random: { bytes: () => new Uint8Array(1) } };
-  const invalid = [
-    null,
-    { ...base, protocolVersion: 99 },
-    { ...base, categoryConfig: null },
-    { ...base, clock: null },
-    { categoryConfig: {}, clock: { now: () => 0 } },
-  ];
-  for (const config of invalid) {
-    assert.throws(() => createDiscoveryEngine(config), (error) => {
-      assert.equal(error.name, 'DomainError', `配置 ${JSON.stringify(config)} 必须走结构化错误`);
-      assert.equal(error.code, 'INCOMPATIBLE_COMPOSITION');
-      return true;
-    });
-  }
-});
-
-
-test('F03c 未决 load 的目标名可由 engine 查出（候选路径的 canonical input 只有 ref）', async () => {
-  const { engine } = await makeEngine();
-  const c = searchOnce(engine, SCOPE_A).data.candidates[0];
-  const opId = nextOpId();
-  const res = await engine.handleLoad({ candidates: [{ ref: c.ref, revision: c.revision }] }, SCOPE_A, { operationId: opId });
-  assert.equal(res.response.ok, true);
-  // guard 要区分“同响应内 load 完立刻调用”和“从未加载”，但 canonical input 里没有名字，
-  // 名字只能来自接纳时的解析结果。
-  assert.deepEqual([...engine.pendingLoadTargetNames(SCOPE_A)], [c.name]);
-  assert.deepEqual([...engine.pendingLoadTargetNames(SCOPE_B)], [], '未决目标名按会话隔离');
-
-  engine.applyCanonicalPair({
-    seq: 1,
-    call: { operationId: opId, tool: 'tool_load', input: { candidates: [{ ref: c.ref, revision: c.revision }] } },
-    result: { isError: false, ok: true, payload: res.response.data.receipt },
-  }, SCOPE_A);
-  assert.deepEqual([...engine.pendingLoadTargetNames(SCOPE_A)], [], '折叠后不再算在途');
-
-  const other = searchOnce(engine, SCOPE_A).data.candidates.find((x) => x.name !== c.name);
-  const op2 = nextOpId();
-  const res2 = await engine.handleLoad(
-    { candidates: [{ ref: (other ?? c).ref, revision: (other ?? c).revision }] }, SCOPE_A, { operationId: op2 },
-  );
-  assert.equal(res2.response.ok, true);
-  engine.cancelOperation(op2);
-  assert.deepEqual([...engine.pendingLoadTargetNames(SCOPE_A)], [], '取消后同样收口');
 });

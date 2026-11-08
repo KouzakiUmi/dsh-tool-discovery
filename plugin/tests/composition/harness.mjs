@@ -1,9 +1,6 @@
-// 组合测试 harness：真实 Cordis Loader entry 树 + 安装内 0.2.1-alpha.2 服务
-// + mock provider（录制最终 GenerateOptions）+ adapters/dsh 产品插件。
-//
-// 与阶段0 contracts/harness.mjs 的区别：这里装载的是**产品 adapter**，
-// 而不是阶段0 的 contract stub；且不装载 control-tools / projection-guard
-// （它们会占用三个入口名并自带投影，与产品 adapter 冲突）。
+// rc.1 组合 harness：真实 Cordis Loader + 安装内公共服务 + mock provider。
+// 装配产品 adapter；不装 control-tools（会占用发现入口）。
+// sessionQuery 可供宿主恢复及测试取证使用，但不是 adapter 的注入依赖。
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -41,7 +38,7 @@ export function storageRoot (tmpRoot) {
 }
 
 /**
- * 可信周期记录用的真实 SDK 存储 provider（安装内 0.2.1-alpha.2）。
+ * admission 快照用的真实安装内 SDK 存储 provider。
  *
  * 这三条 entry 与 Desktop base bundle 的真实装配同源：
  * `node_modules/@deepseek-ai/dsh-base/cordis.patch.yml:161-176`
@@ -125,7 +122,47 @@ export async function startFork (ctx, parentAgent, promptText = 'Child task.', o
  *  adapterSchema：只影响**新增**的 settings 门禁——让 adapter entry 改用注入 Schema
  *  的那个 shim。默认 false，既有验收路径原样保留。
  *  omitStorage：显式**负向**开关——不装配 storage 三件套，供「缺 provider」路径使用。
- *  默认装配（产品强制可信记录，composition 必须处在真实存储之下）。 */
+ *  默认装配以覆盖 durable admission；omitStorage 验证纯内存退化。 */
+/**
+ * 直连真实工具执行管线（测试专用）。两版兼容：
+ *   * 0.2.1-rc.x：`ctx.tools.execute(singleCall)` —— 入参是单次调用，直接返回该次结果；
+ *   * 0.2.2+：入参改为 `ToolBatchInput { calls: ToolCallBlock[], signal, agent? }`，
+ *     `arguments` 是模型给的 JSON 字符串，返回 `{ results: [{ callId, result }] }`。
+ * 此测试兼容入口保留旧 execute 形状；产品本身仅支持 rc.1+ 批量调用契约。
+ * @returns 单次调用结果（旧版原样返回，新版从批量结果里取第一条）
+ */
+export async function executeToolCall (ctx, { agent, name, callId, arguments: args = {}, signal } = {}) {
+  if (typeof ctx.tools.modeFor === 'function') {
+    return ctx.tools.execute({ agent, name, callId, arguments: args, signal })
+  }
+  const outcome = await ctx.tools.execute({
+    calls: [{ type: 'tool-call', id: callId, name, arguments: typeof args === 'string' ? args : JSON.stringify(args) }],
+    signal,
+    ...(agent === undefined ? {} : { agent })
+  })
+  if (outcome !== null && typeof outcome === 'object' && Array.isArray(outcome.results)) {
+    return outcome.results[0]?.result
+  }
+  return outcome
+}
+
+// AGENTS.md：rc.1 的 restrict 在 agent/created 安装；需真实 agent，不能用假 scope 直接 assemble。
+export async function createNativeTestAgent (boot, sessionId) {
+  return boot.ctx.agents.create({ sessionId,
+    agentOptions: { provider: 'fixture-mock', model: 'fixture-model' },
+    meta: { cwd: boot.tmpRoot } })
+}
+
+/**
+ * entry 的活配置（两版兼容）。Cordis 4.1（0.2.2-rc.1 起）把 `fiber.config` 改成原始输入，
+ * 已解析（含 volatile 引用）的配置改由 `fiber.effectiveConfig` 暴露。
+ */
+export function liveConfigOf (entry) {
+  const fiber = entry?.fiber
+  if (fiber === undefined || fiber === null) return undefined
+  return 'effectiveConfig' in fiber ? fiber.effectiveConfig : fiber.config
+}
+
 export function planEntries ({ tmpRoot, fixtures = [], adapter = null, omitSessionQuery = false, adapterFirst = false, extraServices = [], adapterSchema = false, omitStorage = false }) {
   const services = [
     ...serviceEntries(path.join(tmpRoot, 'sessions'))

@@ -39,7 +39,9 @@ class MockAdapter extends LlmAdapter {
       provider,
       id: model,
       name: model,
-      context: { contextWindow: 200000 }
+      context: { contextWindow: 200000 },
+      ...(model === 'fixture-addition-only' ? { toolUpdate: 'addition-only' } : {}),
+      ...(model === 'fixture-in-history' ? { toolUpdate: 'in-history' } : {})
     })
   }
 

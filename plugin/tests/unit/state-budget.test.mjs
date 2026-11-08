@@ -13,7 +13,6 @@ function payloadWith (invalidatedCount) {
   return {
     mode: 'ready',
     selected: [{ toolId: 't1', name: 'a', revision: 'r1', selectionSource: 'model' }],
-    advertised: [{ toolId: 't1', name: 'a', revision: 'r1', requestId: 'req-1' }],
     invalidated: Array.from({ length: invalidatedCount }, (_, i) => ({
       toolId: `t_inv_${String(i).padStart(2, '0')}`,
       reason: 'definition-changed',
@@ -32,7 +31,7 @@ function payloadWith (invalidatedCount) {
 
 const sizeOf = (value) => Buffer.byteLength(JSON.stringify(value), 'utf8')
 
-test('SB1 超限时只裁诊断段，并且带标记（不得静默、不得动 selected/advertised）', () => {
+test('SB1 超限时只裁诊断段，并且带标记（不得静默、不得动 selected）', () => {
   const payload = payloadWith(40)
   const full = sizeOf(payload)
   const maxBytes = Math.floor(full / 2)
@@ -41,7 +40,6 @@ test('SB1 超限时只裁诊断段，并且带标记（不得静默、不得动 
   assert.notEqual(fitted, null, '裁掉诊断段之后必须装得下')
   assert.equal(fitted.invalidatedTruncated, true, '裁剪必须带标记，否则调用方无从知道这一段不全')
   assert.deepEqual(fitted.selected, payload.selected, 'selected 是执行事实，不得被裁')
-  assert.deepEqual(fitted.advertised, payload.advertised, 'advertised 是披露事实，不得被裁')
   assert.ok(fitted.invalidated.length < payload.invalidated.length, '诊断段必须真的被裁短')
   assert.ok(sizeOf(fitted) <= maxBytes, '结果必须落在上限之内')
 })
@@ -67,7 +65,6 @@ test('SB5 真装配：projectState 的投影能被同一个函数裁进上限（
   const state = {
     mode: 'ready',
     selected: new Map([['t1', { toolId: 't1', name: 'a', revision: 'r1', selectionSource: 'model' }]]),
-    advertised: new Map(),
     invalidated: new Map(Array.from({ length: 30 }, (_, i) => [`t_inv_${i}`, { reason: 'definition-changed', at: 1, revision: 'r1' }])),
   }
   const budgets = { maxActiveTools: null, maxActiveSchemaBytes: null, maxListResultBytes: null }
@@ -112,7 +109,7 @@ test('SB6 二分定位与逐条递减的旧语义逐字一致（含装不下与�
     assert.deepEqual(fitStateWithinBudget(payload, null), referenceFit(payload, null), 'null 上限同样一致')
   }
   // 没有 invalidated 段的投影（形状异常/早期版本）也必须与旧实现同样给 null。
-  const shapeless = { mode: 'ready', selected: [], advertised: [], budgets: {} }
+  const shapeless = { mode: 'ready', selected: [], budgets: {} }
   assert.equal(fitStateWithinBudget(shapeless, 8), referenceFit(shapeless, 8))
   assert.equal(fitStateWithinBudget(shapeless, 8), null)
 })

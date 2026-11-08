@@ -249,6 +249,25 @@ export function validateLoadRequest(raw, budgets = DEFAULT_BUDGETS) {
 }
 
 /**
+ * 校验 tool_unload 请求：只要一个非空 names 数组（admitted 名字，无需 ref）。
+ * @param {unknown} raw
+ * @returns {{names:string[]}}
+ */
+export function validateUnloadRequest(raw) {
+  const o = requireObjectRoot(raw);
+  assertOnlyKeys(o, ['names']);
+  if (!Array.isArray(o.names) || o.names.length === 0) {
+    throw new DomainError('INVALID_ARGS', t(['detail', 'loadNeedsOne']));
+  }
+  for (const n of o.names) {
+    if (!isNonEmptyString(n) || n.trim().length === 0) {
+      throw new DomainError('INVALID_ARGS', t(['detail', 'namesNotStrings']));
+    }
+  }
+  return { names: Array.from(new Set(o.names)) };
+}
+
+/**
  * @param {string} tool
  * @param {string} operation
  * @param {object} data

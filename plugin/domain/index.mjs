@@ -15,7 +15,7 @@ export { clampCodePoints, isPlainObject, sortBy, createMutex } from './util.mjs'
 export { classifyBinding, isVisibleCategory, buildCategoryCards, resolveCategory, nameSegments } from './categories.mjs';
 export {
   buildCatalog, buildEntry, validateBinding, resolveByToolId, resolveByName,
-  orderedNamesFor, recomputeIdentity, hasNameConflict,
+  orderedNamesFor, recomputeIdentity, hasNameConflict, prepareCatalog, catalogFromPrepared,
 } from './catalog.mjs';
 export {
   resolveBudgets, estimateTokens, estimatedTokenCount, assertBytes,
@@ -26,13 +26,10 @@ export { createRefStore } from './candidate-refs.mjs';
 export { createCursorStore, paginateNames, paginateCategories, projectState } from './list.mjs';
 export { validateSkill, projectSkill, skillBytes, assertSkillBudget } from './skills.mjs';
 export {
-  validateListRequest, validateSearchRequest, validateLoadRequest,
+  validateListRequest, validateSearchRequest, validateLoadRequest, validateUnloadRequest,
   okEnvelope, errorEnvelope, toErrorEnvelope, LIST_VIEWS,
 } from './protocol.mjs';
 export {
-  createState, reducePair, recordAdvertisement, evaluateCall, invalidateTool,
-  recomputeSelectionIdentity, parseReceiptShape, deriveInputPath,
-  freezeTool, resetCacheEpoch, frozenWireList,
-  RECEIPT_KIND, RECEIPT_VERSION,
+  createState, cloneState, invalidateTool, removeSelection,
 } from './state.mjs';
 export { createDiscoveryEngine } from './engine.mjs';

@@ -1,6 +1,6 @@
 # DSH Tool Discovery — development guide
 
-Source manifest: `0.4.2`. Start with the [current contract](<docs/00-current-contract.md>),
+Source manifest: `0.6.0`. Start with the [current contract](<docs/00-current-contract.md>),
 [architecture](<docs/01-requirements-and-architecture.md>) and [verification status](<docs/05-current-status.md>).
 The numbered historical documents retain their original evidence; they are not the current defaults.
 
@@ -9,7 +9,7 @@ The numbered historical documents retain their original evidence; they are not t
 | Directory | Responsibility |
 |---|---|
 | [domain/](<domain/>) | Host-independent catalog, search, protocol, budgets and state transitions; no host imports or filesystem I/O |
-| [adapters/dsh/](<adapters/dsh/>) | Registry eligibility, native/PTC projection, canonical journal, execution guard, activation lifetime, optional durable epoch store and Config |
+| [adapters/dsh/](<adapters/dsh/>) | Registry eligibility, native/PTC masks, admission snapshots, execution guard, activation lifetime and Config |
 | [client/](<client/>) | Existing lazy CJS settings page and isomorphic model helpers; no separate frontend build step |
 | [contracts/](<contracts/>) | Real-Loader test harness and installation-anchored resolver; not the production import path |
 | [fixtures/](<fixtures/>) | Composition fixtures; generated `tmp/` content is private |
@@ -64,13 +64,13 @@ verification step; inspect its scope before using it.
 
 ## State and budget rules that tests must preserve
 
-- Selection is committed from matched canonical successful results, not from returning `ok:true` in a body.
-- Call seq attributes a pair; result seq orders its commit. Live and replay order must agree.
-- Native frozen wire is a disclosure cache, not execution permission. Same-name schema conflicts require successful compaction.
-- Schema footprint deduplication does not suppress delivery of a new skill revision. An uncommitted pending response is not proof that guidance arrived; only a committed same-version selection permits skill omission.
+- Entry execution commits selected and admission immediately; the next request adopts disclosure. The step admission snapshot prevents same-response own-scope authorization.
+- Failed load/unload batches leave selected, admission and budgets unchanged. Idempotent unload records a tombstone even before durable seed.
+- Durable snapshots use rc.1 table.delete for the final revoke; queued writes drain before storage close. Same-process resume reloads by session key.
+- Repeated same-version loads omit repeated skill delivery; version changes require a new load.
 - All optional hard caps default to `null`; positive integers opt in. Defaults 20/5 still paginate, and explicit max limits also cap omitted-limit defaults.
 - List/search byte caps measure the **entire successful JSON envelope**. State only truncates invalidation diagnostics with a marker; errors and host wrappers are outside that success cap.
-- Active schema caps cover the deduplicated on-demand selected/frozen/pending footprint, not the initial baseline. Over-budget loads reject additions rather than evict disclosed tools.
+- Active schema caps cover the deduplicated on-demand selected footprint, not the initial baseline. Over-budget loads reject additions rather than evict disclosed tools.
 - `initialSchemaTargetTokens` and `maxInitialBytes` are unused historical targets, not an enforced or measured initial token budget.
 
 Source of truth: [constants](<domain/constants.mjs>), [engine](<domain/engine.mjs>), [state](<domain/state.mjs>),
@@ -80,7 +80,7 @@ Source of truth: [constants](<domain/constants.mjs>), [engine](<domain/engine.mj
 
 A real Loader plus mock provider proves composition, not external provider wire. A client factory evaluated in a VM
 is not DOM rendering. Earlier DOM probe records are dated evidence, not proof of this source snapshot's online GUI.
-PTC SDK freezing/stable append/restart, crash/fsync, provider wire, retrieval metrics and performance remain separately scoped.
+Real PTC workers, crash/fsync, provider wire, retrieval metrics and end-to-end latency remain separately scoped.
 See [current status](<docs/05-current-status.md>) rather than copying historical test totals.
 
 Private `reports/`, `audits/`, scoring queries/labels and generated session data remain unpublished. Never force-add them

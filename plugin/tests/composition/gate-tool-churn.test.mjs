@@ -1,18 +1,7 @@
-// 工具**减少**面的缓存一致性门禁（TC）。
-//
-// 为什么单独一份：既有的 registry-churn fixture 只会**增加**工具（S03xL05 覆盖 ref 失效），
-// unit/registry.test.mjs 的 R5 只覆盖**代次**在移除→重加时不复用。整条「真实移除一个
-// 已经 selected 的工具」的运行时链路 —— selected / advertised / frozen / 执行面 / 旧 ref ——
-// 此前**没有任何组合门禁**。而生产上确实发生过减少（见 .probe/unload-diagnosis-handoff.md
-// 的实测 header 28 → 26），它是真实形态，不是构造出来的边角。
-//
-// 本门禁钉的语义（全部来自代码既有设计，不是新发明）：
-//   移除  → 该工具的 selected 作废（reason: tool-removed）、advertised 清除、
-//           执行面按未加载处理（body=0）、按名 load 不再命中；
-//           **frozen 披露缓存不清**（设计如此：已披露的 wire 定义在 epoch 内继续披露，
-//           由 guard 另行拒绝执行）；
-//   重加  → 拿到**新绑定代次**，旧选择**不得**复活，必须重新 load；
-//   无关工具不被误伤（正控制）。
+// rc.1 工具减少/重加门禁：真实 Loader fiber 移除使 admission 失效、旧 ref
+// 不可用、执行 body=0；重新注册必须重新 load，无关已接纳工具保持可执行。
+// 旧 advertised/frozen/epoch 不存在，不能等价断言旧 wire 保留；改验当前
+// request 工具集与 tracker 撤权。schema 历史是否保留由宿主路由负责。
 //
 // 运行：node --test plugin/tests/composition/gate-tool-churn.test.mjs
 import test, { after } from 'node:test'
@@ -34,7 +23,7 @@ after(async () => {
     try { await handle.dispose() } catch { /* 已释放 */ }
   }
   for (const dispose of cleanup.reverse()) {
-    try { dispose() } catch { /* 已释放 */ }
+    await dispose()
   }
 })
 
@@ -127,7 +116,7 @@ test('TC1: 真实移除已 selected 的工具 → 执行 body=0、旧 ref 失效
   const { store, queueResponse } = await storeOf()
   store.reset()
   const boot = await bootAdapterComposition({ fixtures: FIXTURES, adapter: ADAPTER_CONFIG })
-  cleanup.push(() => boot.dispose())
+  cleanup.push(async () => { await boot.closeServices(); boot.dispose() })
 
   await addEntry(boot, 'fx-removable')
   const sessionId = 'tc1-removal'
@@ -163,8 +152,11 @@ test('TC1: 真实移除已 selected 的工具 → 执行 body=0、旧 ref 失效
   runtime = runtimeOf(boot.ctx, sessionId)
   const state = runtime.engine.getState(runtime.scope)
   assert.equal(state.selected.size, 0, '移除后该工具不得仍留在 selected')
-  assert.equal(state.invalidated.has('global::fixture_removable'), true,
+  assert.equal(boot.ctx.get('progressiveDiscovery').tracker.get(sessionId, REMOVABLE), undefined,
+    '移除必须同步撤销 admission')
+  assert.ok([...state.invalidated.values()].some(row => row.name === REMOVABLE || row.reason === 'tool-removed'),
     '移除必须在 invalidated 里留痕')
+  assert.equal(lastNames(store).includes(REMOVABLE), false, '当前请求不再声明已移除工具')
   assert.equal(store.bodyCount('tc1-guess'), 0,
     '移除后按名猜调用必须 body=0（它已不在宿主工具表里）')
 
@@ -191,7 +183,7 @@ test('TC2: 移除后重加的工具不得凭旧选择复活，必须重新 load 
   const { store, queueResponse } = await storeOf()
   store.reset()
   const boot = await bootAdapterComposition({ fixtures: FIXTURES, adapter: ADAPTER_CONFIG })
-  cleanup.push(() => boot.dispose())
+  cleanup.push(async () => { await boot.closeServices(); boot.dispose() })
 
   await addEntry(boot, 'fx-removable')
   const sessionId = 'tc2-readd'
@@ -215,6 +207,8 @@ test('TC2: 移除后重加的工具不得凭旧选择复活，必须重新 load 
   const runtime = runtimeOf(boot.ctx, sessionId)
   assert.equal(runtime.engine.getState(runtime.scope).selected.size, 0,
     '重加后 selected 仍应为空（必须重新 load）')
+  assert.equal(boot.ctx.get('progressiveDiscovery').tracker.get(sessionId, REMOVABLE), undefined)
+  assert.equal(lastNames(store).includes(REMOVABLE), false, '重新注册不自动披露')
 
   // 正控：重新 load 之后它照常可用
   queueResponse({ toolCalls: [{ id: 'tc2-reload', name: 'tool_load', arguments: { names: [REMOVABLE] } }] })

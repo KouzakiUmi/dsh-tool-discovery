@@ -19,9 +19,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { createRegistryAdapter, scopeKeyOf } from '../../adapters/dsh/registry.mjs'
-import { makeEngine, commitLoad, SCOPE_A } from './helpers.mjs'
+import { makeEngine, loadTools, SCOPE_A } from './helpers.mjs'
 
-const ENTRY_NAMES = ['tool_list', 'tool_search', 'tool_load']
+const ENTRY_NAMES = ['tool_list', 'tool_search', 'tool_load', 'tool_unload']
 
 function def (name, description = `synthetic description for ${name}`) {
   return {
@@ -78,8 +78,8 @@ test('R1: 无关工具新增 → 已有工具的绑定代次与 selected 都不�
   const first = registry.bindingsFor(undefined)
   registry.remember(first.scopeKey, first.bindings)
   const { engine } = await makeEngine({ bindings: first.bindings })
-  const loaded = await commitLoad(engine, SCOPE_A, { action: 'load', names: ['read_file'] })
-  assert.equal(loaded.applied, true)
+  const loaded = await loadTools(engine, SCOPE_A, { action: 'load', names: ['read_file'] })
+  assert.equal(loaded.response.ok, true)
   assert.deepEqual([...engine.getState(SCOPE_A).selected.keys()], ['global::read_file'])
 
   // 一个与本会话毫无关系的工具被后装插件注册进来 → 宿主广播 tools/change
@@ -102,7 +102,7 @@ test('R2: 无关工具删除同样不动已有绑定代次与 selected', async (
   const first = registry.bindingsFor(undefined)
   registry.remember(first.scopeKey, first.bindings)
   const { engine } = await makeEngine({ bindings: first.bindings })
-  await commitLoad(engine, SCOPE_A, { action: 'load', names: ['read_file'] })
+  await loadTools(engine, SCOPE_A, { action: 'load', names: ['read_file'] })
 
   global.delete('web_fetch')
   const { view, diff } = onRegistryChange(registry, undefined, engine)
@@ -120,7 +120,7 @@ test('R3: 同名同 wire 但 definition 实例被替换 → 绑定代次必须�
   const first = registry.bindingsFor(undefined)
   registry.remember(first.scopeKey, first.bindings)
   const { engine } = await makeEngine({ bindings: first.bindings })
-  await commitLoad(engine, SCOPE_A, { action: 'load', names: ['read_file'] })
+  await loadTools(engine, SCOPE_A, { action: 'load', names: ['read_file'] })
 
   // 另一个插件抢注同名同 schema 的工具：wire 完全相同，实例不同
   global.set('read_file', def('read_file'))

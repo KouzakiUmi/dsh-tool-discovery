@@ -18,17 +18,17 @@ import { randomBytes } from 'node:crypto';
 // 界面语言文件由**本层**读（内核 host-locale 是纯函数，不持有 I/O 能力）。
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { AUTO_LOCALE, CONTROLLED_CATEGORIES, DomainError, ENTRY_TOOL_NAMES, createDiscoveryEngine, createText, detectHostLocale, setDomainLocale } from '../../domain/index.mjs';
+import { AUTO_LOCALE, CONTROLLED_CATEGORIES, DomainError, ENTRY_TOOL_NAMES, PROTOCOL_VERSION, createDiscoveryEngine, createText, detectHostLocale, setDomainLocale } from '../../domain/index.mjs';
 import { createEntryDefinitions } from './entries.mjs';
 import { createGuard } from './guard.mjs';
 import { createLifecycle } from './lifecycle.mjs';
-import { createProjection } from './projection.mjs';
-import { createPtcDisclosure } from './ptc-sdk.mjs';
-import { resolveBuiltinDescriptionOverrides } from './builtin-description-options.mjs';
+import { createMaskController } from './mask.mjs';
+import { createAdmissionStoreHandle, createAdmissionTracker } from './admission.mjs';
+import { assertRestrictionHost, viewWithoutRestriction } from './restriction-view.mjs';
+import { createRegistryChangeTracker } from './registry-change.mjs';
 import { createRegistryAdapter } from './registry.mjs';
 import { buildConfig, INITIAL_TOOL_CHOICES, publishToolChoices, resolveAlwaysVisible } from './config.mjs';
 import { globalToolInventory, presetToolNamesOf } from './tool-inventory.mjs';
-import { createTrustedEpochHolder, createTrustedEpochStore, TRUSTED_EPOCH_REASONS } from './trusted-epoch.mjs';
 
 /**
  * schemastery 必须在**默认工厂构造之前**就位。
@@ -232,37 +232,23 @@ export function validateConfig(raw) {
     }
   }
 
-  if (config.allowMissingSessionQuery !== undefined && typeof config.allowMissingSessionQuery !== 'boolean') {
-    throw new DomainError('INCOMPATIBLE_COMPOSITION', 'allowMissingSessionQuery must be a boolean.');
-  }
   const initialToolsEnabled = typeof config.initialToolsEnabled?.get === 'function'
     ? config.initialToolsEnabled.get() : config.initialToolsEnabled;
   const alwaysAllowPresetTools = typeof config.alwaysAllowPresetTools?.get === 'function'
     ? config.alwaysAllowPresetTools.get() : config.alwaysAllowPresetTools;
-  const ptcCompatibility = typeof config.ptcCompatibility?.get === 'function'
-    ? config.ptcCompatibility.get() : config.ptcCompatibility;
-  const compactBuiltinToolDescriptions = typeof config.compactBuiltinToolDescriptions?.get === 'function'
-    ? config.compactBuiltinToolDescriptions.get() : config.compactBuiltinToolDescriptions;
-  for (const [key, value] of Object.entries({ initialToolsEnabled, alwaysAllowPresetTools, ptcCompatibility, compactBuiltinToolDescriptions, requireTrustedEpoch: config.requireTrustedEpoch,
-    requireTrustedEpochForSubagents: config.requireTrustedEpochForSubagents })) {
+  const gateOwnScopeTools = typeof config.gateOwnScopeTools?.get === 'function'
+    ? config.gateOwnScopeTools.get() : config.gateOwnScopeTools;
+  for (const [key, value] of Object.entries({ initialToolsEnabled, alwaysAllowPresetTools, gateOwnScopeTools })) {
     if (value !== undefined && typeof value !== 'boolean') {
       throw new DomainError('INCOMPATIBLE_COMPOSITION', `${key} must be a boolean.`);
     }
   }
-  let compactBuiltinToolOverrides;
-  try {
-    compactBuiltinToolOverrides = resolveBuiltinDescriptionOverrides(config.compactBuiltinToolOverrides);
-  } catch (error) {
-    throw new DomainError('INCOMPATIBLE_COMPOSITION', error.message);
-  }
+  // ptcCompatibility / compactBuiltinTool* / requireTrustedEpoch* 是 rc.1 上
+  // 已废弃/移除的兼容键：不再读、不再校验，schema 层保留字段只为不吞配置。
   return {
     initialToolsEnabled: initialToolsEnabled !== false,
     alwaysAllowPresetTools: alwaysAllowPresetTools !== false,
-    ptcCompatibility: ptcCompatibility === true,
-    compactBuiltinToolDescriptions: compactBuiltinToolDescriptions === true,
-    compactBuiltinToolOverrides,
-    requireTrustedEpoch: config.requireTrustedEpoch === true,
-    requireTrustedEpochForSubagents: config.requireTrustedEpochForSubagents === true,
+    gateOwnScopeTools: gateOwnScopeTools !== false,
     categoryConfig,
     budgets: config.budgets,
     frameworkRetained: Object.freeze([...frameworkRetained]),
@@ -278,8 +264,6 @@ export function validateConfig(raw) {
     tolerantLoadProtected: config.tolerantLoadProtected !== false,
     locale: typeof config.locale === 'string' ? config.locale : undefined,
     respectAlwaysVisible: respectAlwaysVisibleRaw === true,
-    // 保留该键仅为兼容既有配置；缺失 sessionQuery 已不再拒绝激活。
-    allowMissingSessionQuery: config.allowMissingSessionQuery === true,
   };
 }
 
@@ -303,17 +287,9 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
     if (typeof resolved.defineTool !== 'function') {
       throw new DomainError('INCOMPATIBLE_COMPOSITION', 'The defineTool dependency is missing.');
     }
-    let isAgentLoopRequest = deps.isAgentLoopRequest;
-    if (isAgentLoopRequest === undefined) {
-      try { ({ isAgentLoopRequest } = await import('@deepseek-ai/dsh-llm')); }
-      catch (error) {
-        if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error;
-        // native/off 不需要它；开启 PTC 时投影明确拒绝缺失的出站观测契约。
-        isAgentLoopRequest = undefined;
-      }
-    }
-    // 可信周期的存储依赖：生产按裸包名解析；解析不到就**保持 unavailable 终态**，
-    // 不伪造一套内存 domain —— 那等于把"没有权威"伪装成"有权威"。
+    // admission store 的 schema 依赖（zod + defineDomain/domainTable）。
+    // 解析不到不是"降级继续"也不是"拒绝激活"：tracker 退化为纯内存表，
+    // 掩码与执行门禁照旧，只是 durable resume 不可用（日志说明）。
     let storageDomainApi = deps.storageDomainApi;
     let zod = deps.z;
     if (zod === undefined) {
@@ -335,10 +311,24 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
         storageDomainApi = undefined;
       }
     }
-    const trustedEpochDepsAvailable = typeof zod === 'object' && zod !== null
+    const admissionDepsAvailable = typeof zod === 'object' && zod !== null
       && typeof storageDomainApi?.defineDomain === 'function'
       && typeof storageDomainApi?.domainTable === 'function';
     const config = validateConfig(rawConfig);
+    /**
+     * 活配置读取（Cordis 两版兼容）。
+     *
+     * Cordis 4.1（0.2.2-rc.1 起）把 `fiber.config` 改成**原始输入**：它保留待下一次
+     * 激活的 raw 值，不再经过 `internal/config` waterfall 与 schema 解析；解析结果
+     * （含 volatile 引用）改由公开的 `fiber.effectiveConfig` 暴露。旧版（≤0.2.1-rc.x）
+     * 只有 `fiber.config`。这里按能力探测：两版都读到"活的已解析配置"，都读不到时
+     * 调用方各自的 `?? config.<field>` 负责回落到 apply 期快照。
+     */
+    const liveConfig = () => {
+      const fiber = ctx.fiber;
+      if (fiber === null || fiber === undefined) return undefined;
+      return 'effectiveConfig' in fiber ? fiber.effectiveConfig : fiber.config;
+    };
     const log = (message, extra) => {
       // 诊断走 info：debug 级别默认不落盘，重启后无法据此判断激活状态。
       if (typeof ctx.logger?.info === 'function') ctx.logger.info(`progressive-tools: ${message}`, extra);
@@ -369,6 +359,24 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
     }));
     config.categoryConfig = { ...localizedDefaults, ...(config.categoryConfig ?? {}) };
 
+    // rc.1+ 单一路径：restriction 层结构不符就不激活（assertRestrictionHost 一次性校验）。
+    assertRestrictionHost(ctx.tools, log);
+    const controlDefinitions = new Map();
+    // 目录/preset 口径一律用不受本插件掩码影响的可见面（filtersFor 给出要忽略的层）。
+    // mask 的常驻名单需要 lifecycle（runtime 建立时按 preset/自证合并），反向成立——
+    // 用延迟引用解环。
+    let lifecycleForMask = null;
+    const mask = createMaskController({
+      ctx,
+      frameworkRetained: config.frameworkRetained,
+      getAlwaysVisible: (agent) => lifecycleForMask?.currentAlwaysNames(agent) ?? [],
+      log,
+    });
+    const tracker = createAdmissionTracker({ log });
+    const unrestrictedViewFor = (scope) => {
+      const filters = mask.filtersFor(scope);
+      return filters.size === 0 ? ctx.tools.view(scope) : viewWithoutRestriction(ctx.tools, scope, filters);
+    };
     const registry = createRegistryAdapter({
       ctx,
       entryNames: ENTRY_TOOL_NAMES,
@@ -376,7 +384,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       log,
     });
 
-    // ---- 2. 入口名冲突：三个名字任一在 global 或任一活动 scope 可见面已存在即拒绝 ----
+    // ---- 2. 入口名冲突：四个名字任一在 global 或任一活动 scope 可见面已存在即拒绝 ----
     const agents = ctx.get('agents');
     const liveAgents = agents === undefined || typeof agents.list !== 'function' ? [] : agents.list();
     const conflicts = registry.findEntryConflicts(liveAgents);
@@ -384,37 +392,8 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       throw new DomainError('INCOMPATIBLE_COMPOSITION', `控制入口名称冲突: ${conflicts.map((c) => `${c.name}@${c.where}`).join(', ')}`);
     }
 
-    // 展示模式不在这里拒绝。全局 mode 与 preset 的 presentAs() 可以不同；
-    // 激活期只看得到全局默认，按它拒绝会放过 preset、或反过来禁掉所有会话。
-    // 各 scope 的 wire 与初始放行由 projection / guard 按当前绑定 preset 处理。
-
-    // sessionQuery 只用于**有历史**的会话做冷恢复（lifecycle: seq>0 才调
-    // journal.restore()）。全新会话 seq===0 直接 ready，不读盘。
-    // 因此缺失该服务时**不能拒绝激活**——那会让插件在所有会话上一律失效，
-    // 而它本来完全能服务新会话。恢复不可用时的正确降级由 journal 逐会话
-    // fail closed 承担（query===undefined → mode:'incompatible'），
-    // 而不是在此处一刀切拒绝组合。
-    const query = ctx.get('sessionQuery');
-    log('activate:deps', {
-      sessionQuery: query !== undefined,
-      sessions: ctx.get('sessions') !== undefined,
-      sessionPersistence: ctx.get('sessionPersistence') !== undefined,
-      agents: ctx.get('agents') !== undefined,
-      presentation: 'per-scope',
-    });
-    if (query === undefined) {
-      log('degraded:no-session-query', {
-        impact: '新会话正常；有历史会话的冷恢复将 fail closed（mode:incompatible）',
-      });
-    }
-
     const clock = { now: () => Date.now() };
     const random = { bytes: (n) => randomBytes(n) };
-    /**
-     * 可信周期的存储挂载点。**始终存在**（哪怕依赖/服务都不可用）：那样会话能拿到
-     * 一个确定的 STORAGE_UNAVAILABLE 终态，而不是挂死等一个永远不会来的服务。
-     */
-    const trustedEpoch = createTrustedEpochHolder({ log });
     /** @type {Function[]} 已创建项的 disposer，按创建顺序持有 */
     const disposers = [];
 
@@ -424,24 +403,35 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
      * apply 期捕获的 rawConfig 里的旧 volatile ref 就此失效。故优先读 fiber 上的
      * 活 config，读不到才回落捕获值（首次加载时两者相同）。
      *
-     * 只在 lifecycle 的两个**周期边界**被读（建立 runtime / 成功压缩后重开），
-     * 周期中途配置变更因此不改变任何在跑的会话。
+     * 常驻集合在新 runtime 与后续 reconcile 中读取；engine、mask、guard 同源更新。
      */
     const getInitialToolsEnabled = () => {
-      const enabled = ctx.fiber?.config?.initialToolsEnabled ?? config.initialToolsEnabled;
+      const enabled = liveConfig()?.initialToolsEnabled ?? config.initialToolsEnabled;
       return (typeof enabled?.get === 'function' ? enabled.get() : enabled) !== false;
     };
     const getAlwaysVisible = () => {
       if (!getInitialToolsEnabled()) return [];
-      const live = ctx.fiber?.config?.alwaysVisible;
+      const live = liveConfig()?.alwaysVisible;
       if (live !== undefined) return resolveAlwaysVisible(live);
       return resolveAlwaysVisible(config.alwaysVisible);
     };
 
-    const getPresetTools = (agentScope) => {
-      const enabled = ctx.fiber?.config?.alwaysAllowPresetTools ?? config.alwaysAllowPresetTools;
+    const getPresetTools = (agentScope, viewFor = unrestrictedViewFor) => {
+      const enabled = liveConfig()?.alwaysAllowPresetTools ?? config.alwaysAllowPresetTools;
       if ((typeof enabled?.get === 'function' ? enabled.get() : enabled) === false) return [];
-      return presetToolNamesOf(ctx.tools, ctx.get('agentPresets'), agentScope);
+      return presetToolNamesOf(ctx.tools, ctx.get('agentPresets'), agentScope, viewFor);
+    };
+    /**
+     * 常驻名单 memo 的代次 token（lifecycle 缓存键的一部分）：只读
+     * alwaysAllowPresetTools 读数与 preset 绑定代次，不遍历 layer —— 让
+     * 「preset 重绑但注册表没动」这类变化也能自然击穿缓存。
+     */
+    const getPresetToken = (agentScope) => {
+      const enabled = liveConfig()?.alwaysAllowPresetTools ?? config.alwaysAllowPresetTools;
+      const on = (typeof enabled?.get === 'function' ? enabled.get() : enabled) !== false;
+      if (!on) return 'off';
+      const generation = ctx.get('agentPresets')?.generationFor?.(agentScope?.ctx);
+      return `on:${generation?.key ?? 'none'}`;
     };
 
     /**
@@ -453,7 +443,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
      * 免披露放行）。guard 与 lifecycle 共用这一个读取器。
      */
     const getRespectAlwaysVisible = () => {
-      const raw = ctx.fiber?.config?.respectAlwaysVisible ?? config.respectAlwaysVisible;
+      const raw = liveConfig()?.respectAlwaysVisible ?? config.respectAlwaysVisible;
       const value = raw !== null && typeof raw === 'object' && typeof raw.get === 'function' ? raw.get() : raw;
       return value === true;
     };
@@ -486,27 +476,19 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
     /** 新 runtime 建立时重新发布应用全局目录；不读取该 runtime 的会话目录。 */
     const onRuntimeCreated = () => { refreshToolChoices(); };
 
-    /**
-     * storageDomain 到位（或从 unavailable 变为可用）之后，把那些**只**因为存储
-     * 缺席而封住的会话重试一次。迁移类终态（MISSING / INVALID）**不**重试 ——
-     * 它们要等本次 live 的真实用户 `/compact`，不能靠重试蒙混过去。
-     */
-    const retryStorageUnavailable = (lifecycle) => {
-      for (const runtime of lifecycle.sessions.values()) {
-        if (runtime.ledger?.reason !== TRUSTED_EPOCH_REASONS.UNAVAILABLE) continue;
-        lifecycle.retryBaseline(runtime);
-      }
-    };
-
     const rollback = () => {
-      for (const dispose of disposers.reverse()) {
+      // 同步释放门禁/监听，不让一个慢存储阻塞撤销；异步 cleanup 仍交回 Cordis 等待。
+      const pending = [];
+      for (const dispose of disposers.splice(0).reverse()) {
         try {
-          dispose();
+          pending.push(Promise.resolve(dispose()).catch(error => {
+            log('rollback-error', { error: String(error) });
+          }));
         } catch (error) {
           log('rollback-error', { error: String(error) });
         }
       }
-      disposers.length = 0;
+      return Promise.allSettled(pending);
     };
     /** 宿主若不返回 disposer，也必须保证回滚路径安全。 */
     const own = (disposer) => {
@@ -518,145 +500,190 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
     ctx.effect(() => rollback, 'progressive discovery lifecycle');
 
     try {
-      const ptcEnabled = () => {
-        const live = ctx.fiber?.config?.ptcCompatibility;
-        const raw = live !== undefined ? live : config.ptcCompatibility;
-        const value = raw !== null && typeof raw === 'object' && typeof raw.get === 'function' ? raw.get() : raw;
-        return value === true;
-      };
+      // ---- 1. 掩码控制器 + admission tracker（上面已建）→ lifecycle ----
       const lifecycle = createLifecycle({
         ctx,
         registry,
         config,
         clock,
         random,
-        query,
+        tracker,
+        mask,
         log,
+        viewFor: unrestrictedViewFor,
         getAlwaysVisible,
         getInitialToolsEnabled,
         getRespectAlwaysVisible,
         getPresetTools,
-        getCompactBuiltinToolDescriptions: () => {
-          const value = ctx.fiber?.config?.compactBuiltinToolDescriptions ?? config.compactBuiltinToolDescriptions;
-          return (typeof value?.get === 'function' ? value.get() : value) === true;
-        },
-        getBuiltinDescriptionOverrides: () => resolveBuiltinDescriptionOverrides(
-          ctx.fiber?.config?.compactBuiltinToolOverrides ?? config.compactBuiltinToolOverrides),
+        getPresetToken,
         onRuntimeCreated,
-        trustedEpoch: trustedEpoch,
-        collapsedPresentation: (agent) => {
-          try { return ctx.tools.modeFor(agent) !== 'native'; }
-          catch { return false; }
-        },
       });
-      const ptc = createPtcDisclosure({ ctx, lifecycle, log, enabled: ptcEnabled,
-        frameworkRetained: config.frameworkRetained,
-        renderToolsSdk: resolved.renderToolsSdk, renderToolsSdkPy: resolved.renderToolsSdkPy,
-        isAgentLoopRequest });
+      lifecycleForMask = lifecycle;
       own(() => lifecycle.dispose());
+      own(() => mask.dispose());
+      const closeAdmissions = async () => {
+        await lifecycle.settleOperations();
+        await tracker.dispose();
+      };
+      own(closeAdmissions);
 
-      // ---- 8.5 可信周期存储：动态子 fiber，作用域内 open/close ----
+      // ---- 1.5 admission store：动态子 fiber，作用域内 open/close ----
       //
       // **不**把 storageDomain 放进 apply.inject：那会让宿主在整个组合里因为它而
       // 隐性不激活本插件。`ctx.inject(['storageDomain'], cb)` 是两参动态子 fiber ——
       // 服务到位才跑，跑在**自己的**作用域里，disposer 归它自己。
       //
-      // 服务缺席 / open 失败都不是"降级继续"，而是会话级的确定终态
-      // STORAGE_UNAVAILABLE（0 request，见 trusted-epoch.mjs）。
-      // 兼容模式不打开、读取或写入可信周期存储；不是把易失状态伪装成 durable 授权。
-      if (config.requireTrustedEpoch) own(ctx.inject(['storageDomain'], (storageCtx) => {
-        if (!trustedEpochDepsAvailable) {
-          log('trusted-epoch:deps-missing', {
-            note: 'zod / @deepseek-ai/dsh-storage-domain 不可用；会话将落 STORAGE_UNAVAILABLE 并停止发请求。',
+      // 服务缺席 / open 失败只影响 durable resume：tracker 是纯内存表，掩码与
+      // 执行门禁照常；记日志后什么都不做。
+      own(ctx.inject(['storageDomain'], (storageCtx) => {
+        if (!admissionDepsAvailable) {
+          log('admission:deps-missing', {
+            note: 'zod / @deepseek-ai/dsh-storage-domain 不可用；admission 仅存内存，durable resume 关闭。',
           });
           return;
         }
-        const store = createTrustedEpochStore({
+        const store = createAdmissionStoreHandle({
           facility: storageCtx.storageDomain,
           defineDomain: storageDomainApi.defineDomain,
           domainTable: storageDomainApi.domainTable,
           z: zod,
           log,
         });
-        trustedEpoch.attach(store);
+        tracker.holder.store = store;
         storageCtx.effect(() => {
-          // 幂等 open（并发共享同一次），失败只落终态，不重试、不挂死。
-          const opening = store.ensureOpen();
+          let attached = true;
+          const opening = (async () => {
+            const first = await store.ensureOpen();
+            return first?.ok === true || !attached ? first : store.ensureOpen();
+          })();
           opening.then((outcome) => {
-            if (outcome?.ok === true) retryStorageUnavailable(lifecycle);
-            else log('trusted-epoch:unavailable', { reason: outcome?.reason, failure: store.failure });
+            if (!attached) return;
+            if (outcome?.ok !== true) {
+              log('admission:unavailable', { reason: outcome?.reason });
+              return;
+            }
+            tracker.seedFromStore(store, [...lifecycle.sessions.keys()]);
+            // 已建立的会话补一次 seed + 重掩码（attach 晚于会话建立时才会发生）。
+            for (const runtime of lifecycle.sessions.values()) {
+              const rows = [...tracker.admissionsFor(runtime.scope.sessionId).values()];
+              const { seeded, dropped } = runtime.engine.seedSelection(runtime.scope, rows);
+              for (const name of dropped) tracker.revoke(runtime.scope.sessionId, name);
+              if (seeded.length > 0 || dropped.length > 0) {
+                lifecycle.reconcileMask(runtime.scope.sessionId);
+              }
+            }
           });
           return async () => {
-            trustedEpoch.detach();
-            await opening.catch(() => {});
+            attached = false;
+            await opening;
+            await lifecycle.settleOperations();
+            await tracker.detachStore(store);
             await store.close();
           };
-        }, 'trusted-epoch store');
+        }, 'admission store');
       }));
 
-      // resolve 必须在注册前可用，但 runtime 在首次 assemble 时建立
+      // resolve 必须在注册前可用，但 runtime 在首次调用时建立
       const resolveRuntime = (exec) => {
         const agent = exec?.agent;
         if (agent === undefined || agent.session === undefined) {
           throw new DomainError('INCOMPATIBLE_COMPOSITION', 'The host session context is missing.');
         }
-        const runtime = lifecycle.ensureRuntime(agent.session, agent);
-        return { engine: runtime.engine, scope: runtime.scope };
+        const runtime = lifecycle.runtimeFor(agent.session, agent);
+        lifecycle.syncAlwaysNames(runtime);
+        return { engine: runtime.engine, scope: runtime.scope, runtime };
       };
 
-      // ---- 4. 三个 typed definition ----
-      for (const definition of createEntryDefinitions({ defineTool: resolved.defineTool, resolve: resolveRuntime, text })) {
+      // ---- 4. 四个 typed definition ----
+      for (const definition of createEntryDefinitions({
+        defineTool: resolved.defineTool,
+        resolve: resolveRuntime,
+        commitAdmissions: (runtime, rows) => lifecycle.commitAdmissions(runtime, rows),
+        revokeAdmissions: (runtime, names) => lifecycle.revokeAdmissions(runtime, names),
+        trackOperation: operation => lifecycle.trackOperation(operation),
+        text,
+      })) {
         own(ctx.tools.register(definition));
+        controlDefinitions.set(definition.name, definition);
       }
-
-      // ---- 5. 投影 ----
-      own(createProjection({ ctx, lifecycle, frameworkRetained: config.frameworkRetained, log, ptcEnabled,
-        projectPtc: (agent, assembly, runtime) => ptc.project(agent, assembly, runtime) }));
-      own(ctx.on('llm/stream', (options, next) => {
-        lifecycle.assertActive();
-        ptc.observeRequest(options);
-        return next();
-      }));
 
       // ---- 6. guard（只增拒绝） ----
       own(createGuard({
         ctx,
         lifecycle,
+        tracker,
         frameworkRetained: config.frameworkRetained,
         respectAlwaysVisible: getRespectAlwaysVisible,
+        controlDefinitions,
         locale,
         log,
-        ptcEnabled,
       }));
 
-      // ---- 7. session 与 registry 事件 ----
-      own(ctx.on('session/event', (session, event) => lifecycle.onSessionEvent(session, event)));
+      // ---- 7. session / agent / registry 事件 ----
       own(ctx.on('session/disposed', (session) => lifecycle.disposeSession(session.id)));
-
-      // ---- 7.5 post-next 的 agent/pre-step 屏障 ----
-      //
-      // 宿主 assemble(:907) → waterfall('agent/pre-step')(:911) → 仍返回旧 assembly
-      // (:921-923)，而 basic 的自动压缩就在这个 waterfall 内
-      // （dsh-compaction-basic:839）。所以一次成功压缩换掉的名单，会**先**被那份
-      // 尚未发送的 assembly 带出去，而新周期的可信记录可能还没 durable。
-      // 这里在 next() 之后等本次新 epoch 的 put 落定；期间尊重宿主取消信号，
-      // 不新增任何超时。
+      own(ctx.on('agent/created', ({ agent }) => {
+        lifecycle.assertActive();
+        // 建 runtime（目录/alwaysNameSet/seed）再装掩码——guard 与掩码都依赖它；
+        // runtime 不建的话 guard 对 runtime===undefined 只能放行，own-scope
+        // 工具首轮就会绕过准入。宿主会 await 这个监听器，同步建 runtime 安全。
+        if (agent?.session !== undefined) lifecycle.runtimeFor(agent.session, agent);
+        // 装初始掩码：admitted 读自 tracker（store 已 seed 时含 durable 行）。
+        mask.ensure(agent, tracker.admissionsFor(agent?.session?.id));
+      }));
+      own(ctx.on('agent/disposed', ({ agent }) => { mask.disposeAgent(agent); }));
+      for (const agent of liveAgents) {
+        if (agent?.session !== undefined) {
+          try { lifecycle.runtimeFor(agent.session, agent); } catch (error) {
+            log('agent:runtime-warmup-failed', { agentId: agent?.id, error: String(error?.message ?? error) });
+          }
+        }
+        mask.ensure(agent, tracker.admissionsFor(agent?.session?.id));
+      }
+      own(ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
+        lifecycle.assertActive();
+        if (context?.scope?.session && context.toolSet) {
+          lifecycle.captureStep(context.scope, context.toolSet);
+        }
+        return next();
+      }));
+      // pre-step 兜底 reconcile：admission 与 restrictable 集合的任何漂移
+      // （第三方掩码叠加、工具热注册）都在下一步装配前重对齐。
       own(ctx.on('agent/pre-step', async (payload, next) => {
         lifecycle.assertActive();
-        const decision = await lifecycle.waitForActive(next());
-        const sessionId = payload?.agent?.session?.id;
-        if (typeof sessionId === 'string') {
-          await lifecycle.awaitEpochRecord(sessionId, payload?.signal);
+        const agent = payload?.agent;
+        const sessionId = agent?.session?.id;
+        if (agent !== undefined && typeof sessionId === 'string') {
+          lifecycle.reconcileMask(sessionId);
         }
-        lifecycle.assertActive();
-        return decision;
+        return next();
       }));
-      // 工具集变了（MCP 接入/断开、插件热注册）→ 目录元数据跟着更新，设置面板重读。
-      own(ctx.on('tools/change', () => {
+      // 工具集变了（MCP 接入/断开、插件热注册）→ 目录 + admission 对齐 + 重掩码。
+      let registryRefreshQueued = false;
+      let registryListenerActive = true;
+      own(() => { registryListenerActive = false; });
+      const registryChanges = createRegistryChangeTracker(ctx.tools, () => mask.ownedFilters());
+      const reconcileRegistry = (maskOnly = false) => {
+        const changed = registryChanges.changed();
+        if (maskOnly && changed === false) return;
         lifecycle.onRegistryChange();
         refreshToolChoices();
+      };
+      own(ctx.on('tools/change', () => {
+        if (mask.isMutating()) {
+          // 自反馈环里可能夹着重入的第三方注册：microtask 对齐一次，不丢。
+          if (!registryRefreshQueued) {
+            registryRefreshQueued = true;
+            queueMicrotask(() => {
+              registryRefreshQueued = false;
+              if (!registryListenerActive) return;
+              reconcileRegistry(true);
+            });
+          }
+          return;
+        }
+        reconcileRegistry();
       }));
-      // 首次发布目录：此时三个入口已注册，其余可见工具就是用户能勾选的集合。
+      // 首次发布目录：此时四个入口已注册，其余可见工具就是用户能勾选的集合。
       refreshToolChoices();
       log('activate:config-surface', {
         configSchema: configSchema !== undefined,
@@ -665,13 +692,12 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
 
       // ---- 8. 配置语义校验（预算/类别）：非法配置必须走完整回滚 ----
       const probe = createDiscoveryEngine({
-        protocolVersion: 2,
+        protocolVersion: PROTOCOL_VERSION,
         categoryConfig: config.categoryConfig,
         entryToolNames: [...registry.entryNames],
         frameworkToolNames: [...registry.frameworkRetained],
         alwaysToolNames: [...config.alwaysVisible],
         budgets: config.budgets,
-        newSessionMode: 'restoring',
         bindings: [],
         clock,
         random,
@@ -685,26 +711,22 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
           sessions: lifecycle.sessions,
           registry,
           lifecycle,
+          mask,
+          tracker,
           /** 设置面板的目录写入由宿主 settings 服务完成，这里只提供读侧事实。 */
           currentAlwaysVisible: getAlwaysVisible,
-          /** 某会话的可信周期基线（门禁/诊断只读观测面）。 */
+          /** 某会话的准入观测面（诊断只读）。 */
           trustedBaseline: (sessionId) => lifecycle.baselineOf(sessionId),
         });
       }
     } catch (error) {
-      rollback();
+      await rollback();
       throw error;
     }
   };
-  // inject 决定宿主**何时**调用 apply。只声明 tools/systemPrompt 时，apply 会在
-  // 其后就绪的瞬间执行，而 sessionQuery（inject: ['sessions'] 的间接依赖）此时
-  // 未必已激活——那正是 ctx.get('sessionQuery') 返回 undefined 的原因：服务在
-  // 组合树里存在（--dump-config 可见），只是晚于本插件一步。
-  //
-  // 把它加入 inject 后：若该服务最终不可用，宿主不会调用 apply，插件保持未激活，
-  // 宿主工具表不受影响——这是良性失败；若可用，则 apply 一定在它就绪之后运行，
-  // 恢复路径拿到的就是真实服务。
-  apply.inject = ['tools', 'systemPrompt', 'sessionQuery'];
+  // inject 决定宿主**何时**调用 apply。storageDomain 不在其中：那是动态子 fiber
+  // 的可选依赖（缺席=纯内存 admission），不该让整个插件因为它不激活。
+  apply.inject = ['tools', 'systemPrompt'];
 
   // Config 必须在**本工厂返回之前**挂上：宿主对 fiber.runtime.Config 的首次
   // resolveConfig 发生在 fiber 建立时，早于 apply 体，晚一秒就拿不到 volatile

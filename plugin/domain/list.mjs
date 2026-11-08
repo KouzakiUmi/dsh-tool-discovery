@@ -156,8 +156,8 @@ export function paginateCategories(args) {
 }
 
 /**
- * 状态投影:只返回会话内 selected / advertised / invalidated 与预算,不枚举隐藏目录。
- * @param {import('./state.mjs').SessionDiscoveryState} state
+ * 状态投影:只返回会话内 selected / invalidated 与预算,不枚举隐藏目录。
+ * @param {ReturnType<typeof import('./state.mjs').createState>} state
  * @param {Readonly<import('./index.mjs').BudgetConfigDTO>} budgets
  * @param {Array<{wireBytes:number}>} activeEntries
  */
@@ -171,9 +171,6 @@ export function projectState(state, budgets, activeEntries) {
         toolId: s.toolId, name: s.name, revision: s.revision,
         selectionSource: s.selectionSource,
       }))
-      .sort((a, b) => (a.toolId < b.toolId ? -1 : 1)),
-    advertised: Array.from(state.advertised.values())
-      .map((a) => ({ toolId: a.toolId, name: a.name, revision: a.revision, requestId: a.requestId }))
       .sort((a, b) => (a.toolId < b.toolId ? -1 : 1)),
     invalidated: Array.from(state.invalidated.entries())
       .map(([toolId, v]) => ({ toolId, reason: v.reason, at: v.at, revision: v.revision }))

@@ -1,24 +1,29 @@
 // load 候选的 revision 可选化:ref 是版本权威,revision 只是"把它回写一遍"。
 // 模型对可选字段的常见写法是省略或填空值,这些都必须等同于"未给出";
 // 真正类型不对的写法仍然拒绝;重复 ref 的冲突判据不得被削弱。
+//
+// 旧 LR10 断言“成功回执必须能折叠”属于已删除的 canonical 回执路径；新语义下
+// handleLoad 立即提交，等价覆盖改为直接断言 selected 已按 ref 绑定版本写入。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateLoadRequest } from '../../domain/protocol.mjs';
 import { resolveBudgets } from '../../domain/budgets.mjs';
-import { makeEngine, SCOPE_A, nextOpId, sampleBindings, pair } from './helpers.mjs';
+import { makeEngine, loadTools, SCOPE_A, sampleBindings } from './helpers.mjs';
 
 const B = resolveBudgets({});
 
 const searchGlob = (engine) => engine.handleSearch({ category: 'files', query: 'glob' }, SCOPE_A).data.candidates[0];
-const loadWith = (engine, candidates) => engine.handleLoad({ candidates }, SCOPE_A, { operationId: nextOpId() });
+const loadWith = (engine, candidates) => loadTools(engine, SCOPE_A, { candidates });
 
 test('LR1 仅凭 ref 的候选加载成功,选中的是 ref 绑定的那个版本', async () => {
   const { engine } = await makeEngine();
   const c = searchGlob(engine);
   const res = await loadWith(engine, [{ ref: c.ref }]);
   assert.equal(res.response.ok, true, JSON.stringify(res.response.error));
-  assert.equal(res.response.data.receipt.selectionSource, 'candidate');
-  assert.equal(res.response.data.receipt.selected[0].revision, c.revision);
+  assert.deepEqual(res.response.data.loaded, [c.name]);
+  const sel = engine.getState(SCOPE_A).selected.get(c.toolId);
+  assert.equal(sel.selectionSource, 'candidate');
+  assert.equal(sel.revision, c.revision);
 });
 
 test('LR2 ref + revision(显式回写同一版本)仍然成功', async () => {
@@ -26,7 +31,7 @@ test('LR2 ref + revision(显式回写同一版本)仍然成功', async () => {
   const c = searchGlob(engine);
   const res = await loadWith(engine, [{ ref: c.ref, revision: c.revision }]);
   assert.equal(res.response.ok, true, JSON.stringify(res.response.error));
-  assert.equal(res.response.data.receipt.selected[0].revision, c.revision);
+  assert.equal(engine.getState(SCOPE_A).selected.get(c.toolId).revision, c.revision);
 });
 
 test('LR3 revision 为空串或 null 时按"未给出"处理(协议层不留键,engine 取 ref 绑定版本)', async () => {
@@ -40,7 +45,7 @@ test('LR3 revision 为空串或 null 时按"未给出"处理(协议层不留键,
   for (const revision of ['', null]) {
     const res = await loadWith(engine, [{ ref: c.ref, revision }]);
     assert.equal(res.response.ok, true, `revision=${JSON.stringify(revision)} → ${JSON.stringify(res.response.error)}`);
-    assert.equal(res.response.data.receipt.selected[0].revision, c.revision, '不得回退到空串/null 当版本');
+    assert.equal(engine.getState(SCOPE_A).selected.get(c.toolId).revision, c.revision, '不得回退到空串/null 当版本');
   }
 });
 
@@ -73,7 +78,8 @@ test('LR7 同 ref 两项(其一 revision 为空)的候选加载成功且只选�
   const c = searchGlob(engine);
   const res = await loadWith(engine, [{ ref: c.ref, revision: c.revision }, { ref: c.ref }]);
   assert.equal(res.response.ok, true, JSON.stringify(res.response.error));
-  assert.equal(res.response.data.receipt.selected.length, 1, '同一 ref 不得重复选中');
+  assert.equal(res.response.data.loaded.length, 1, '同一 ref 不得重复选中');
+  assert.equal(engine.getState(SCOPE_A).selected.size, 1);
 });
 
 test('LR8 ref 签发后工具定义变化:旧 ref 加载仍被拒,不静默升级到新定义', async () => {
@@ -102,7 +108,7 @@ test('LR8 ref 签发后工具定义变化:旧 ref 加载仍被拒,不静默升�
   assert.notEqual(fresh.revision, oldRevision);
   const okRes = await loadWith(engine, [{ ref: fresh.ref }]);
   assert.equal(okRes.response.ok, true, JSON.stringify(okRes.response.error));
-  assert.equal(okRes.response.data.receipt.selected[0].revision, fresh.revision);
+  assert.equal(engine.getState(SCOPE_A).selected.get(fresh.toolId).revision, fresh.revision);
 });
 
 test('LR9 ref 仍有效但回写的版本与 ref 绑定的不一致 → STALE_CANDIDATE', async () => {
@@ -115,27 +121,15 @@ test('LR9 ref 仍有效但回写的版本与 ref 绑定的不一致 → STALE_CA
   assert.equal(engine.getState(SCOPE_A).selected.size, 0);
 });
 
-test('LR10 空串/null revision 的成功回执必须能真正折叠（协议与折叠共用同一归一）', async () => {
-  // 回归：协议层把 ''/null 归一为“未给出”，折叠层若仍按原始值比较，
-  // 就会得到 ok:true 但 candidate-revision-mismatch、selected 为空的静默丢工具。
+test('LR10 空串/null revision 的请求成功后 selected 必须真正按 ref 版本写入', async () => {
   for (const revision of ['', null]) {
     const { engine } = await makeEngine();
     const c = searchGlob(engine);
-    const input = { candidates: [{ ref: c.ref, revision }] };
-    const op = nextOpId();
-    const res = await engine.handleLoad(input, SCOPE_A, { operationId: op });
+    const res = await loadWith(engine, [{ ref: c.ref, revision }]);
     assert.equal(res.response.ok, true, `revision=${JSON.stringify(revision)} 的请求应成功`);
-    const out = engine.applyCanonicalPair(pair({
-      seq: nextSeqFor(engine), operationId: op, input, payload: res.response.data.receipt,
-    }), SCOPE_A);
-    assert.equal(out.applied, true, `revision=${JSON.stringify(revision)} 必须折叠成功：${out.reason}`);
-    assert.equal(engine.getState(SCOPE_A).selected.size, 1, '折叠后必须真正激活');
+    const sel = engine.getState(SCOPE_A).selected.get(c.toolId);
+    assert.ok(sel, '成功后必须立即出现在 selected');
+    assert.equal(sel.revision, c.revision, '不得把空值当版本');
     engine.dispose();
   }
 });
-
-let seqCounter = 0;
-function nextSeqFor() {
-  seqCounter += 1;
-  return seqCounter;
-}

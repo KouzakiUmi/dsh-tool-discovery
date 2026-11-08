@@ -40,21 +40,22 @@ test('en/zh 两表键集完全一致', () => {
 
 test('每个受支持 locale 的文案表都无空串', () => {
   for (const loc of SUPPORTED_LOCALES) {
-    const t = createText(loc)
+    // 断言的是**错误码最终解析到的文案**（errorCodes 表），而不是内部键路径：
+    // ENGINE_DISPOSED 这类生命周期内部错误允许把文案放在顶层，只要两个语言都解析到非空。
     for (const key of Object.keys(errorCodes(loc))) {
-      const m = t.t(['error', key])
-      assert.ok(m && m.trim().length > 0, `${loc}.error.${key} 为空`)
+      const m = errorCodes(loc)[key].message
+      assert.ok(m && m.trim().length > 0, `${loc}.${key} 为空`)
     }
   }
 })
 
 test('错误码文案随 locale 切换，且不含对方的语言', () => {
-  const en = createText('en')
-  const zh = createText('zh')
+  const en = errorCodes('en')
+  const zh = errorCodes('zh')
   const CJK = /[一-鿿]/
-  for (const key of Object.keys(errorCodes('en'))) {
-    const e = en.t(['error', key])
-    const z = zh.t(['error', key])
+  for (const key of Object.keys(en)) {
+    const e = en[key].message
+    const z = zh[key].message
     assert.ok(!CJK.test(e), `en.${key} 含中文：${e}`)
     assert.ok(CJK.test(z), `zh.${key} 不含中文：${z}`)
     assert.notEqual(e, z, `${key} 两语言文案相同，可能复制错`)

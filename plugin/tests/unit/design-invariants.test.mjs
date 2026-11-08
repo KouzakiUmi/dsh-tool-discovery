@@ -1,384 +1,331 @@
-// 设计契约回归：执行选择、实际披露与提交顺序必须在跨生命周期时仍然一致。
-// 事件与渲染入口为声明式 fixture；不冒称真实 Loader/provider 已验证。
+// 设计契约回归：rc.1 的披露/执行链路必须整体一致。
+//
+// 旧文件用 journal/projection 的快照与回放断言“冻结 wire”。rc.1 删除了这两个
+// 子系统（docs/14-rc1-redesign.md），等价的产品目标改由三层共同保证：
+//   1. admission tracker：会话级准入表 + durable 快照（admission.mjs）；
+//   2. mask：allow = 入口四件 ∪ frameworkRetained ∪ alwaysVisible ∪ admitted，
+//      经 restrictableNames 过滤（mask.mjs）；
+//   3. guard：admitted 且当前 schemaDigest 一致才放行（guard.mjs）。
+// 本文件把这些不变量钉在真实模块接缝上，而不是伪造事件流。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeEngine, SCOPE_A, sampleBindings, binding, commitLoad, fakeClock } from './helpers.mjs';
-import { createJournal } from '../../adapters/dsh/journal.mjs';
-import { createProjection } from '../../adapters/dsh/projection.mjs';
+import { createAdmissionTracker, createAdmissionStoreHandle } from '../../adapters/dsh/admission.mjs';
+import { createMaskController } from '../../adapters/dsh/mask.mjs';
+import { createGuard } from '../../adapters/dsh/guard.mjs';
+import { createLifecycle } from '../../adapters/dsh/lifecycle.mjs';
+import { ENTRY_TOOL_NAMES } from '../../domain/index.mjs';
+import {
+  makeEngine, binding, sampleBindings, CATEGORY_CONFIG, fakeClock, fakeRandom, loadTools,
+} from './helpers.mjs';
 
-const bytes = (value) => Buffer.byteLength(JSON.stringify(value), 'utf8');
-const header = (seq, tools) => ({ seq, type: 'request/header', data: { header: { tools } } });
-const call = (seq, id, name) => ({ seq, type: 'tool/call', data: { name: 'tool_load', callId: id, arguments: { names: [name] } } });
-const result = (seq, source, response, isError = false) => ({ seq, type: 'tool/result', sourceEventSeqs: [source],
-  data: { message: { isError, content: [{ type: 'text', text: JSON.stringify(response) }] } } });
-const changedBindings = () => sampleBindings().map((b) => b.name !== 'glob' ? b : { ...b, wire: { ...b.wire,
-  parameters: { type: 'object', properties: { pattern: { type: 'string' } }, required: ['pattern'] } } });
+const SESSION = 'sess_di';
 
-function journalFor(engine, events = [], extra = {}) {
-  const journal = createJournal({ engine, scope: SCOPE_A, session: { id: SCOPE_A.sessionId, inheritedEventCount: 0 },
-    query: { readSession: async () => ({ inheritedEventCount: 0, events }) }, ...extra });
-  journal.stopBuffering();
-  return journal;
-}
+// ---------------------------------------------------------------------------
+// admission tracker：会话隔离、resume 读回、撤销与清理
+// ---------------------------------------------------------------------------
 
-async function project(engine, journal, bindings) {
-  let assemble;
-  const agent = { id: 'actor', session: { id: SCOPE_A.sessionId } };
-  const runtime = { scope: SCOPE_A, engine, journal, restoring: false, requireTrustedEpoch: false,
-    compositionBypass: null, alwaysNameSet: new Set() };
-  createProjection({ ctx: { on: (_name, fn) => { assemble = fn; return () => {}; },
-    tools: { modeFor: () => 'native', get: () => ({}) } }, lifecycle: { runtimeFor: () => runtime } });
-  const assembly = { tools: bindings.map((b) => b.wire) };
-  // 此组断言只比较按需段；三入口是始终保留的独立基线。
-  return (await assemble(assembly, { agent }, async () => assembly)).tools
-    .filter((tool) => !['tool_list', 'tool_search', 'tool_load'].includes(tool.name));
-}
+test('AD1 admitted 行按会话隔离，revoke/prune/dropSession 语义明确', () => {
+  const tracker = createAdmissionTracker();
+  const row = { name: 'glob', toolId: 't_glob', schemaDigest: 'sha256:glob', at: 1 };
+  tracker.admit(SESSION, row);
+  tracker.admit('other', { ...row, name: 'grep' });
 
-async function loadedHistory(t, budgets = {}) {
-  const { engine } = await makeEngine({ engineConfig: { budgets: { maxActiveTools: 1, ...budgets } } });
-  const events = [header(0, [])];
-  const journal = journalFor(engine);
-  const c = call(1, 'first', 'glob');
-  journal.onEvent(c); events.push(c);
-  const loaded = await engine.handleLoad(c.data.arguments, SCOPE_A, { operationId: 'op_first' });
-  assert.equal(loaded.response.ok, true);
-  const r = result(2, 1, loaded.response);
-  journal.onEvent(r); events.push(r);
-  const entry = engine.getCatalog().entries.get('t_files_glob');
-  const h = header(3, [entry.wire]); journal.onEvent(h); events.push(h);
-  assert.equal(engine.evaluateCall(SCOPE_A, { name: 'glob', requestId: journal.currentRequestId() }).allowed, true);
-  t.after(() => { journal.dispose(); engine.dispose(); });
-  return { engine, journal, events, entry };
-}
+  assert.deepEqual([...tracker.admissionsFor(SESSION).keys()], ['glob']);
+  assert.deepEqual([...tracker.admissionsFor('other').keys()], ['grep']);
+  assert.equal(tracker.get(SESSION, 'glob').toolId, 't_glob');
+  assert.equal(tracker.get(SESSION, 'grep'), undefined, '别的会话的准入不泄漏');
 
-test('DI1 冻结定义冲突必须要求成功压缩，不得返回无法兑现的加载成功', async (t) => {
-  const h = await loadedHistory(t);
-  h.engine.refreshCatalog(changedBindings());
-  const blocked = await h.engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: 'op_changed' });
-  assert.equal(blocked.response.ok, false);
-  assert.equal(blocked.response.error.code, 'COMPACTION_REQUIRED');
-  assert.equal(blocked.response.error.recovery, 'wait_for_successful_compaction');
-  assert.equal(h.engine.getPendingSize(), 0);
-  assert.equal(h.engine.getState(SCOPE_A).selected.size, 0);
-  assert.deepEqual(await project(h.engine, h.journal, changedBindings()), [h.entry.wire]);
-  h.engine.resetCacheEpoch(SCOPE_A, 'successful-compaction-fixture');
-  const after = await h.engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: 'op_after' });
-  assert.equal(after.response.ok, true);
-  assert.equal(h.engine.applyCanonicalPair({ seq: 10, resultSeq: 11,
-    call: { operationId: 'op_after', tool: 'tool_load', input: { names: ['glob'] } },
-    result: { isError: false, ok: true, payload: after.response.data.receipt } }, SCOPE_A).applied, true);
+  assert.equal(tracker.revoke(SESSION, 'glob'), true);
+  assert.equal(tracker.revoke(SESSION, 'glob'), false, '重复撤销返回 false');
+  assert.equal(tracker.get(SESSION, 'glob'), undefined);
+
+  tracker.admit(SESSION, row);
+  tracker.admit(SESSION, { ...row, name: 'grep' });
+  assert.deepEqual(tracker.pruneWhere(SESSION, (r) => r.name === 'glob'), ['glob']);
+  tracker.dropSession(SESSION);
+  assert.equal(tracker.admissionsFor(SESSION).size, 0);
+  assert.equal(tracker.get('other', 'grep').name, 'grep', 'dropSession 不误杀其它会话');
 });
 
-test('DI2 同名更换 toolId 同样不能绕过冻结 schema 冲突检查', async (t) => {
-  const h = await loadedHistory(t);
-  h.engine.refreshCatalog(changedBindings().map((b) => b.name !== 'glob' ? b : { ...b, toolId: 'replacement::glob' }));
-  const out = await h.engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: 'op_replaced' });
-  assert.equal(out.response.ok, false);
-  assert.equal(out.response.error.code, 'COMPACTION_REQUIRED');
-});
-
-for (const variant of ['changed', 'removed']) {
-  test(`DI3 ${variant}: 冷恢复保留已披露旧 wire，但不恢复已失效的执行资格`, async (t) => {
-    const h = await loadedHistory(t);
-    const bindings = variant === 'changed' ? changedBindings() : sampleBindings().filter((b) => b.name !== 'glob');
-    const { engine } = await makeEngine({ bindings, newSessionMode: 'restoring' });
-    const journal = journalFor(engine, h.events);
-    t.after(() => { journal.dispose(); engine.dispose(); });
-    assert.equal((await journal.restore()).mode, 'ready');
-    assert.equal(engine.getState(SCOPE_A).selected.size, 0);
-    assert.equal(engine.getState(SCOPE_A).advertised.size, 0);
-    assert.equal(engine.getFrozenWire(SCOPE_A).length, 1);
-    assert.deepEqual(await project(engine, journal, bindings), [h.entry.wire]);
-    assert.equal(engine.evaluateCall(SCOPE_A, { name: 'glob' }).allowed, false);
-    assert.equal(engine.handleList({ view: 'state' }, SCOPE_A).data.budgets.activeCount, 1);
-  });
-}
-
-test('DI4 历史 header 单独不能赋予冻结披露资格；失败回执也不能', async (t) => {
-  const h = await loadedHistory(t);
-  const events = h.events.map((e) => e.seq === 2 ? result(2, 1, JSON.parse(e.data.message.content[0].text), true) : e);
-  const { engine } = await makeEngine({ newSessionMode: 'restoring' });
-  const journal = journalFor(engine, events);
-  t.after(() => { journal.dispose(); engine.dispose(); });
-  await journal.restore();
-  assert.equal(engine.getFrozenWire(SCOPE_A).length, 0);
-  assert.equal(engine.getState(SCOPE_A).selected.size, 0);
-  assert.deepEqual(await project(engine, journal, sampleBindings()), []);
-});
-
-test('DI5 成功压缩前与 fork 继承段的旧披露不得在恢复时复活', async (t) => {
-  const h = await loadedHistory(t);
-  const events = [...h.events,
-    { seq: 4, type: 'compaction/start', data: { compactionId: 'cmp', turn: null } },
-    { seq: 5, type: 'compaction/summary', data: { compactionId: 'cmp', turn: null } },
-    { seq: 6, type: 'compaction/end', data: { compactionId: 'cmp', turn: null } }];
-  for (const boundary of [0, events.length]) {
-    const { engine } = await makeEngine({ newSessionMode: 'restoring' });
-    const journal = journalFor(engine, events, { session: { id: SCOPE_A.sessionId, inheritedEventCount: boundary },
-      query: { readSession: async () => ({ inheritedEventCount: boundary, events }) } });
-    t.after(() => { journal.dispose(); engine.dispose(); });
-    await journal.restore();
-    assert.equal(engine.getFrozenWire(SCOPE_A).length, 0);
-    assert.equal(engine.getState(SCOPE_A).selected.size, 0);
-  }
-});
-
-test('DI6 有效结果逆序提交：热态与同一日志的冷恢复必须一致', async (t) => {
-  const { engine } = await makeEngine();
-  const journal = journalFor(engine);
-  t.after(() => { journal.dispose(); engine.dispose(); });
-  const a = call(1, 'a', 'glob'), b = call(2, 'b', 'grep');
-  journal.onEvent(a); journal.onEvent(b);
-  const ar = await engine.handleLoad(a.data.arguments, SCOPE_A, { operationId: 'op_a' });
-  const br = await engine.handleLoad(b.data.arguments, SCOPE_A, { operationId: 'op_b' });
-  const rb = result(3, 2, br.response), ra = result(4, 1, ar.response);
-  journal.onEvent(rb); journal.onEvent(ra);
-  const hot = [...engine.getState(SCOPE_A).selected.values()].map((s) => s.name);
-  assert.deepEqual(hot, ['grep', 'glob']);
-  const { engine: cold } = await makeEngine({ newSessionMode: 'restoring' });
-  const cj = journalFor(cold, [header(0, []), a, b, rb, ra]);
-  t.after(() => { cj.dispose(); cold.dispose(); });
-  await cj.restore();
-  assert.deepEqual([...cold.getState(SCOPE_A).selected.values()].map((s) => s.name), hot);
-  assert.equal(engine.getPendingSize(), 0);
-  journal.onEvent({ ...ra, seq: 5 });
-  assert.deepEqual([...engine.getState(SCOPE_A).selected.values()].map((s) => s.name), hot, '重复 result 不二次认领');
-});
-
-test('DI6b 候选 ref 在已接纳 load 等待期间过期：提交与冷恢复仍一致', async (t) => {
-  const clock = fakeClock();
-  const { engine } = await makeEngine({ clock });
-  t.after(() => engine.dispose());
-  const candidate = engine.handleSearch({ category: 'files', query: 'glob' }, SCOPE_A).data.candidates[0];
-  const input = { candidates: [{ ref: candidate.ref }] };
-  const operationId = 'op_candidate_expiry';
-  const loaded = await engine.handleLoad(input, SCOPE_A, { operationId });
-  assert.equal(loaded.response.ok, true);
-
-  // Ref 的 TTL 限制新的候选请求，不应撤销已经接纳且等待 canonical 回执的操作。
-  clock.advance(900_000);
-  const retry = await engine.handleLoad(input, SCOPE_A, { operationId: 'op_candidate_expired_retry' });
-  assert.equal(retry.response.ok, false);
-  assert.equal(retry.response.error.code, 'CANDIDATE_UNAVAILABLE');
-  const canonical = {
-    seq: 1,
-    call: { operationId, tool: 'tool_load', input },
-    result: { isError: false, ok: true, payload: loaded.response.data.receipt },
+test('AD2 seedFromStore 把 durable 记录灌回内存，重复名字以先读到的为准', () => {
+  const tracker = createAdmissionTracker();
+  const record = {
+    sessionId: SESSION,
+    admissions: [
+      { name: 'glob', toolId: 't_glob', schemaDigest: 'sha256:a', at: 1 },
+      { name: 'glob', toolId: 't_glob', schemaDigest: 'sha256:b', at: 2 },
+      { name: 'grep', toolId: 't_grep', schemaDigest: 'sha256:g', at: 3 },
+    ],
   };
-  const hot = engine.applyCanonicalPair(canonical, SCOPE_A);
-  assert.equal(hot.applied, true, hot.reason);
-
-  const { engine: cold } = await makeEngine({ newSessionMode: 'restoring' });
-  t.after(() => cold.dispose());
-  const restored = cold.restore([canonical], SCOPE_A);
-  assert.equal(restored.applied, 1);
-  assert.deepEqual(
-    [...cold.getState(SCOPE_A).selected.values()].map(({ toolId, revision }) => ({ toolId, revision })),
-    [...engine.getState(SCOPE_A).selected.values()].map(({ toolId, revision }) => ({ toolId, revision })),
-  );
-  assert.equal(engine.getState(SCOPE_A).integrity.coldCandidateRestores, 0);
-  assert.equal(cold.getState(SCOPE_A).integrity.coldCandidateRestores, 1);
+  tracker.seedFromStore({
+    keys: () => [SESSION],
+    get: () => record,
+  });
+  assert.equal(tracker.get(SESSION, 'glob').schemaDigest, 'sha256:a');
+  assert.equal(tracker.get(SESSION, 'grep').schemaDigest, 'sha256:g');
 });
 
-test('DI6c 已接纳 operationId 配上不同 canonical candidate input 不得跳过 ref 归属核验', async (t) => {
+test('AD3 store handle：打开失败退化为 ephemeral；invalid 记录拒绝落盘；close 幂等', async () => {
+  const failing = createAdmissionStoreHandle({
+    facility: { open: async () => { throw new Error('disk unavailable'); } },
+    defineDomain: () => ({}), domainTable: () => ({}), z: { unknown: () => ({}) },
+  });
+  assert.deepEqual(await failing.ensureOpen(), { ok: false, reason: 'open-failed' });
+  await assert.rejects(failing.put({ sessionId: SESSION, admissions: [] }), /not open/);
+  await failing.close();
+
+  const table = new Map();
+  const ok = createAdmissionStoreHandle({
+    facility: { open: async () => ({ table: () => ({
+      get: (key) => table.get(key),
+      put: async (key, value) => { table.set(key, value); },
+      delete: async (key) => { table.delete(key); },
+      keys: () => [...table.keys()],
+    }), close: async () => {} }) },
+    defineDomain: () => ({}), domainTable: () => ({}), z: { unknown: () => ({}) },
+  });
+  assert.deepEqual(await ok.ensureOpen(), { ok: true });
+  await assert.rejects(ok.put({ sessionId: SESSION, admissions: [{ name: '', toolId: 't', schemaDigest: 'd' }] }),
+    /refusing to persist an invalid admission record/);
+  const record = { sessionId: SESSION, admissions: [{ name: 'glob', toolId: 't', schemaDigest: 'd', at: 1 }] };
+  await ok.put(record);
+  assert.deepEqual(ok.keys(), [SESSION]);
+  assert.deepEqual(ok.get(SESSION), record);
+  await ok.remove(SESSION);
+  assert.deepEqual(ok.keys(), []);
+  await ok.close();
+  await ok.close();
+});
+
+// ---------------------------------------------------------------------------
+// mask：allow-list 组成、restrictable 过滤、幂等与 dispose
+// ---------------------------------------------------------------------------
+
+function maskHarness({ restrictable = ['tool_list', 'tool_search', 'tool_load', 'tool_unload', 'read_file', 'glob', 'grep', 'final_answer', 'pinned'], alwaysVisible = ['read_file'] } = {}) {
+  const calls = [];
+  let layers = new Map();
+  const agent = {
+    id: 'agent_1',
+    ctx: {
+      tools: {
+        restrict: ({ allow }) => {
+          calls.push([...allow]);
+          const restriction = { allow: [...allow] };
+          const layer = layers.get(agent) ?? { restrictions: new Map() };
+          layers.set(agent, layer);
+          const key = Symbol('restriction');
+          layer.restrictions.set(key, restriction);
+          return () => layer.restrictions.delete(key);
+        },
+      },
+    },
+  };
+  const ctx = {
+    tools: {
+      view: () => ({ restrictableNames: new Set(restrictable) }),
+      layers: { peek: (who) => layers.get(who) },
+    },
+  };
+  const mask = createMaskController({ ctx, frameworkRetained: ['final_answer'], getAlwaysVisible: () => alwaysVisible });
+  return { mask, agent, calls, getRestrictionCount: () => layers.get(agent)?.restrictions?.size ?? 0 };
+}
+
+test('MK1 allow = 入口四件 + frameworkRetained + alwaysVisible + admitted，且只保留 restrictable', () => {
+  const h = maskHarness({ restrictable: ['tool_list', 'tool_search', 'tool_load', 'tool_unload', 'glob', 'final_answer', 'read_file'] });
+  h.mask.update(h.agent, new Set(['glob', 'not_restrictable']));
+  assert.deepEqual(h.calls.at(-1), [
+    'final_answer', 'glob', 'read_file', 'tool_list', 'tool_load', 'tool_search', 'tool_unload',
+  ]);
+  assert.equal(h.calls.at(-1).includes('not_restrictable'), false, '未注册/own-scope 名字不得进入 restrict');
+});
+
+test('MK2 相同 allow 集合幂等：不重复安装/释放掩码', () => {
+  const h = maskHarness();
+  h.mask.update(h.agent, new Set(['glob']));
+  const count = h.calls.length;
+  h.mask.update(h.agent, new Set(['glob']));
+  assert.equal(h.calls.length, count, '同样的 allow 不再调用 restrict');
+  h.mask.update(h.agent, new Set(['glob', 'grep']));
+  assert.equal(h.calls.length, count + 1, '集合变化才换掩码');
+  assert.equal(h.getRestrictionCount(), 1, '旧掩码被释放，只剩一层');
+});
+
+test('MK3 disposeAgent/dispose 释放本插件持有的全部 restriction', () => {
+  const h = maskHarness();
+  h.mask.update(h.agent, new Set(['glob']));
+  assert.equal(h.getRestrictionCount(), 1);
+  assert.equal(h.mask.ownedFilters().length, 1);
+  h.mask.disposeAgent(h.agent);
+  assert.equal(h.getRestrictionCount(), 0);
+  assert.equal(h.mask.ownedFilters().length, 0);
+});
+
+test('MK4 新掩码安装失败时旧掩码仍在线（偏严），错误可在观测面读到', () => {
+  const h = maskHarness();
+  h.mask.update(h.agent, new Set(['glob']));
+  const before = h.getRestrictionCount();
+  // 下一次 restrict 抛错：模拟宿主拒绝。
+  const original = h.agent.ctx.tools.restrict;
+  h.agent.ctx.tools.restrict = () => { throw new Error('host rejected'); };
+  h.mask.update(h.agent, new Set(['grep']));
+  assert.equal(h.getRestrictionCount(), before, '旧掩码不得被提前释放');
+  assert.ok(h.mask.errorOf(h.agent) instanceof Error);
+  h.agent.ctx.tools.restrict = original;
+});
+
+// ---------------------------------------------------------------------------
+// 三层接缝：load → admission + mask；guard 放行；unload/invalidat → 收回
+// ---------------------------------------------------------------------------
+
+function registryStub(bindings) {
+  const state = { bindings, generation: 1 };
+  return {
+    setBindings(next) { state.bindings = next; },
+    entryNames: [...ENTRY_TOOL_NAMES],
+    frameworkRetained: ['final_answer'],
+    bindingsFor: () => ({ scopeKey: 'scope', bindings: state.bindings }),
+    remember: () => {},
+    generationFor: () => 'g1',
+    bumpGeneration: () => { state.generation += 1; },
+    scopeKeyOf: () => 'scope',
+    diffAgainst: () => ({ added: [], removed: [] }),
+    disposeScope: () => {},
+  };
+}
+
+async function adapterHarness(bindings = sampleBindings()) {
+  const calls = [];
+  const layers = new Map();
+  const agent = {
+    id: 'agent_1',
+    session: { id: SESSION },
+    ctx: {
+      tools: {
+        restrict: ({ allow }) => {
+          calls.push([...allow]);
+          const restriction = { allow: [...allow] };
+          const layer = layers.get(agent) ?? { restrictions: new Map() };
+          layers.set(agent, layer);
+          const key = Symbol('restriction');
+          layer.restrictions.set(key, restriction);
+          return () => layer.restrictions.delete(key);
+        },
+      },
+    },
+  };
+  const ctx = {
+    tools: {
+      view: () => ({ restrictableNames: new Set([...ENTRY_TOOL_NAMES, ...bindings.map((b) => b.name)]) }),
+      layers: { peek: (who) => layers.get(who) },
+      guard: (fn) => { agent.guardHandler = fn; return () => { agent.guardHandler = undefined; }; },
+    },
+  };
+  const mask = createMaskController({ ctx, frameworkRetained: [], getAlwaysVisible: () => [] });
+  const tracker = createAdmissionTracker();
+  const registry = registryStub(bindings);
+  const lifecycle = createLifecycle({
+    ctx: { tools: { view: () => ({ visible: new Map() }) } },
+    registry,
+    config: {
+      locale: 'en', categoryConfig: CATEGORY_CONFIG, alwaysVisible: [],
+      initialToolsEnabled: true, tolerantLoadProtected: true, budgets: {},
+    },
+    clock: fakeClock(), random: fakeRandom(), tracker, mask,
+    viewFor: () => ({ visible: new Map() }),
+    getPresetTools: () => [],
+  });
+  const runtime = lifecycle.runtimeFor(agent.session, agent);
+  createGuard({ ctx, lifecycle, tracker, controlDefinitions: new Map() });
+  const guard = (name) => agent.guardHandler({ name, agent });
+  return { agent, runtime, lifecycle, tracker, mask, guard, ctx, calls, registry };
+}
+
+test('DI1 load 成功后立刻写 admission + 更新掩码；guard 放行', async () => {
+  const bindings = [binding({ name: 'glob', toolId: 't_files_glob', namespace: 'files' }), binding({ name: 'grep', toolId: 't_files_grep', namespace: 'files' })];
+  const h = await adapterHarness(bindings);
+  const loaded = await h.runtime.engine.handleLoad({ names: ['glob'] }, h.runtime.scope);
+  assert.equal(loaded.response.ok, true);
+  assert.match(h.guard('glob'), /not admitted/, 'admission 尚未提交时门禁拒绝');
+
+  h.lifecycle.commitAdmissions(h.runtime, loaded.admitted);
+  assert.equal(h.tracker.get(SESSION, 'glob').name, 'glob');
+  assert.equal(h.guard('glob'), undefined, 'admission 提交且 digest 一致 → 放行');
+  assert.ok(h.mask.ownedFilters().length >= 1, '掩码已安装');
+  assert.ok(h.calls.at(-1).includes('glob'), 'allow-list 已包含刚准入的工具');
+});
+
+test('DI2 unload 撤销 admission 并重掩码；旧 admission 不得继续放行', async () => {
+  const bindings = [binding({ name: 'glob', toolId: 't_files_glob', namespace: 'files' }), binding({ name: 'grep', toolId: 't_files_grep', namespace: 'files' })];
+  const h = await adapterHarness(bindings);
+  const loaded = await h.runtime.engine.handleLoad({ names: ['glob', 'grep'] }, h.runtime.scope);
+  h.lifecycle.commitAdmissions(h.runtime, loaded.admitted);
+  assert.equal(h.guard('glob'), undefined);
+
+  const unloaded = await h.runtime.engine.handleUnload({ names: ['glob'] }, h.runtime.scope);
+  assert.equal(unloaded.response.ok, true);
+  h.lifecycle.revokeAdmissions(h.runtime, unloaded.revoked);
+  assert.equal(h.tracker.get(SESSION, 'glob'), undefined);
+  assert.match(h.guard('glob'), /not admitted/, '撤销后执行被拒');
+  assert.equal(h.guard('grep'), undefined, '未撤销的工具仍可用');
+});
+
+test('DI3 定义换版：refreshCatalog 作废选择；guard 对旧 admission 拒绝并要求重新 load', async () => {
+  const bindings = [binding({ name: 'glob', toolId: 't_files_glob', namespace: 'files' }), binding({ name: 'grep', toolId: 't_files_grep', namespace: 'files' })];
+  const h = await adapterHarness(bindings);
+  const loaded = await h.runtime.engine.handleLoad({ names: ['glob'] }, h.runtime.scope);
+  h.lifecycle.commitAdmissions(h.runtime, loaded.admitted);
+  assert.equal(h.guard('glob'), undefined);
+
+  // 宿主替换同名定义（wire 变化）→ lifecycle.onRegistryChange 会 refreshCatalog 并撤销 admission。
+  const changed = [binding({ name: 'glob', toolId: 't_files_glob', namespace: 'files', params: { type: 'object', required: ['pattern'] } }), bindings[1]];
+  // 与 lifecycle.onRegistryChange 相同的两步：refreshCatalog 作废选择，然后按返回名撤销 admission。
+  const outcome = h.runtime.engine.refreshCatalog(changed);
+  assert.deepEqual(outcome.invalidatedNames, ['glob']);
+  h.lifecycle.revokeAdmissions(h.runtime, outcome.invalidatedNames);
+  assert.equal(h.tracker.get(SESSION, 'glob'), undefined, '换版后 admission 被撤销');
+  assert.match(h.guard('glob'), /not admitted/);
+
+  const reload = await h.runtime.engine.handleLoad({ names: ['glob'] }, h.runtime.scope);
+  h.lifecycle.commitAdmissions(h.runtime, reload.admitted);
+  assert.equal(h.guard('glob'), undefined, '重新 load 恢复执行资格');
+});
+
+test('DI4 resume：durable admitted 行在 runtime 建立时回填，guard 直接放行', async () => {
+  const bindings = [binding({ name: 'glob', toolId: 't_files_glob', namespace: 'files' })];
+  const h = await adapterHarness(bindings);
+  const entry = h.runtime.engine.getCatalog().entries.get('t_files_glob');
+  h.tracker.admit(SESSION, { name: entry.name, toolId: entry.toolId, schemaDigest: entry.schemaDigest, at: 1 });
+  // 新 lifecycle/engine 用同一 tracker（模拟同 id resume）。
+  const mask = createMaskController({ ctx: h.ctx, frameworkRetained: [], getAlwaysVisible: () => [] });
+  const lifecycle = createLifecycle({
+    ctx: { tools: { view: () => ({ visible: new Map() }) } },
+    registry: registryStub(bindings),
+    config: { locale: 'en', categoryConfig: CATEGORY_CONFIG, alwaysVisible: [], initialToolsEnabled: true, tolerantLoadProtected: true, budgets: {} },
+    clock: fakeClock(), random: fakeRandom(), tracker: h.tracker, mask,
+    viewFor: () => ({ visible: new Map() }),
+    getPresetTools: () => [],
+  });
+  const agent2 = { id: 'agent_2', session: { id: SESSION }, ctx: h.agent.ctx };
+  const runtime2 = lifecycle.runtimeFor(agent2.session, agent2);
+  assert.equal(runtime2.engine.getState(runtime2.scope).selected.size, 1, 'seedSelection 已回填');
+  createGuard({ ctx: h.ctx, lifecycle, tracker: h.tracker, controlDefinitions: new Map() });
+  const guard = (name) => h.agent.guardHandler({ name, agent: agent2 });
+  assert.equal(guard('glob'), undefined, 'resume 后首个请求即可执行');
+});
+
+test('DI5 会话隔离：A 的 admission 不泄漏到 B', async () => {
+  const bindings = [binding({ name: 'glob', toolId: 't_files_glob', namespace: 'files' })];
+  const h = await adapterHarness(bindings);
+  const loaded = await h.runtime.engine.handleLoad({ names: ['glob'] }, h.runtime.scope);
+  h.lifecycle.commitAdmissions(h.runtime, loaded.admitted);
+  const agentB = { id: 'agent_B', session: { id: 'sess_B' }, ctx: h.agent.ctx };
+  h.lifecycle.runtimeFor(agentB.session, agentB);
+  assert.match(h.agent.guardHandler({ name: 'glob', agent: agentB }), /not admitted/, 'B 未 load 不得执行');
+});
+
+test('DI6 搜索/列表不产生 admission，也不改变执行资格', async () => {
   const { engine } = await makeEngine();
-  t.after(() => engine.dispose());
-  const glob = engine.handleSearch({ category: 'files', query: 'glob' }, SCOPE_A).data.candidates[0];
-  const grep = engine.handleSearch({ category: 'files', query: 'grep' }, SCOPE_A).data.candidates[0];
-  const admittedInput = { candidates: [{ ref: glob.ref }] };
-  const operationId = 'op_candidate_input_mismatch';
-  const loaded = await engine.handleLoad(admittedInput, SCOPE_A, { operationId });
-  assert.equal(loaded.response.ok, true);
-
-  const out = engine.applyCanonicalPair({
-    seq: 1,
-    call: { operationId, tool: 'tool_load', input: { candidates: [{ ref: grep.ref }] } },
-    result: { isError: false, ok: true, payload: loaded.response.data.receipt },
-  }, SCOPE_A);
-  assert.equal(out.applied, false);
-  assert.equal(out.reason, 'selected-not-from-candidate');
-  assert.equal(engine.getState(SCOPE_A).selected.size, 0);
-});
-
-test('DI7 冻结 schema 不等于已发送新技能：技能换版必须交付并计入技能限额', async (t) => {
-  const h = await loadedHistory(t);
-  const updated = sampleBindings().map((b) => b.name !== 'glob' ? b : { ...b,
-    skill: { skillRevision: 's2', usage: 'new required guidance', limitations: ['new boundary'] } });
-  h.engine.refreshCatalog(updated);
-  const reload = await h.engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: 'op_skill' });
-  assert.equal(reload.response.ok, true);
-  assert.equal(reload.response.data.skills.length, 1);
-  assert.equal(reload.response.data.skills[0].skillRevision, 's2');
-  assert.equal(h.engine.handleList({ view: 'state' }, SCOPE_A).data.budgets.activeCount, 1);
-});
-
-for (const query of ['create music', '创建音乐']) {
-  test(`DI8 category-token 不得单独制造工具命中: ${query}`, async (t) => {
-    const { engine } = await makeEngine(); t.after(() => engine.dispose());
-    assert.deepEqual(engine.handleSearch({ category: 'documents', query }, SCOPE_A).data.candidates, []);
-    assert.ok(engine.handleSearch({ category: 'documents', query: 'write a spreadsheet' }, SCOPE_A).data.candidates.some((c) => c.name === 'xlsx_write'));
-  });
-}
-
-test('DI9 名称、类别、状态与搜索均以完整成功响应的 UTF-8 字节计量', async (t) => {
-  const { engine: tiny } = await makeEngine({ bindings: [binding({ name: 'x', namespace: 'files' })],
-    engineConfig: { budgets: { maxListResultBytes: 3, maxSearchResultBytes: 3 } } });
-  t.after(() => tiny.dispose());
-  for (const response of [tiny.handleList({ category: 'files' }, SCOPE_A), tiny.handleList({}, SCOPE_A),
-    tiny.handleList({ view: 'state' }, SCOPE_A), tiny.handleSearch({ category: 'files', query: 'x' }, SCOPE_A),
-    tiny.handleSearch({ category: 'files', query: 'zzzzzzzz' }, SCOPE_A)]) {
-    assert.equal(response.ok, false);
-    assert.equal(response.error.code, 'BUDGET_EXCEEDED');
-  }
-  const { engine } = await makeEngine({ engineConfig: { budgets: { maxListResultBytes: 650, maxSearchResultBytes: 800 } } });
-  t.after(() => engine.dispose());
-  for (const request of [{ category: 'files' }, {}, { view: 'state' }]) {
-    const response = engine.handleList(request, SCOPE_A);
-    assert.equal(response.ok, true, JSON.stringify(response));
-    assert.ok(bytes(response) <= 650, `${JSON.stringify(request)}: ${bytes(response)}`);
-  }
-  const response = engine.handleSearch({ category: 'files', query: 'file' }, SCOPE_A);
-  assert.equal(response.ok, true);
-  assert.ok(bytes(response) <= 800);
-});
-
-test('DI10 完整响应预算的边界与分页：刚好装下全页时不得因虚拟游标误拒', async (t) => {
-  const bindings = [binding({ name: 'x', namespace: 'files' }), binding({ name: 'y', namespace: 'files' })];
-  const { engine: open } = await makeEngine({ bindings }); t.after(() => open.dispose());
-  const full = open.handleList({ category: 'files' }, SCOPE_A);
-  const { engine: exact } = await makeEngine({ bindings, engineConfig: { budgets: { maxListResultBytes: bytes(full) } } });
-  t.after(() => exact.dispose());
-  assert.deepEqual(exact.handleList({ category: 'files' }, SCOPE_A), full);
-  const { engine: paged } = await makeEngine({ bindings, engineConfig: { budgets: { maxListResultBytes: 500, maxListLimit: 1 } } });
-  t.after(() => paged.dispose());
-  const first = paged.handleList({ category: 'files' }, SCOPE_A);
-  const second = paged.handleList({ category: 'files', cursor: first.data.nextCursor }, SCOPE_A);
-  assert.deepEqual([...first.data.names, ...second.data.names], ['x', 'y']);
-  assert.ok(bytes(first) <= 500 && bytes(second) <= 500);
-});
-
-const permutations = (items) => items.length === 0 ? [[]]
-  : items.flatMap((item, i) => permutations(items.filter((_, j) => i !== j)).map((rest) => [item, ...rest]));
-
-for (const ptc of [false, true]) {
-  test(`DI11 ${ptc ? 'PTC' : 'native'}: 三项结果的六种排列及混合失败均与重放一致`, async (t) => {
-    for (const order of permutations([0, 1, 2])) {
-      for (const failed of [-1, 1]) {
-        const { engine } = await makeEngine();
-        const events = [ptc
-          ? { seq: 0, type: 'tool/call', data: { name: 'run_code', callId: 'parent', arguments: {} } }
-          : header(0, [])];
-        const journal = journalFor(engine, [], { collapsedPresentation: () => ptc });
-        journal.onEvent(events[0]);
-        const names = ['glob', 'grep', 'read_file'];
-        const responses = [];
-        for (let i = 0; i < names.length; i++) {
-          const c = ptc ? { seq: i + 1, type: 'tool/ptc-dispatch-start', data: {
-            name: 'tool_load', parentCallId: 'parent', subCallId: `load${i}`, arguments: { names: [names[i]] },
-          } } : call(i + 1, `load${i}`, names[i]);
-          journal.onEvent(c); events.push(c);
-          responses.push((await engine.handleLoad({ names: [names[i]] }, SCOPE_A, { operationId: `op_load${i}` })).response);
-        }
-        for (const [position, i] of order.entries()) {
-          const r = ptc ? { seq: position + 4, type: 'tool/ptc-dispatch', data: {
-            ...events[i + 1].data, isError: i === failed,
-            content: [{ type: 'text', text: JSON.stringify(responses[i]) }],
-          } } : result(position + 4, i + 1, responses[i], i === failed);
-          journal.onEvent(r); events.push(r);
-        }
-        const view = (e) => [...e.getState(SCOPE_A).selected.values()].map(({ name, seq, revision }) => ({ name, seq, revision }));
-        const expected = order.filter((i) => i !== failed).map((i) => names[i]);
-        assert.deepEqual(view(engine).map((s) => s.name), expected);
-        assert.equal(engine.getPendingSize(), 0);
-        if (!ptc) {
-          const tools = expected.map((name) => engine.getCatalog().byName.get(name)[0].wire);
-          const h = header(7, tools); journal.onEvent(h); events.push(h);
-        }
-        const { engine: cold } = await makeEngine({ newSessionMode: 'restoring' });
-        const cj = journalFor(cold, events, { collapsedPresentation: () => ptc });
-        t.after(() => { journal.dispose(); cj.dispose(); engine.dispose(); cold.dispose(); });
-        await cj.restore();
-        assert.deepEqual(view(cold), view(engine), `order=${order} failed=${failed}`);
-        assert.deepEqual(cold.getFrozenWire(SCOPE_A), engine.getFrozenWire(SCOPE_A));
-      }
-    }
-  });
-}
-
-test('DI12 同名同 schema 更换绑定仍可恢复调用，冻结槽位和预算只计一次', async (t) => {
-  const h = await loadedHistory(t);
-  const bindings = sampleBindings().map((b) => b.name !== 'glob' ? b : { ...b, toolId: 'replacement::glob', bindingGeneration: 'gen2' });
-  h.engine.refreshCatalog(bindings);
-  const c = call(4, 'samewire', 'glob'); h.journal.onEvent(c);
-  const loaded = await h.engine.handleLoad(c.data.arguments, SCOPE_A, { operationId: 'op_samewire' });
-  assert.equal(loaded.response.ok, true);
-  h.journal.onEvent(result(5, 4, loaded.response));
-  h.journal.onEvent(header(6, await project(h.engine, h.journal, bindings)));
-  assert.equal(h.engine.evaluateCall(SCOPE_A, { name: 'glob', requestId: h.journal.currentRequestId() }).allowed, true);
-  assert.equal(h.engine.getFrozenWire(SCOPE_A).length, 1);
-  assert.equal(h.engine.handleList({ view: 'state' }, SCOPE_A).data.budgets.activeCount, 1);
-});
-
-test('DI13 中英文、空页、loaded 与不同限额下，每份成功外壳都不能越过字节上限', async (t) => {
-  for (const locale of ['en', 'zh']) {
-    for (const cap of [1, 100, 250, 400, 600, 1000, 2000]) {
-      const { engine } = await makeEngine({ engineConfig: { locale, budgets: { maxListResultBytes: cap, maxSearchResultBytes: cap } } });
-      t.after(() => engine.dispose());
-      await commitLoad(engine, SCOPE_A, { names: ['glob'] });
-      for (const request of [{}, { category: 'files' }, { view: 'loaded', category: 'files' },
-        { view: 'loaded', category: 'web' }, { view: 'state' }]) {
-        const out = engine.handleList(request, SCOPE_A);
-        if (out.ok) assert.ok(bytes(out) <= cap, `locale=${locale} cap=${cap} ${JSON.stringify(request)}`);
-        else assert.equal(out.error.code, 'BUDGET_EXCEEDED');
-      }
-      for (const query of ['file', 'zzzzzzzz']) {
-        const out = engine.handleSearch({ category: 'files', query }, SCOPE_A);
-        if (out.ok) assert.ok(bytes(out) <= cap);
-        else assert.equal(out.error.code, 'BUDGET_EXCEEDED');
-      }
-    }
-  }
-});
-
-test('DI14 新技能虽然复用冻结 schema，仍必须遵守 maxSkillBytesPerLoad', async (t) => {
-  const h = await loadedHistory(t, { maxSkillBytesPerLoad: 500 });
-  h.engine.refreshCatalog(sampleBindings().map((b) => b.name !== 'glob' ? b : { ...b,
-    skill: { skillRevision: 's2', usage: 'u'.repeat(1000), limitations: [] } }));
-  const out = await h.engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: 'op_bigskill' });
-  assert.equal(out.response.ok, false);
-  assert.equal(out.response.error.code, 'BUDGET_EXCEEDED');
-  assert.equal(h.engine.getPendingSize(), 0);
-});
-
-test('DI15 错误身份/输入、header 先于提交及无真实 header 均不能恢复披露', async (t) => {
-  const h = await loadedHistory(t);
-  for (const variant of ['wrong-operation', 'wrong-input', 'wrong-digest', 'before-result', 'no-header']) {
-    const events = JSON.parse(JSON.stringify(h.events));
-    const shell = JSON.parse(events[2].data.message.content[0].text);
-    if (variant === 'wrong-operation') shell.data.receipt.operationId = 'op_other';
-    if (variant === 'wrong-input') events[1].data.arguments = { names: ['grep'] };
-    if (variant === 'wrong-digest') events[3].data.header.tools[0].description = 'tampered header';
-    events[2].data.message.content[0].text = JSON.stringify(shell);
-    if (variant === 'before-result') {
-      [events[2], events[3]] = [events[3], events[2]]; events[2].seq = 2; events[3].seq = 3;
-    }
-    if (variant === 'no-header') events.pop();
-    const { engine } = await makeEngine({ bindings: changedBindings(), newSessionMode: 'restoring' });
-    const journal = journalFor(engine, events); t.after(() => { journal.dispose(); engine.dispose(); });
-    await journal.restore();
-    assert.equal(engine.getFrozenWire(SCOPE_A).length, 0, variant);
-    assert.equal(engine.getState(SCOPE_A).selected.size, 0, variant);
-  }
-});
-
-
-test('DI16 live and restored native projections preserve the exact observed JSON bytes', async (t) => {
-  const h = await loadedHistory(t);
-  const expected = JSON.stringify(h.events[3].data.header.tools);
-  assert.equal(JSON.stringify(await project(h.engine, h.journal, sampleBindings())), expected);
-  const { engine } = await makeEngine({ newSessionMode: 'restoring' });
-  const journal = journalFor(engine, h.events);
-  t.after(() => { journal.dispose(); engine.dispose(); });
-  await journal.restore();
-  assert.equal(JSON.stringify(await project(engine, journal, sampleBindings())), expected);
+  engine.handleSearch({ category: 'files', query: 'glob' }, { sessionId: SESSION });
+  engine.handleList({ view: 'available', category: 'files' }, { sessionId: SESSION });
+  assert.equal(engine.getState({ sessionId: SESSION }).selected.size, 0);
 });

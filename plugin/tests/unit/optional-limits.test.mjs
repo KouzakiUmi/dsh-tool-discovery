@@ -6,9 +6,13 @@
 //
 // 编码约定：null = 关闭（JSON 可表达）；显式正整数 = 启用。
 // 绝不用 Infinity —— 它进不了协议 JSON，会变成 null 并静默改变语义。
+//
+// rc.1 重设计后 tool_load 立即提交：旧文件里“未决预留占预算 / cancelOperation 释放 /
+// resetCacheEpoch 释放”的用例已删除。等价覆盖改为：已提交的 selected 立即计入预算、
+// 幂等重复不双占、tool_unload 是唯一的主动释放路径、invalidate 作废后释放。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeEngine, SCOPE_A, SCOPE_B, nextOpId, commitLoad, binding, sampleBindings } from './helpers.mjs';
+import { makeEngine, loadTools, unloadTools, SCOPE_A, SCOPE_B, binding, sampleBindings } from './helpers.mjs';
 import { DEFAULT_BUDGETS, resolveBudgets, validateListRequest, validateSearchRequest, validateLoadRequest, CONTROLLED_CATEGORIES } from '../../domain/index.mjs';
 import { DomainError } from '../../domain/errors.mjs';
 
@@ -23,19 +27,8 @@ function manyBindings(count = 13) {
   }));
 }
 
-/** 已披露 wire 的累计字节（走真实 advertisement 路径冻结后统计）。 */
-async function freezeAll(engine, scope, requestId) {
-  for (const [toolId, rec] of engine.getState(scope).selected) {
-    engine.recordAdvertisement(scope, {
-      requestId, toolId, name: rec.name, revision: rec.revision,
-      schemaDigest: rec.schemaDigest, wire: { name: rec.name, description: 'x', parameters: {} },
-    });
-  }
-}
-
-const sumWireBytes = (engine, scope) => engine
-  .getFrozenWire(scope)
-  .reduce((sum, f) => sum + f.bytes, 0);
+const namesOf = (engine, scope = SCOPE_A) => [...engine.getState(scope).selected.values()].map((s) => s.name);
+const budgetOf = (engine, scope = SCOPE_A) => engine.handleList({ view: 'state' }, scope).data.budgets;
 
 test('O01 默认配置下所有 max* 硬上限都是 null（关闭），不是某个数字', () => {
   for (const key of [
@@ -64,7 +57,7 @@ test('O02 默认输出策略与 TTL 不变（关闭硬上限不等于无界输�
 test('O03 默认可单批 load 超过历史批次上限 4', async () => {
   const { engine } = await makeEngine({ bindings: manyBindings(8) });
   const names = Array.from({ length: 6 }, (_, i) => `bulk_${String(i).padStart(2, '0')}`);
-  const res = await commitLoad(engine, SCOPE_A, { names });
+  const res = await loadTools(engine, SCOPE_A, { names });
   assert.equal(res.response.ok, true, `默认应允许 6 个一批：${JSON.stringify(res.response.error)}`);
   assert.equal(engine.getState(SCOPE_A).selected.size, 6);
 });
@@ -73,7 +66,7 @@ test('O04 默认可累计超过历史数量上限 12', async () => {
   const { engine } = await makeEngine({ bindings: manyBindings(15) });
   for (let i = 0; i < 14; i += 5) {
     const names = Array.from({ length: Math.min(5, 14 - i) }, (_, k) => `bulk_${String(i + k).padStart(2, '0')}`);
-    const res = await commitLoad(engine, SCOPE_A, { names });
+    const res = await loadTools(engine, SCOPE_A, { names });
     assert.equal(res.response.ok, true, `第 ${i} 批应成功：${JSON.stringify(res.response.error)}`);
   }
   assert.equal(engine.getState(SCOPE_A).selected.size, 14, '默认不得卡在 12');
@@ -83,55 +76,47 @@ test('O05 默认可累计超过历史 schema 字节上限 49KiB', async () => {
   const { engine } = await makeEngine({ bindings: manyBindings(13) });
   for (let i = 0; i < 10; i += 5) {
     const names = Array.from({ length: 5 }, (_, k) => `bulk_${String(i + k).padStart(2, '0')}`);
-    const res = await commitLoad(engine, SCOPE_A, { names });
+    const res = await loadTools(engine, SCOPE_A, { names });
     assert.equal(res.response.ok, true, `第 ${i} 批应成功：${JSON.stringify(res.response.error)}`);
   }
-  // 每个 fixture 约 6 KiB → 累计远超历史 49152
   const catalog = engine.getCatalog();
-  const liveBytes = Array.from(engine.getState(SCOPE_A).selected.values())
+  const liveBytes = [...engine.getState(SCOPE_A).selected.values()]
     .reduce((sum, s) => sum + catalog.entries.get(s.toolId).wireBytes, 0);
   assert.ok(liveBytes > 49_152, `累计 schema 字节应超过 49KiB，实际 ${liveBytes}`);
 });
 
-test('O06 显式小上限仍阻断新增项，且旧项/顺序/披露不受影响', async () => {
+test('O06 显式小上限仍阻断新增项，且旧选择不受影响', async () => {
   const { engine } = await makeEngine({
     bindings: manyBindings(6),
     engineConfig: { budgets: { maxActiveTools: 3, maxLoadBatch: 2 } },
   });
   const first = ['bulk_00', 'bulk_01'];
-  assert.equal((await commitLoad(engine, SCOPE_A, { names: first })).response.ok, true);
-  await freezeAll(engine, SCOPE_A, 'r1');
-  const frozenBefore = engine.getFrozenWire(SCOPE_A);
-  assert.equal(frozenBefore.length, 2);
+  assert.equal((await loadTools(engine, SCOPE_A, { names: first })).response.ok, true);
+  assert.deepEqual(namesOf(engine).sort(), first);
 
   // 批次上限 2 仍然生效
-  const tooBig = await engine.handleLoad({ names: ['bulk_02', 'bulk_03', 'bulk_04'] }, SCOPE_A, { operationId: nextOpId() });
+  const tooBig = await loadTools(engine, SCOPE_A, { names: ['bulk_02', 'bulk_03', 'bulk_04'] });
   assert.equal(tooBig.response.ok, false);
   assert.equal(tooBig.response.error.code, 'INVALID_ARGS');
+  assert.deepEqual(namesOf(engine).sort(), first, '被拒批次不留下半批');
 
   // 数量上限 3：再加一个成功，再加一个被拒
-  assert.equal((await commitLoad(engine, SCOPE_A, { names: ['bulk_02'] })).response.ok, true);
-  const over = await engine.handleLoad({ names: ['bulk_03'] }, SCOPE_A, { operationId: nextOpId() });
+  assert.equal((await loadTools(engine, SCOPE_A, { names: ['bulk_02'] })).response.ok, true);
+  const over = await loadTools(engine, SCOPE_A, { names: ['bulk_03'] });
   assert.equal(over.response.error.code, 'BUDGET_EXCEEDED');
-
-  // 被拒的新增不得卸载、不得重排、不得改写任何已冻结 wire
-  const frozenAfter = engine.getFrozenWire(SCOPE_A);
-  assert.deepEqual(frozenAfter.slice(0, 2), frozenBefore, '已冻结项逐字不变且顺序不变');
-  assert.equal(engine.getState(SCOPE_A).selected.size, 3, '超限只是拒绝新增，不淘汰');
+  assert.deepEqual(namesOf(engine).sort(), ['bulk_00', 'bulk_01', 'bulk_02'], '超限只是拒绝新增，不淘汰');
 });
 
-test('O07 显式字节上限同样只阻断新增，不动已冻结项', async () => {
+test('O07 显式字节上限同样只阻断新增，不动已有选择', async () => {
   const { engine } = await makeEngine({
     bindings: manyBindings(6),
     engineConfig: { budgets: { maxActiveSchemaBytes: 12_000 } },
   });
-  assert.equal((await commitLoad(engine, SCOPE_A, { names: ['bulk_00'] })).response.ok, true);
-  await freezeAll(engine, SCOPE_A, 'r1');
-  const frozenBefore = engine.getFrozenWire(SCOPE_A);
-  assert.equal(frozenBefore.length, 1);
-  const over = await engine.handleLoad({ names: ['bulk_03', 'bulk_04', 'bulk_05'] }, SCOPE_A, { operationId: nextOpId() });
+  assert.equal((await loadTools(engine, SCOPE_A, { names: ['bulk_00'] })).response.ok, true);
+  const before = namesOf(engine);
+  const over = await loadTools(engine, SCOPE_A, { names: ['bulk_03', 'bulk_04', 'bulk_05'] });
   assert.equal(over.response.error.code, 'BUDGET_EXCEEDED');
-  assert.deepEqual(engine.getFrozenWire(SCOPE_A), frozenBefore, '超限不得触发任何淘汰');
+  assert.deepEqual(namesOf(engine), before, '超限不得触发任何淘汰');
 });
 
 test('O08 resolveBudgets：null 关闭、正整数启用、其他类型与取值被拒', () => {
@@ -178,14 +163,14 @@ test('O11 显式上限仍可拒绝：一次 load 一个超大的 schema', async 
   });
   // 默认：无上限 → 放行
   const open = await makeEngine({ bindings: [...sampleBindings(), fat] });
-  assert.equal((await commitLoad(open.engine, SCOPE_A, { names: ['fat_tool'] })).response.ok, true,
+  assert.equal((await loadTools(open.engine, SCOPE_A, { names: ['fat_tool'] })).response.ok, true,
     '默认不得因为单个大 schema 就阻断');
   // 显式上限：拒绝，且不截断 schema
   const closed = await makeEngine({
     bindings: [...sampleBindings(), fat],
     engineConfig: { budgets: { maxActiveSchemaBytes: 5000 } },
   });
-  const res = await closed.engine.handleLoad({ names: ['fat_tool'] }, SCOPE_A, { operationId: nextOpId() });
+  const res = await loadTools(closed.engine, SCOPE_A, { names: ['fat_tool'] });
   assert.equal(res.response.ok, false);
   assert.equal(res.response.error.code, 'BUDGET_EXCEEDED');
   assert.ok(!JSON.stringify(res.response).includes('xxxx'), '错误信息不得泄漏截断后的 schema');
@@ -193,7 +178,7 @@ test('O11 显式上限仍可拒绝：一次 load 一个超大的 schema', async 
 
 test('O12 state 视图在关闭时返回 null（JSON 可表达），不出现 Infinity/NaN', async () => {
   const { engine } = await makeEngine();
-  await commitLoad(engine, SCOPE_A, { names: ['glob'] });
+  await loadTools(engine, SCOPE_A, { names: ['glob'] });
   const view = engine.handleList({ view: 'state' }, SCOPE_A);
   assert.equal(view.ok, true);
   assert.equal(view.data.budgets.maxActiveTools, null);
@@ -213,8 +198,8 @@ test('O13 关闭硬上限不影响会话隔离（预算仍逐会话核算）', a
     bindings: manyBindings(15),
     engineConfig: { budgets: { maxActiveTools: 3 } },
   });
-  assert.equal((await commitLoad(engine, SCOPE_B, { names: ['bulk_00', 'bulk_01', 'bulk_02'] })).response.ok, true);
-  const over = await engine.handleLoad({ names: ['bulk_03'] }, SCOPE_B, { operationId: nextOpId() });
+  assert.equal((await loadTools(engine, SCOPE_B, { names: ['bulk_00', 'bulk_01', 'bulk_02'] })).response.ok, true);
+  const over = await loadTools(engine, SCOPE_B, { names: ['bulk_03'] });
   assert.equal(over.response.error.code, 'BUDGET_EXCEEDED');
   const a = engine.handleList({ view: 'state' }, SCOPE_A);
   assert.deepEqual(a.data.selected, [], 'A 会话不受 B 会话的上限影响');
@@ -254,113 +239,105 @@ test('O15 搜索默认仍只返回少量候选（默认输出策略保持有界�
 });
 
 // ---------------------------------------------------------------------------
-// 显式上限必须在"canonical 折叠之前"就真的生效。
-//
-// 场景：同 scope 连续两次 handleLoad，第一次还没折叠（仍在 pending），第二次只看得到
-// 旧的 selected，于是各自都判定"放得下"，合计却突破了显式设置的上限。
-// 默认 null 关闭时无所谓，但显式设置必须真的生效。
+// 显式上限在**提交之前**生效：tool_load 立即提交，因此第一次成功后就占住额度。
 // ---------------------------------------------------------------------------
 
-test('O16 显式 maxActiveTools=1:同 scope 两个未决 load 不能合计超限', async () => {
+test('O16 显式 maxActiveTools=1:同会话第二个 load 必须被拒', async () => {
   const { engine } = await makeEngine({
     bindings: sampleBindings(),
     engineConfig: { budgets: { maxActiveTools: 1 } },
   });
-  // 第一次：预留成功（只 handleLoad，不 commit → 仍在 pending）
-  const first = await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: nextOpId() });
-  assert.equal(first.response.ok, true, `第一次应预留成功：${JSON.stringify(first.response.error)}`);
-  assert.equal(engine.getPendingSize(), 1);
+  const first = await loadTools(engine, SCOPE_A, { names: ['glob'] });
+  assert.equal(first.response.ok, true, `第一次应成功：${JSON.stringify(first.response.error)}`);
+  assert.equal(budgetOf(engine).activeCount, 1);
 
-  // 第二个**不同**工具：合计已占满，必须被拒
-  const second = await engine.handleLoad({ names: ['grep'] }, SCOPE_A, { operationId: nextOpId() });
-  assert.equal(second.response.ok, false, '未决预留必须占用预算');
+  const second = await loadTools(engine, SCOPE_A, { names: ['grep'] });
+  assert.equal(second.response.ok, false, '已提交的选择必须占用预算');
   assert.equal(second.response.error.code, 'BUDGET_EXCEEDED');
-  assert.equal(second.operation, null, '预算失败不得创建 pending');
-  assert.equal(engine.getPendingSize(), 1, '被拒的调用不得留下 pending');
+  assert.equal(second.admitted, null, '被拒的调用不得留下 admission');
+  assert.deepEqual(namesOf(engine), ['glob'], '被拒调用不得改变选择');
 });
 
-test('O17 同工具重复预留幂等:不双占预算', async () => {
+test('O17 同工具重复 load 幂等:不双占预算', async () => {
   const { engine } = await makeEngine({
     bindings: sampleBindings(),
     engineConfig: { budgets: { maxActiveTools: 1 } },
   });
-  assert.equal((await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: nextOpId() })).response.ok, true);
-  // 同一工具、同一 revision 再来一次 → 幂等，仍是同一个占位
-  const again = await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: nextOpId() });
-  assert.equal(again.response.ok, true, `同工具重复预留必须幂等：${JSON.stringify(again.response.error)}`);
+  assert.equal((await loadTools(engine, SCOPE_A, { names: ['glob'] })).response.ok, true);
+  const again = await loadTools(engine, SCOPE_A, { names: ['glob'] });
+  assert.equal(again.response.ok, true, `同工具重复 load 必须幂等：${JSON.stringify(again.response.error)}`);
+  assert.deepEqual(again.admitted, [], '幂等重复不新增 admission');
   // 另一个工具仍然超限 → 说明 glob 只被算了一次
-  const other = await engine.handleLoad({ names: ['grep'] }, SCOPE_A, { operationId: nextOpId() });
+  const other = await loadTools(engine, SCOPE_A, { names: ['grep'] });
   assert.equal(other.response.error.code, 'BUDGET_EXCEEDED', 'glob 不得被双占后才放行 grep');
+  assert.equal(budgetOf(engine).activeCount, 1);
 });
 
-test('O18 默认关闭时同 scope 两次未决 load 都放行（不引入任何默认上限）', async () => {
+test('O18 默认关闭时同会话多次 load 都放行（不引入任何默认上限）', async () => {
   const { engine } = await makeEngine({ bindings: sampleBindings() });
-  assert.equal((await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: nextOpId() })).response.ok, true);
-  assert.equal((await engine.handleLoad({ names: ['grep'] }, SCOPE_A, { operationId: nextOpId() })).response.ok, true);
-  assert.equal(engine.getPendingSize(), 2);
+  assert.equal((await loadTools(engine, SCOPE_A, { names: ['glob'] })).response.ok, true);
+  assert.equal((await loadTools(engine, SCOPE_A, { names: ['grep'] })).response.ok, true);
+  assert.equal(budgetOf(engine).activeCount, 2);
 });
 
-test('O19 未决预算是按会话隔离的:另一 scope 不被扣预算', async () => {
+test('O19 预算是按会话隔离的:另一 scope 不被扣预算', async () => {
   const { engine } = await makeEngine({
     bindings: sampleBindings(),
     engineConfig: { budgets: { maxActiveTools: 1 } },
   });
-  assert.equal((await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: nextOpId() })).response.ok, true);
-  // B 会话有自己的一份预算，A 的未决预留不扣 B 的
-  const b = await engine.handleLoad({ names: ['grep'] }, SCOPE_B, { operationId: nextOpId() });
-  assert.equal(b.response.ok, true, `B 会话不得被 A 的未决预留拖累：${JSON.stringify(b.response.error)}`);
+  assert.equal((await loadTools(engine, SCOPE_A, { names: ['glob'] })).response.ok, true);
+  // B 会话有自己的一份预算，A 的选择不扣 B 的
+  const b = await loadTools(engine, SCOPE_B, { names: ['grep'] });
+  assert.equal(b.response.ok, true, `B 会话不得被 A 的选择拖累：${JSON.stringify(b.response.error)}`);
   // A 仍然只允许那一个
-  const a2 = await engine.handleLoad({ names: ['read_file'] }, SCOPE_A, { operationId: nextOpId() });
+  const a2 = await loadTools(engine, SCOPE_A, { names: ['read_file'] });
   assert.equal(a2.response.error.code, 'BUDGET_EXCEEDED');
 });
 
-test('O20 取消未决操作会释放其预算预留（沿用既有 cancelOperation）', async () => {
+test('O20 tool_unload 是主动释放预算的路径', async () => {
   const { engine } = await makeEngine({
     bindings: sampleBindings(),
     engineConfig: { budgets: { maxActiveTools: 1 } },
   });
-  const opId = nextOpId();
-  assert.equal((await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: opId })).response.ok, true);
-  assert.equal((await engine.handleLoad({ names: ['grep'] }, SCOPE_A, { operationId: nextOpId() }))
-    .response.error.code, 'BUDGET_EXCEEDED');
-  assert.equal(engine.cancelOperation(opId), true);
-  const after = await engine.handleLoad({ names: ['grep'] }, SCOPE_A, { operationId: nextOpId() });
-  assert.equal(after.response.ok, true, `取消后预算必须释放：${JSON.stringify(after.response.error)}`);
+  assert.equal((await loadTools(engine, SCOPE_A, { names: ['glob'] })).response.ok, true);
+  assert.equal((await loadTools(engine, SCOPE_A, { names: ['grep'] })).response.error.code, 'BUDGET_EXCEEDED');
+  assert.equal((await unloadTools(engine, SCOPE_A, { names: ['glob'] })).response.ok, true);
+  const after = await loadTools(engine, SCOPE_A, { names: ['grep'] });
+  assert.equal(after.response.ok, true, `卸载后预算必须释放：${JSON.stringify(after.response.error)}`);
+  assert.equal(budgetOf(engine).activeCount, 1);
 });
 
-test('O21 缓存周期重置释放全部未决预留（沿用既有 resetCacheEpoch 清理）', async () => {
+test('O21 目录刷新不释放既有选择的预算；只有 unload/invalidate 释放', async () => {
   const { engine } = await makeEngine({
     bindings: sampleBindings(),
     engineConfig: { budgets: { maxActiveTools: 1 } },
   });
-  assert.equal((await engine.handleLoad({ names: ['glob'] }, SCOPE_A, { operationId: nextOpId() })).response.ok, true);
-  assert.equal((await engine.handleLoad({ names: ['grep'] }, SCOPE_A, { operationId: nextOpId() }))
-    .response.error.code, 'BUDGET_EXCEEDED');
-  engine.resetCacheEpoch(SCOPE_A, 'compaction-end');
-  assert.equal(engine.getPendingSize(), 0, '重置沿用既有 pending 清理');
-  const after = await engine.handleLoad({ names: ['grep'] }, SCOPE_A, { operationId: nextOpId() });
-  assert.equal(after.response.ok, true, `重置后预算必须释放：${JSON.stringify(after.response.error)}`);
+  assert.equal((await loadTools(engine, SCOPE_A, { names: ['glob'] })).response.ok, true);
+  // 无关目录新增：glob 仍然有效，仍占预算。
+  engine.refreshCatalog([...sampleBindings(), binding({ name: 'added_later', toolId: 't_added', namespace: 'files' })]);
+  assert.equal(budgetOf(engine).activeCount, 1);
+  assert.equal((await loadTools(engine, SCOPE_A, { names: ['grep'] })).response.error.code, 'BUDGET_EXCEEDED');
+  // invalidate 作废 glob 后才释放。
+  engine.invalidate('t_files_glob', 'tool-removed');
+  assert.equal(budgetOf(engine).activeCount, 0);
+  assert.equal((await loadTools(engine, SCOPE_A, { names: ['grep'] })).response.ok, true);
 });
 
-test('O22 已冻结工具被撤权后可重新加载，不得因重复计费被拒', async () => {
+test('O22 已选工具被撤权后可重新加载，不得因重复计费被拒', async () => {
   const { engine } = await makeEngine({
     bindings: sampleBindings(),
     engineConfig: { budgets: { maxActiveTools: 1 } },
   });
-  assert.equal((await commitLoad(engine, SCOPE_A, { names: ['glob'] })).applied, true);
+  assert.equal((await loadTools(engine, SCOPE_A, { names: ['glob'] })).response.ok, true);
   const entry = engine.getCatalog().byName.get('glob')[0];
-  engine.recordAdvertisement(SCOPE_A, {
-    requestId: 'r1', toolId: entry.toolId, name: entry.name,
-    revision: entry.revision, schemaDigest: entry.schemaDigest, wire: entry.wire,
-  });
-  assert.equal(engine.getFrozenWire(SCOPE_A).length, 1, '前置：工具已冻结披露');
+  assert.equal(engine.getState(SCOPE_A).selected.size, 1);
 
   engine.invalidate(entry.toolId, 'temporarily-unavailable');
   assert.equal(engine.getState(SCOPE_A).selected.size, 0, '撤权后执行授权失效');
 
-  const reload = await commitLoad(engine, SCOPE_A, { names: ['glob'] });
+  const reload = await loadTools(engine, SCOPE_A, { names: ['glob'] });
   assert.equal(reload.response.ok, true, `重新加载必须放行：${JSON.stringify(reload.response.error)}`);
-  assert.equal(reload.applied, true, '重新加载必须恢复执行授权');
+  assert.equal(reload.admitted.length, 1, '重新加载必须恢复 admission');
   assert.equal(engine.getState(SCOPE_A).selected.size, 1);
   engine.dispose();
 });

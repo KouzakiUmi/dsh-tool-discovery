@@ -1,153 +1,61 @@
 # 10 · DSH STORE 上架契约与兼容声明
 
-当前 manifest 核对日期：2026-10-21；构建源码版本 `0.4.3`（不代表 npm 新发布）。下文 §3.1、§4、§5 是 2026-10-10/11 的固定快照证据，原文中的“当前”“本机”“STORE 当前现状”只在当时成立，**不是最新商城规则、目录统计或当前宿主版本**。
-兼容声明与历史安装操作分开记录；没有据此验证当前 STORE 收录、npm 最新版本、真实 Profile 或在线 GUI。现行合同见 [00](<00-current-contract.md>)，当前测试见 [05](<05-current-status.md>)。
+更新日期：2026-11-06。本文依据工作区 [manifest](<../../package.json>) `0.6.0` 区分兼容声明、测试、分发与安装；现行行为见 [00](<00-current-contract.md>)，实际测试状态见 [05](<05-current-status.md>)。本次未核验 STORE 收录、npm 最新版本或用户 Profile 的在线状态。
 
 ## 1. 目的与边界
 
-历史上架取证针对固定 Commit 的 manifest、Bundle Patch、许可证与运行时代码；STORE 的当次规则和目录状态需要另行核验，不由旧镜像复算推断。
+manifest 声明不证明某次包载荷已经发布、安装或生效。STORE 规则和目录状态须针对目标版本与固定提交另行核验；实际安装状态须在目标 Profile 和 GUI 上核验。
 
-| 独立状态 | 本页可以证明什么 |
+| 状态 | 证据口径 |
 |---|---|
-| 当前源码可分发面 | §3 依据当前 manifest/patch；实际载荷仍须检查该次产物 |
-| 一次性 Profile 安装/启动/卸载/恢复 | §4 的 2026-10-10 固定版本实验，不外推当前版本或用户 Profile |
-| GitHub 构建资产 / npm | 查看对应 Release、tarball、registry 与 provenance；不能从清单版本数值或旧版本列表推断最新发布 |
-| STORE / 用户 Profile / 在线 GUI | 本轮没有重新核验；不能笼统写成“已经生效”或“历史上从未安装” |
-
-核心工具跟版须同时核验默认名单、动态贡献与周期生效条件，维护流程见
-[核心工具跟版与名单漂移](<12-core-tools-maintenance.md>)。只更新版本范围不能证明工具面已经跟版。
+| 工作区声明 | 当前 manifest、patch 与源码；不等同实际发布载荷 |
+| 测试 | 记录目标 Core、测试范围及结果；mock provider 不是实际外部 provider |
+| STORE / npm / GitHub 资产 | 各自检查对应发布记录和载荷，不从 manifest 推断 |
+| Profile / GUI | 在目标环境单独验证；历史一次性实验不代表当前生效 |
 
 ## 2. 兼容矩阵（manifest 声明）
 
-当前 [package.json](<../../package.json>) 的 `dsh.compatibility.dshReleases` **显式列出以下三项**，并不表示它们是官方最新或全部发行版。下面测试数字是历史证据，不是本轮复跑：
+当前 `engines.dsh` 为 `>=0.2.2-rc.1`；`dsh.compatibility.dshReleases` 显式列出：
 
-| DSH Core 版本 | manifest 声明 | 历史证据 |
-|---|---|---|
-| `0.2.0-rc.2` | `unknown` | 本机无该版本安装，未测 |
-| `0.2.1-alpha.1` | `compatible` | 发布基线：`0.2.1`–`0.2.2` 的单元与组合测试在该 Core 上通过（结论集见 [当前状态](<05-current-status.md>)）。**本次未复跑**——本机 Core 已是 `0.2.1-alpha.2` |
-| `0.2.1-alpha.2` | `compatible` | 实测：**137/137 组合测试**与 401/401 单元测试在当前宿主上通过（2026-10-11 于 `0.3.0` 树复跑；2026-10-10 首测为 133 组合 + 375 单元，其后测试集扩充），一次性 Profile 的安装/启动/卸载/恢复全通（§4）。该版本改变了本地 fork 子代理的常驻语义，门禁的取证方式已随之更新（§5） |
+| DSH Core | 声明 |
+|---|---|
+| `0.2.0-rc.2` | `incompatible` |
+| `0.2.1-alpha.1` | `incompatible` |
+| `0.2.1-alpha.2` | `incompatible` |
+| `0.2.2-rc.1` | `compatible` |
 
-peer 范围（安装准入）与上表是**两件不同的事**：`@deepseek-ai/dsh` 与 `@deepseek-ai/dsh-*` 的
-`peerDependencies` 写 `>=0.2.1-alpha.1`，避免宿主升级后被版本门直接拒绝；`dshReleases` 仍只记录
-已核验证据。未列入上表的版本一律按未知处理，不用开放的安装范围推断兼容，运行时契约变化仍可能失败。
-`@deepseek-ai/schemastery` 不在这条 Core 版本门里，仍钉在已核验的 `3.18.5-alpha.1`。
+上述更旧版本不在本版支持范围。安装准入范围、逐版本声明与实测是不同事实；`0.2.2-rc.1` 之后的版本未逐一验收，开放范围不证明全部兼容。具体已执行测试与未覆盖项见 [05](<05-current-status.md>)。
 
-Node：`engines.node` = `^22.19.0 || >=24.0.0`，与 CI 的 `22.19.0` 下限矩阵一致。
-
-系统与 Profile 范围：一次性 Profile 验收（§4）在 Windows 的 DSH NEXT Desktop（随包 CLI）上完成；
-macOS / Linux 与其它宿主形态未测，不声明兼容。承诺范围是单用户、单 profile（见根 README 的
-「Scope of the promise」）。
+Node 的 `engines.node` 为 `^22.19.0 || >=24.0.0`；宿主 peer 范围以 manifest 为准。不同操作系统、宿主形态、真实 provider、GUI 和目标 Profile 均须分别取证。
 
 ## 3. 上架契约逐项对照
 
-| STORE 检查项 | 本仓库事实 |
+| 检查项 | 工作区声明 |
 |---|---|
-| 公开 canonical GitHub 仓库 | `https://github.com/KouzakiUmi/dsh-tool-discovery`（public，默认分支 `main`） |
-| manifest `repository` 与仓库一致 | 指向同一仓库 |
-| 许可证一致 | manifest `license: MIT`；仓库内 `LICENSE`（MIT）；GitHub 识别为 MIT |
-| `dsh.bundle.patch` | `./cordis.patch.yml`，包内相对路径 |
-| entry ID 唯一 | `tool-search`：Patch 只新增该行，不覆盖、不禁用任何官方组件 |
-| 生命周期脚本 | **无** `preinstall`/`install`/`postinstall`/`prepare`；打包以 `npm pack --ignore-scripts` 执行 |
-| 运行文件与 `files` | `files` 声明 `plugin/adapters/`、`plugin/domain/`、`plugin/client/`、`cordis.patch.yml`；运行入口、客户端和 patch 以该次包载荷核验。README/manifest/LICENSE 等附带项以实际打包输出为准，不沿用旧 36 项/字节数，也不把源码审查面与 npm 实际载荷等同 |
-| 运行依赖 | `zod`（运行时 `import('zod')`）；`@deepseek-ai/*` 为 peer，由宿主安装提供 |
-| 兼容声明 | 见 §2 |
-| 自动策略信号 | 见 §3.1（本地镜像复算，**不复述记忆值**） |
+| 仓库 | manifest 指向 `https://github.com/KouzakiUmi/dsh-tool-discovery` |
+| 许可证 | manifest 为 MIT；发布载荷须另核 |
+| Bundle patch | `./cordis.patch.yml` |
+| 运行入口 | `./plugin/adapters/dsh/index.mjs`，另导出 domain 与 client |
+| 打包文件 | `files` 指定 adapter、domain、client 与 patch；实际包载荷另核 |
+| 依赖 | `zod` 为运行依赖；DSH 服务及 schemastery 为 peer，具体可选性见 manifest |
+| 安装脚本 | manifest 未定义 `preinstall`、`install`、`postinstall` 或 `prepare` |
+| 兼容范围 | 见 §2；声明不代替测试和安装验收 |
 
-## 3.1 DSH STORE 自动策略的本地镜像复算
+## 3.1 STORE 策略与历史复算
 
-上架门禁不只看 manifest：STORE 的八小时自动化会对**固定 Commit 的可分发面**跑一遍源码级审查。
-本仓库用 STORE 自己的规则实现（不重写、不近似）在本地复算了这一遍。
+2026-10-11 曾对固定提交 `2c59d20` 的旧版本做 STORE 自动策略本地镜像复算，并记录需要单独审查的文件访问和供应链信号。该结果仅说明当时输入与规则下的评估，不代表 `0.6.0` 或当前 STORE 策略、收录与审核状态。需要上架时应对目标固定提交和实际载荷重新预检。
 
-- 规则实现取自 `AI-Scarlett/DSH-Store`：`src/package-source-surface.mjs`（源码面选择器与
-  `files` 语义）、`src/automation-source-policy.mjs`（信号判定）、`src/fixed-source-review.mjs`
-  （审查主流程）、`registry/automation-policy.json`（权威上限与开关）。
-- 复算输入是**同一个固定 Commit 的仓库树与 blob 内容**（不是工作区文件），LF 与字节数因此与
-  STORE 读到的一致。
+## 4. 一次性 Profile 操作（历史）
 
-2026-10-11 复算结果（固定 Commit `2c59d20`；读的是该 Commit 的 Git blob，因此 LF 与字节数
-与 STORE 读到的一致）：
+2026-10-10 在 Windows 隔离 Profile 上，以 Core `0.2.1-alpha.2` 和旧 manifest 的 `0.3.0` 产物记录过安装、配置导出启动、卸载与重新安装；失败安装后的自动恢复也有对照记录。成功安装后的显式 rollback 未单独执行。
 
-| 项 | 值 | 上限 |
-|---|---|---|
-| 源码面选择器 | `explicit-files-conservative-superset`（`files` 全是字面路径/目录，未回退到全包） | 必须受支持 |
-| 扫描完整性 | `scanComplete: true`（33 个运行时文件全部读完，字节数与树一致） | 必须完整 |
-| 运行时文件数 | 33 | 240 |
-| 运行时字节合计 | 417,492 | 2,097,152 |
-| 最大单文件 | 44 KB 量级 | 262,144 |
-| 权限信号 | `files: true`；`network` / `commands` / `credentials` / `protectedDsh` / 原生制品 全为 `false` | 自动批准要求全为 `false` |
-| 复核信号 | `toolViewExtension: false`、`dynamicModuleLoading: false` | — |
+这是针对旧 manifest 的一次性历史参考，不是 `0.6.0` 在 alpha 宿主上的兼容或安装证据，也不说明用户真实 Profile、GUI、真实 provider 或跨进程恢复已验收。
 
-由此得到的**确定性原因**只剩两条，且都是**真实能力**而不是误报：
+## 5. 历史宿主语义
 
-1. `runtime source contains the files permission signal` —— 适配层会读 profile patch（宿主自己的语言
-   设置）与 `$DSH_HOME/desktop-locale.json`；把 Config 的 `locale` 钉成 `zh`/`en` 即完全不读
-   （见根 README 的权限表）。
-2. `runtime or optional dependencies require a separate supply-chain review` —— `zod` 是宿主存储 API
-   （`@deepseek-ai/dsh-storage-domain`）要求的 schema 库。
-
-本轮整改消除的是一条**误报**：`credentials` 信号此前由 `process.env`（拼 `DSH_HOME` 路径）触发 ——
-插件并不处理任何凭据。现在 home 由宿主包 `@deepseek-ai/dsh-home-paths` 解析、语言覆盖走 Config
-字段，域层（`plugin/domain/host-locale.mjs`）不再持有任何 I/O 能力（既不 import `node:fs`、也不读
-`process.env`），并有用注入读取函数的单测钉住这一点。
-
-**不要误读这张表**：自动批准通道要求六个信号全为 `false`。本插件有真实的文件读取与运行时依赖，
-因此**不应**被自动标成 `low` 权限。按 STORE 当前现状（787 条目录条目中 approved 32 条、blocked 385
-条），本插件预期落在需要单独审查的类别 —— 这与「商城能否展示它」是两件事。
-
-复算脚本本身不入库：它只是以只读方式调用 STORE 的规则实现，任何持有 STORE 源码的人都能在几分钟内
-重复同一流程（选择器、上限、信号判定都来自上面列出的文件，没有本仓库自造的近似规则）。
-
-本轮同时做了三份独立的**只读**代码审查（权限与安全边界 / 协议与内核 / 客户端与打包面）。
-结论与处置记录在[代码审查发现](<11-code-review-findings.md>)：已整改项各自配了门禁证据，
-未整改项写清了为什么不动、可选方案与代价 —— 其中包括一条与"核心工具能否凭猜名执行"有关的
-信任边界，它需要作者决策而不是由审查顺手改掉。
-
-## 4. 一次性 Profile 验收（2026-10-10）
-
-隔离 `DSH_HOME`（`%TEMP%\dsh-e3-home`），**未触碰真实 `~/.dsh`**；CLI 为 DSH NEXT 随包 CLI
-（`resources\app\lib\desktop-cli.js`，Core `0.2.1-alpha.2`）。
-
-| 操作 | 命令 | 结果 |
-|---|---|---|
-| 安装 | `dsh plugin --profile e3b add <0.3.0 tarball>` | 通过；Profile 清单登记 `dsh-tool-discovery`，安装副本含 `plugin/`、`cordis.patch.yml`、`LICENSE` |
-| 启动（组合面） | `dsh --profile e3b --dump-config` | exit 0；组合中出现 `- id: tool-search`，无 `incompatible` / `rejected` |
-| 启动（模块导入） | `dsh --profile e3b --dump-config-schema` | exit 0；导出本插件 Config（`alwaysVisible`、`frameworkRetained`） |
-| 卸载 | `dsh plugin --profile e3b remove dsh-tool-discovery` | 通过；Profile 清单与 `node_modules` 均不再含该包 |
-| 恢复 | 重装同一固定产物 | 通过；版本读回 `0.3.0`，入口文件就位 |
-
-对照组（证明「安装准入」确实在起作用）：`0.2.2` 在 `0.2.1-alpha.2` 上被 CLI 以
-`incompatible-version` 拒绝（其 peer 钉死 `0.2.1-alpha.1`），Profile 的
-`package.json` / `pnpm-lock.yaml` / `node_modules` 被自动恢复；同一 tarball 在 0.3.0 的新范围下通过。
-
-**未做**：真实 Profile 安装、GUI 可见性、真实 provider 出站请求、跨进程重启的会话恢复。
-
-**与 STORE `dshOperations` 四项的对照（逐版本）**：`install` / `start` / `uninstall` 三项在
-`0.2.1-alpha.2` × `0.3.0` 产物上有上表记录；`rollback` 只有**失败安装路径**的证据（对照组：
-`0.2.2` 被拒后 Profile 的 `package.json` / `pnpm-lock.yaml` / `node_modules` 被自动恢复），
-成功安装后的显式回滚操作未单独执行，记 **unknown**。`0.2.1-alpha.1` 上未执行过任何一次性
-Profile 操作，四项均记 **unknown**——§2 对它的 `compatible` 是测试证据，不是操作证据。
-
-## 5. `0.2.1-alpha.2` 的宿主语义变更与取证方式
-
-alpha.2 改变了本地 fork 子代理的生命周期：`result` 落定后，idle 的本地 fork 子 Agent 会从 live
-registry 释放（`ctx.agents.get(childId)` → `undefined`），插件也随 `session/disposed` 清掉内存
-runtime；此后该会话按**顶层**会话恢复 —— `epoch-policy.isRuntimeSubagent` 只认 live 的父子关系，
-不为「曾经的子代理」保留豁免（该状态由 `SE5` 覆盖）。
-
-因此三条真实 fork 门禁的**取证方式**必须改变，而不是放宽断言：
-
-| 门禁 | alpha.2 下的取证方式 |
-|---|---|
-| `SE3` | 用 mock provider 的**响应闸门**（`mock-store.holdNextResponse`）把子代理的活动期钉成可控窗口：请求已录制、响应未回放，于是在它仍 live 时观测「子代理默认 `disabled`」；第二轮同样在活动期内取证 |
-| `TF1` | 运行时观测改为**按该会话自己的持久记录重建 runtime** 后再看。`applied` 的期望由「恰好 0」改为「≤1 且必须来自子自己的 `op_tf1-child-load`」——重建会重放子自己那一条对；继承对仍由 `rejected === 0` 与 `selected` 的 name / `operationId` 精确钉住 |
-| `L03` | 同上：按记录重建后再观测恢复结果，`selected` 仍只允许子自己的 `op_c-load`，`rejected === 0` |
-
-结论：`0.2.1-alpha.2` 上组合 **137/137**、单元 **401/401** 全部通过（2026-10-11 复跑；2026-10-10
-首测为 133 + 375，其后测试集扩充）。宿主语义变化记录在测试注释里，
-断言强度未降低 ——「继承前缀的对绝不进入子的折叠管线」这条性质仍由精确的 `selected` /
-`operationId` / `rejected` 断言保证。
+alpha 期的 fork 子代理生命周期和测试取证曾有调整；对应结论只适用于当时的宿主与源码快照。当前版本的 resume、own-only 和会话隔离以 [00](<00-current-contract.md>) 与 [03](<03-implementation-and-acceptance.md>) 的准入口径为准。
 
 ## 6. 后续门槛
 
-1. 在 `0.2.1-alpha.2` 上补一次**真实 provider** 的出站请求验收（当前为 mock provider + 真实 Loader 组合）；
-2. 需要上架时，由作者在 DSH STORE 侧走一次固定 Commit 预检，并按结果更新 §1 的状态表。
+1. 对目标 Core 和实际发布产物分别完成适用测试、真实 provider 与目标 Profile/GUI 验证，并明确未覆盖范围。
+2. 如需上架，针对固定提交和实际载荷执行 STORE 预检；分别核验收录、发布、安装与生效，不由任何单一结果推断其他状态。

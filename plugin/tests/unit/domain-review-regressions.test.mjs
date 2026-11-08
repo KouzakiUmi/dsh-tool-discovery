@@ -1,118 +1,42 @@
-// domain review 回归：取消防重放、未决快照隔离与完整类别分页。
+// domain review 回归：出站响应与内部状态隔离、批次原子性与完整类别分页。
+//
+// 旧文件的取消/重置/pending 重放与 receipt 原位改写用例围绕已删除的 canonical
+// 折叠机制；新设计里 load 立即提交，因此把“宿主/模型拿到的响应对象被改写会不会
+// 影响内部状态”改成对 handleLoad 返回值的只读性验证。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeEngine, SCOPE_A, SCOPE_B, nextOpId, pair } from './helpers.mjs';
+import { makeEngine, loadTools, SCOPE_A } from './helpers.mjs';
 
-async function admit(engine, scope = SCOPE_A, names = ['glob']) {
-  const operationId = nextOpId();
-  const input = { names };
-  const outcome = await engine.handleLoad(input, scope, { operationId });
-  assert.equal(outcome.response.ok, true, JSON.stringify(outcome.response.error));
-  return { outcome, canonical: pair({ seq: 1, operationId, input, payload: outcome.response.data.receipt }) };
-}
-
-for (const boundary of ['cancel', 'reset', 'destroy']) {
-  test(`取消防重放：${boundary} 超过 256 次后，最早回执在原会话 / 跨 scope 都不得激活`, async () => {
-    const { engine } = await makeEngine();
-    let oldest;
-    for (let i = 0; i < 300; i += 1) {
-      const { canonical } = await admit(engine);
-      if (i === 0) oldest = canonical;
-      if (boundary === 'cancel') assert.equal(engine.cancelOperation(canonical.call.operationId), true);
-      else if (boundary === 'reset') engine.resetCacheEpoch(SCOPE_A, 'compaction-end');
-      else engine.destroySession(SCOPE_A.sessionId);
-    }
-    assert.equal(engine.getPendingSize(), 0, '收口后不保留预算预留');
-    for (const scope of [SCOPE_A, SCOPE_B]) {
-      const out = engine.applyCanonicalPair(oldest, scope);
-      assert.deepEqual(out, { applied: false, reason: 'operation-closed' });
-      assert.equal(engine.getState(scope).selected.size, 0);
-    }
-    // 正控制：同一 engine 仍能接纳新的正常提交。
-    const { canonical } = await admit(engine);
-    assert.equal(engine.applyCanonicalPair(canonical, SCOPE_A).applied, true);
-    engine.dispose();
-  });
-}
-
-test('热态无 pending 不接纳新 seq；成功重复仍走 resultSeq 的 stale-seq，冷恢复独立可用', async () => {
-  const { engine } = await makeEngine();
-  const { canonical } = await admit(engine);
-  canonical.resultSeq = 10;
-  assert.equal(engine.applyCanonicalPair(canonical, SCOPE_A).applied, true);
-  assert.deepEqual(engine.applyCanonicalPair(canonical, SCOPE_A), { applied: false, reason: 'stale-seq' });
-  assert.equal(engine.getState(SCOPE_A).integrity.duplicatesIgnored, 1);
-  assert.deepEqual(engine.applyCanonicalPair({ ...canonical, resultSeq: 9 }, SCOPE_A), {
-    applied: false, reason: 'stale-seq',
-  });
-  assert.equal(engine.getState(SCOPE_A).integrity.outOfOrderIgnored, 1);
-  assert.equal(engine.applyCanonicalPair(canonical, SCOPE_B).applied, false, '成功回执也不能跨 scope 新激活');
-  engine.resetCacheEpoch(SCOPE_A, 'compaction-end');
-  assert.equal(engine.applyCanonicalPair({ ...canonical, resultSeq: 11 }, SCOPE_A).applied, false);
-  assert.equal(engine.getState(SCOPE_A).selected.size, 0);
-
-  const { engine: cold } = await makeEngine({ newSessionMode: 'restoring' });
-  assert.equal(cold.applyCanonicalPair(canonical, SCOPE_A).applied, false, '热态入口不是冷回放旁路');
-  const restored = cold.restore([canonical], SCOPE_A);
-  assert.equal(restored.applied, 1);
-  assert.equal(cold.getState(SCOPE_A).selected.size, 1);
-  engine.dispose();
-  cold.dispose();
-});
-
-for (const mutation of ['splice', 'nested']) {
-  test(`receipt 原位 ${mutation} 修改不得改写期望、减少预留或部分激活`, async () => {
-    const { engine } = await makeEngine({ engineConfig: { budgets: { maxActiveTools: 2 } } });
-    const { outcome, canonical } = await admit(engine, SCOPE_A, ['glob', 'grep']);
-    const selected = outcome.response.data.receipt.selected;
-    if (mutation === 'splice') selected.splice(1, 1);
-    else selected[0].skillRevision = 's_tampered';
-    const before = engine.handleList({ view: 'state' }, SCOPE_A);
-    assert.equal(before.data.budgets.activeCount, 2, '出站对象修改不能改变预留');
-    const blocked = await engine.handleLoad({ names: ['read_file'] }, SCOPE_A, { operationId: nextOpId() });
-    assert.equal(blocked.response.error.code, 'BUDGET_EXCEEDED');
-    assert.deepEqual(engine.applyCanonicalPair(canonical, SCOPE_A), { applied: false, reason: 'receipt-mismatch' });
-    assert.equal(engine.getState(SCOPE_A).selected.size, 0, '整批失败，不得部分激活');
-    assert.equal(engine.getPendingSize(), 0, '拒绝回执后释放预留');
-    assert.equal(engine.handleList({ view: 'state' }, SCOPE_A).data.budgets.activeCount, 0);
-    const next = await engine.handleLoad({ names: ['read_file'] }, SCOPE_A, { operationId: nextOpId() });
-    assert.equal(next.response.ok, true);
-    engine.dispose();
-  });
-}
-
-test('outcome.operation 的顶层、input 与期望嵌套修改不能改写内部 pending', async () => {
+test('出站响应被原位改写不得影响内部 selected / admission 结果', async () => {
   const { engine } = await makeEngine({ engineConfig: { budgets: { maxActiveTools: 2 } } });
-  const { outcome, canonical } = await admit(engine, SCOPE_A, ['glob', 'grep']);
-  const exposed = outcome.operation;
-  assert.notStrictEqual(exposed.expectedReceipt, outcome.response.data.receipt);
-  exposed.expectedReceipt.selected[0].toolId = 't_forged';
-  exposed.expectedReceipt.selected.splice(1, 1);
-  exposed.input.names.splice(0);
-  exposed.expectedReceipt = { selected: [] };
-  exposed.sessionId = SCOPE_B.sessionId;
-  exposed.operationId = 'op_forged';
-  exposed.action = 'unload';
-  exposed.selectionSource = 'candidate';
-  exposed.inputCanonical = '{}';
-  exposed.eligibilityGeneration = -1;
-  assert.deepEqual(canonical.call.input.names, ['glob', 'grep'], '不应共享宿主原始输入');
+  const { response, admitted } = await loadTools(engine, SCOPE_A, { names: ['glob', 'grep'] });
+  assert.equal(response.ok, true);
+  assert.equal(engine.getState(SCOPE_A).selected.size, 2);
+
+  // 模型/宿主可能拿到并改写响应对象或 admitted 数组。
+  response.data.loaded.splice(1, 1);
+  response.data.skills.length = 0;
+  admitted.splice(0, admitted.length);
+  assert.equal(engine.getState(SCOPE_A).selected.size, 2, '内部选择不受出站对象改写影响');
   assert.equal(engine.handleList({ view: 'state' }, SCOPE_A).data.budgets.activeCount, 2);
-  const blocked = await engine.handleLoad({ names: ['read_file'] }, SCOPE_A, { operationId: nextOpId() });
+
+  // 预算仍按内部事实核算：再加一个必须被拒。
+  const blocked = await loadTools(engine, SCOPE_A, { names: ['read_file'] });
   assert.equal(blocked.response.error.code, 'BUDGET_EXCEEDED');
-  assert.deepEqual(engine.applyCanonicalPair(canonical, SCOPE_A), { applied: true, reason: undefined });
-  assert.equal(engine.getState(SCOPE_A).selected.size, 2, '原回执仍按未变的内部快照完整激活');
-  engine.dispose();
 });
 
-test('同时改写 operation.expectedReceipt 与出站 receipt 也不能伪造一致的部分回执', async () => {
+test('批次全有或全无：候选 revision 冲突不产生任何选择', async () => {
   const { engine } = await makeEngine();
-  const { outcome, canonical } = await admit(engine, SCOPE_A, ['glob', 'grep']);
-  outcome.operation.expectedReceipt.selected.splice(1, 1);
-  outcome.response.data.receipt.selected.splice(1, 1);
-  assert.deepEqual(engine.applyCanonicalPair(canonical, SCOPE_A), { applied: false, reason: 'receipt-mismatch' });
-  assert.equal(engine.getState(SCOPE_A).selected.size, 0);
-  engine.dispose();
+  const c1 = engine.handleSearch({ category: 'files', query: 'glob' }, SCOPE_A).data.candidates[0];
+  const c2 = engine.handleSearch({ category: 'files', query: 'grep' }, SCOPE_A).data.candidates[0];
+  const res = await loadTools(engine, SCOPE_A, {
+    candidates: [
+      { ref: c1.ref, revision: c1.revision },
+      { ref: c2.ref, revision: 'r_conflict' },
+    ],
+  });
+  assert.equal(res.response.ok, false);
+  assert.equal(engine.getState(SCOPE_A).selected.size, 0, '整批不提交');
 });
 
 test('maxInitialCategories:1 限制每页而不截断全集，连续翻页无遗漏且末页标记正确', async () => {
