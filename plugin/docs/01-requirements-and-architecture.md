@@ -1,6 +1,6 @@
 # 01 · 需求与架构
 
-更新日期：2026-11-06。依据 manifest `0.6.0`，支持 DSH Core `0.2.2-rc.1+`。精确行为以 [00 当前合同](<00-current-contract.md>) 为准，设计背景见 [14](<14-rc1-redesign.md>)，证据状态见 [05](<05-current-status.md>)。
+更新日期：2026-11-14。依据 manifest `0.7.0`，支持 DSH Core `0.2.2-rc.1+`。精确行为以 [00 当前合同](<00-current-contract.md>) 为准，设计背景见 [14](<14-rc1-redesign.md>)，证据状态见 [05](<05-current-status.md>)。
 
 ## 1. 真正要解决的问题
 
@@ -23,7 +23,7 @@
 
 ### 2.3 初始集合
 
-四入口始终保留；手动 `alwaysVisible` 默认使用核心工具名单，`initialToolsEnabled` 控制手动初始注入。`alwaysAllowPresetTools` 独立保留当前实际绑定 preset 的自有可见工具；默认模式还允许核心同名自证。`frameworkRetained` 是可信组合配置。具体例外与开关见 [00](<00-current-contract.md>)。
+四入口在正常 preset 里始终保留（`disabledPresets` 命中的 preset 除外，见 [00](<00-current-contract.md>)）；手动 `alwaysVisible` 默认使用核心工具名单，`initialToolsEnabled` 控制手动初始注入。`alwaysAllowPresetTools` 独立保留当前实际绑定 preset 的自有可见工具；默认模式还允许核心同名自证。`frameworkRetained` 是可信组合配置。具体例外与开关见 [00](<00-current-contract.md>)。
 
 ## 3. 交互形态
 

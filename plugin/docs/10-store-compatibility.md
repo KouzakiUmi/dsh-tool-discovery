@@ -1,6 +1,6 @@
 # 10 · DSH STORE 上架契约与兼容声明
 
-更新日期：2026-11-06。本文依据工作区 [manifest](<../../package.json>) `0.6.0` 区分兼容声明、测试、分发与安装；现行行为见 [00](<00-current-contract.md>)，实际测试状态见 [05](<05-current-status.md>)。本次未核验 STORE 收录、npm 最新版本或用户 Profile 的在线状态。
+更新日期：2026-11-14。本文依据工作区 [manifest](<../../package.json>) `0.7.0` 区分兼容声明、测试、分发与安装；现行行为见 [00](<00-current-contract.md>)，实际测试状态见 [05](<05-current-status.md>)。本次未核验 STORE 收录、npm 最新版本或用户 Profile 的在线状态。
 
 ## 1. 目的与边界
 

@@ -55,7 +55,10 @@ export function createDiscoveryEngine(config) {
     throw new DomainError('INCOMPATIBLE_COMPOSITION', domainText.t(['detail', 'randomRequired']));
   }
 
-  const budgets = resolveBudgets(config.budgets);
+  // 以下三项是 volatile 配置的运行中镜像：设置页可以在不重挂载插件的前提下改写它们，
+  // adapter 通过下方 setter 同步（见 setBudgets / setTolerantLoadProtected /
+  // setCategoryConfig）。构造期仍走 config 快照。
+  let budgets = resolveBudgets(config.budgets);
   const entryNames = new Set([...ENTRY_TOOL_NAMES, ...(config.entryToolNames || [])]);
   const frameworkNames = new Set(config.frameworkToolNames || []);
   /**
@@ -64,8 +67,9 @@ export function createDiscoveryEngine(config) {
    */
   const alwaysNames = new Set(config.alwaysToolNames || []);
   /** 是否容错放正常驻工具的重复加载（默认开启以解除死锁冲突） */
-  const tolerantLoadProtected = config.tolerantLoadProtected !== false;
+  let tolerantLoadProtected = config.tolerantLoadProtected !== false;
   const strictProtectedNames = new Set([...entryNames, ...frameworkNames]);
+  let categoryConfig = config.categoryConfig;
 
   const explicitLocale = config.locale === undefined || config.locale === AUTO_LOCALE ? undefined : config.locale;
   const text = explicitLocale === undefined ? domainText : createText(explicitLocale);
@@ -177,7 +181,7 @@ export function createDiscoveryEngine(config) {
         }
 
         if (req.view === 'categories') {
-          const cards = buildCategoryCards(catalog, config.categoryConfig);
+          const cards = buildCategoryCards(catalog, categoryConfig);
           const orderDigest = catalog.orderDigestByView.get('categories:all') || 'empty';
           const page = paginateCategories({
             allCards: cards,
@@ -201,7 +205,7 @@ export function createDiscoveryEngine(config) {
           }, text.t(['nextAction', 'searchInCategory']));
         }
 
-        const category = resolveCategory(/** @type {string} */ (req.category), catalog, config.categoryConfig);
+        const category = resolveCategory(/** @type {string} */ (req.category), catalog, categoryConfig);
 
         if (req.view === 'loaded') {
           const allNames = Array.from(st.selected.values())
@@ -265,7 +269,7 @@ export function createDiscoveryEngine(config) {
       try {
         const st = requireState(scope);
         const req = validateSearchRequest(raw, budgets);
-        const category = resolveCategory(req.category, catalog, config.categoryConfig);
+        const category = resolveCategory(req.category, catalog, categoryConfig);
 
         const hits = runSearch(index, { query: req.query, category, limit: req.limit + 1 });
         const count = Math.min(hits.length, req.limit);
@@ -527,6 +531,32 @@ export function createDiscoveryEngine(config) {
         seeded.push(row.name);
       }
       return { seeded, dropped };
+    },
+
+    /**
+     * 运行中热改预算（volatile 配置，设置页保存不重挂载插件）。
+     * 只更新按次判定用的值；candidateTtlMs/listCursorTtlMs 已在 store 构造时固定，
+     * 改 TTL 仍需重载（它们不在这条热改路径上）。
+     * @param {any} next
+     */
+    setBudgets(next) {
+      budgets = resolveBudgets(next);
+      return budgets;
+    },
+
+    /** 运行中热改"容忍重复加载常驻工具"。 */
+    setTolerantLoadProtected(next) {
+      tolerantLoadProtected = next !== false;
+      return tolerantLoadProtected;
+    },
+
+    /** 运行中热改类别导航文案（设置页保存不重挂载插件）。 */
+    setCategoryConfig(next) {
+      if (!isPlainObject(next)) {
+        throw new DomainError('INCOMPATIBLE_COMPOSITION', domainText.t(['detail', 'categoryConfigRequired']));
+      }
+      categoryConfig = next;
+      return categoryConfig;
     },
 
     setAlwaysVisibleNames(names) {

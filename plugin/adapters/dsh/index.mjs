@@ -27,7 +27,7 @@ import { createAdmissionStoreHandle, createAdmissionTracker } from './admission.
 import { assertRestrictionHost, viewWithoutRestriction } from './restriction-view.mjs';
 import { createRegistryChangeTracker } from './registry-change.mjs';
 import { createRegistryAdapter } from './registry.mjs';
-import { buildConfig, INITIAL_TOOL_CHOICES, publishToolChoices, resolveAlwaysVisible } from './config.mjs';
+import { buildConfig, INITIAL_TOOL_CHOICES, publishToolChoices, resolveAlwaysVisible, resolveDisabledPresets } from './config.mjs';
 import { globalToolInventory, presetToolNamesOf } from './tool-inventory.mjs';
 
 /**
@@ -164,6 +164,16 @@ function requirePlainObject(value, what) {
 /** Config 形状校验（语义校验在激活末的探测引擎里做）。 */
 export function validateConfig(raw) {
   const config = raw === undefined || raw === null ? {} : requirePlainObject(raw, 'config');
+  /**
+   * 解包 schemastery 的 volatile 引用。
+   *
+   * 宿主会先按 Config schema 解析配置再交给 apply，于是每个 `.volatile()` 字段在这里是
+   * `{get()}` 引用而不是值。**新增 volatile 字段时必须同步加在这里**：漏掉一个，
+   * 形状校验会把引用对象本身当成值（例如把 `Object.keys(ref)` 里的 `get` 当成预算键或
+   * 类别 id），真实宿主路径就会直接拒绝激活。
+   */
+  const unwrap = (value) => (value !== null && typeof value === 'object' && typeof value.get === 'function')
+    ? value.get() : value;
   const frameworkRetained = config.frameworkRetained ?? [];
   if (!Array.isArray(frameworkRetained)) {
     throw new DomainError('INCOMPATIBLE_COMPOSITION', 'frameworkRetained must be an array of strings.');
@@ -181,7 +191,7 @@ export function validateConfig(raw) {
   }
   // validateConfig 只做形状校验；本地化后的类别表在 apply 里、探测到 locale
   // 之后才构造。此处仍需兜底，否则未部署 categoryConfig 的插件会被拒。
-  const categoryConfig = config.categoryConfig ?? DEFAULT_CATEGORY_CONFIG;
+  const categoryConfig = unwrap(config.categoryConfig) ?? DEFAULT_CATEGORY_CONFIG;
   requirePlainObject(categoryConfig, 'categoryConfig');
   for (const id of Object.keys(categoryConfig)) {
     if (!CONTROLLED_CATEGORIES.includes(id)) {
@@ -196,11 +206,13 @@ export function validateConfig(raw) {
   // 覆盖"，见 buildConfig），schemastery 也会把用户显式写的 null 原样交给 apply。
   // resolveBudgets 对 undefined/null 一律回落 DEFAULT_BUDGETS，所以这里放行 null，
   // 只把"既不是缺省也不是 null 的非对象"（字符串 / 数组 / 数字 / 布尔）当形状错误。
-  if (config.budgets !== undefined && config.budgets !== null) requirePlainObject(config.budgets, 'budgets');
+  const budgetsRaw = unwrap(config.budgets);
+  if (budgetsRaw !== undefined && budgetsRaw !== null) requirePlainObject(budgetsRaw, 'budgets');
 
   // locale：只校验形状。取值交给 domain 的 normalizeLocale 归一（未知语言名回落 en）——
   // "语言没跟上"比"插件整个起不来"轻，所以不因为一个无法识别的语言名拒绝激活。
-  if (config.locale !== undefined && typeof config.locale !== 'string') {
+  const localeRaw = unwrap(config.locale);
+  if (localeRaw !== undefined && typeof localeRaw !== 'string') {
     throw new DomainError('INCOMPATIBLE_COMPOSITION', 'locale must be a string.');
   }
 
@@ -243,14 +255,40 @@ export function validateConfig(raw) {
       throw new DomainError('INCOMPATIBLE_COMPOSITION', `${key} must be a boolean.`);
     }
   }
-  // ptcCompatibility / compactBuiltinTool* / requireTrustedEpoch* 是 rc.1 上
-  // 已废弃/移除的兼容键：不再读、不再校验，schema 层保留字段只为不吞配置。
+
+  // disabledPresets：哪些 preset 下插件保持惰性。同样是 volatile 引用，先解包再校验。
+  // 显式 `[]` 是合法值（不停止任何 preset），所以只拒绝"既不是缺省也不是数组"的形状
+  // 与非字符串条目。
+  //
+  // 空白/空串条目**不在激活期拒绝**：volatile 热改走的是 schema 层
+  // `Schema.array(Schema.string())` + resolveDisabledPresets（去空白、去空串），宿主与
+  // 插件都会接受并归一。若这里严格拒绝，就会出现"热改写入成功、下次重载却拒绝激活"
+  // 的分裂——配置文件里只要留过一个 `['minimal','   ']`，插件就再也起不来。两条路径
+  // 现在共用同一判据：只查形状，空白项由 resolveDisabledPresets 静默归一。
+  const disabledPresetsRaw = typeof config.disabledPresets?.get === 'function'
+    ? config.disabledPresets.get() : config.disabledPresets;
+  if (disabledPresetsRaw !== undefined && disabledPresetsRaw !== null) {
+    if (!Array.isArray(disabledPresetsRaw)) {
+      throw new DomainError('INCOMPATIBLE_COMPOSITION', 'disabledPresets must be an array of preset ids.');
+    }
+    for (const presetId of disabledPresetsRaw) {
+      if (typeof presetId !== 'string') {
+        throw new DomainError('INCOMPATIBLE_COMPOSITION', 'disabledPresets must contain only strings.');
+      }
+    }
+  }
+  // 只返回仍生效的字段；已移除的旧键（ptcCompatibility / compactBuiltinTool* /
+  // requireTrustedEpoch* / allowMissingSessionQuery）既不再校验，也不在 schema 里声明。
+  // 宿主 schemastery 的 object 解析是非严格合并（schemastery `merge(result, data)`），
+  // 所以旧配置里的同名键仍会被原样带过——既不报错也不会生效，无需迁移。
   return {
     initialToolsEnabled: initialToolsEnabled !== false,
     alwaysAllowPresetTools: alwaysAllowPresetTools !== false,
     gateOwnScopeTools: gateOwnScopeTools !== false,
+    // 替换语义，默认 ['minimal']（宿主官方极简模式）。见 config.mjs 的 resolveDisabledPresets。
+    disabledPresets: resolveDisabledPresets(disabledPresetsRaw),
     categoryConfig,
-    budgets: config.budgets,
+    budgets: budgetsRaw,
     frameworkRetained: Object.freeze([...frameworkRetained]),
     // 替换语义，不是并集：配置给出什么就是什么（CORE_TOOL_NAMES 只作 Config 默认值，
     // 见 config.mjs）。显式 `[]` 确实清空默认项，被移除的工具之后仍可经普通
@@ -261,8 +299,8 @@ export function validateConfig(raw) {
     // 视图（不是调用方传进来的原对象），所以漏掉的键等于"这个配置项不存在"——`tolerantLoadProtected`
     // 因此长期只能取默认 true，显式关掉它无效；`locale` 的钉住同理。现在由
     // plugin/tests/unit/config-passthrough.test.mjs 对着 config.mjs 的 schema 字段逐项钉住。
-    tolerantLoadProtected: config.tolerantLoadProtected !== false,
-    locale: typeof config.locale === 'string' ? config.locale : undefined,
+    tolerantLoadProtected: unwrap(config.tolerantLoadProtected) !== false,
+    locale: typeof localeRaw === 'string' ? localeRaw : undefined,
     respectAlwaysVisible: respectAlwaysVisibleRaw === true,
   };
 }
@@ -335,30 +373,89 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       else if (typeof ctx.logger?.debug === 'function') ctx.logger.debug(`progressive-tools: ${message}`, extra);
     };
 
+    /**
+     * 某个 agent 实际绑定的 preset id（宿主 0.2.2-rc.1+ `agentPresets.composedPreset`）。
+     *
+     * 拿不到服务、会话尚未绑定或宿主形状不符时一律返回 `null`——**不猜**：识别不了的
+     * 会话按正常发现流程处理。反过来（读不到就当停用）会让一次服务缺失把整个插件
+     * 变成惰性，那才是真正的事故。
+     */
+    const presetIdOf = (agent) => {
+      try {
+        const id = ctx.get('agentPresets')?.composedPreset?.(agent?.ctx);
+        return typeof id === 'string' && id.length > 0 ? id : null;
+      } catch (error) {
+        log('preset:id-unavailable', { agentId: agent?.id, error: String(error?.message ?? error) });
+        return null;
+      }
+    };
+
+    /**
+     * 当前生效的停用名单。`disabledPresets` 是 volatile：按 raw 引用 memo，
+     * 设置面板热改后下一次读取即换新集合，稳态不重建 Set。
+     */
+    let disabledPresetsRawCache;
+    let disabledPresetsSet;
+    const getDisabledPresets = () => {
+      const raw = liveConfig()?.disabledPresets ?? config.disabledPresets;
+      const value = (raw !== null && typeof raw === 'object' && typeof raw.get === 'function') ? raw.get() : raw;
+      if (disabledPresetsSet === undefined || value !== disabledPresetsRawCache) {
+        disabledPresetsRawCache = value;
+        disabledPresetsSet = new Set(resolveDisabledPresets(value));
+      }
+      return disabledPresetsSet;
+    };
+
+    /** 该 agent 是否落在停用场景：它绑定的 preset id 在 `disabledPresets` 里。 */
+    const isPresetDisabled = (agent) => {
+      const presetId = presetIdOf(agent);
+      return presetId !== null && getDisabledPresets().has(presetId);
+    };
+
     // 面向模型的文案跟随 DSH 界面语言：Config 的 locale='auto'（默认）时读宿主界面语言文件，
     // 显式给出语言时不再读文件。路径由宿主 API 解析、读取由本层注入 —— 内核不持有 I/O 能力
     // （见 host-locale.mjs）。任何失败回落 en。
-    const locale = detectHostLocale({
-      ...(await localeSourcesOf(ctx, config.locale)),
-      localeOverride: config.locale,
-      readFile: readLocaleFile,
-      log,
-    });
-    const text = createText(locale);
-    // 纯校验函数（catalog/protocol/budgets/list/skills）不收 locale 参数，
-    // 在此一次性绑定，使它们的拒绝文案也随界面语言。详见 locale.mjs 的取舍说明。
-    setDomainLocale(locale);
-    log('activate:locale', { locale });
-    // 探测结果并入 config：engine 的 nextAction 与类别卡据此取文案。
-    config.locale = locale;
-    // 类别卡是模型可见的导航：部署未覆盖的用 locale 文案表，部署覆盖的优先。
-    // 在此而非 validateConfig 内构造——那里还没有 text。
-    const localizedDefaults = Object.fromEntries(CONTROLLED_CATEGORIES.map((id) => {
-      const c = text.category(id);
-      return [id, c ?? DEFAULT_CATEGORY_CONFIG[id]];
-    }));
-    config.categoryConfig = { ...localizedDefaults, ...(config.categoryConfig ?? {}) };
-
+    //
+    // locale 是 volatile：设置页可以在不重挂载插件的前提下改语言，所以这段被提取成可重做的
+    // applyLocale()。重做时要连带重建四个入口 definition —— 它们的 description 是
+    // createEntryDefinitions 里**立即求值**的字符串，不重建就换不了语言。
+    const localeOverrideOf = (raw) => {
+      const value = raw !== null && typeof raw === 'object' && typeof raw.get === 'function' ? raw.get() : raw;
+      return typeof value === 'string' && value.length > 0 ? value : undefined;
+    };
+    // 用户在 profile 里给出的类别文案（不含本地化默认）。首次应用语言前留存，之后每次重算
+    // 都基于它，避免把上一轮合并进去的默认值当成用户配置。
+    const userCategoryConfig = config.categoryConfig ?? {};
+    let appliedLocaleOverride = localeOverrideOf(config.locale);
+    let locale = '';
+    let text = createText();
+    let localizedDefaults = {};
+    const applyLocale = async (override) => {
+      const next = detectHostLocale({
+        ...(await localeSourcesOf(ctx, override)),
+        localeOverride: override,
+        readFile: readLocaleFile,
+        log,
+      });
+      // 纯校验函数（catalog/protocol/budgets/list/skills）不收 locale 参数，
+      // 在此一次性绑定，使它们的拒绝文案也随界面语言。详见 locale.mjs 的取舍说明。
+      setDomainLocale(next);
+      // 探测结果并入 config：engine 的 nextAction 与类别卡据此取文案。
+      config.locale = next;
+      // 类别卡是模型可见的导航：部署未覆盖的用 locale 文案表，部署覆盖的优先。
+      // 在此而非 validateConfig 内构造——那里还没有 text。
+      text = createText(next);
+      localizedDefaults = Object.fromEntries(CONTROLLED_CATEGORIES.map((id) => {
+        const c = text.category(id);
+        return [id, c ?? DEFAULT_CATEGORY_CONFIG[id]];
+      }));
+      config.categoryConfig = { ...localizedDefaults, ...userCategoryConfig };
+      appliedLocaleOverride = override;
+      locale = next;
+      log('activate:locale', { locale: next });
+      return next;
+    };
+    await applyLocale(appliedLocaleOverride);
     // rc.1+ 单一路径：restriction 层结构不符就不激活（assertRestrictionHost 一次性校验）。
     assertRestrictionHost(ctx.tools, log);
     const controlDefinitions = new Map();
@@ -370,6 +467,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       ctx,
       frameworkRetained: config.frameworkRetained,
       getAlwaysVisible: (agent) => lifecycleForMask?.currentAlwaysNames(agent) ?? [],
+      isPresetDisabled,
       log,
     });
     const tracker = createAdmissionTracker({ log });
@@ -448,6 +546,41 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       return value === true;
     };
 
+    /**
+     * 读 `gateOwnScopeTools` 的**活值**。
+     *
+     * 与 getInitialToolsEnabled / getRespectAlwaysVisible 同一读法。缺了它，设置页
+     * 对这个 volatile 开关的写入会"保存成功但永不生效"——apply 期 `false` 时把它打开，
+     * own-scope 未准入工具仍可执行（开闸失败）。语义仍是"按新 runtime 采用"：
+     * 活值只在建立 runtime 时读取，已有 runtime 不受影响。
+     */
+    const getGateOwnScopeTools = () => {
+      const raw = liveConfig()?.gateOwnScopeTools ?? config.gateOwnScopeTools;
+      const value = raw !== null && typeof raw === 'object' && typeof raw.get === 'function' ? raw.get() : raw;
+      return value !== false;
+    };
+
+    /**
+     * 运行中热改的三个 engine 侧配置（volatile）。返回的都是**可直接交给 engine**
+     * 的当前值：engine 的 setter 会各自做形状校验与归一，非法值只影响该字段。
+     */
+    const getBudgets = () => {
+      const raw = liveConfig()?.budgets ?? config.budgets;
+      const value = raw !== null && typeof raw === 'object' && typeof raw.get === 'function' ? raw.get() : raw;
+      return value ?? null;
+    };
+    const getTolerantLoadProtected = () => {
+      const raw = liveConfig()?.tolerantLoadProtected ?? config.tolerantLoadProtected;
+      const value = raw !== null && typeof raw === 'object' && typeof raw.get === 'function' ? raw.get() : raw;
+      return value !== false;
+    };
+    /** 类别文案：部署覆盖优先，未覆盖的回落当前语言的默认卡。 */
+    const getCategoryConfig = () => {
+      const raw = liveConfig()?.categoryConfig ?? config.categoryConfig;
+      const user = raw !== null && typeof raw === 'object' && typeof raw.get === 'function' ? raw.get() : raw;
+      return { ...localizedDefaults, ...(user ?? {}) };
+    };
+
     /** 把当前目录写进 Config 的 meta 并让设置面板重读。 */
     // 注意发布目标是 **apply.Config**（已构建的 Config 树），不是 schemastery 模块
     // 本身 —— 后者没有 dict.alwaysVisible。
@@ -464,7 +597,10 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
         && Array.isArray(apply.Config?.dict?.alwaysVisible?.meta?.[INITIAL_TOOL_CHOICES])) {
         return false;
       }
-      if (!publishToolChoices(apply.Config, inventory.names, { complete: inventory.complete })) return false;
+      if (!publishToolChoices(apply.Config, inventory.names, {
+        complete: inventory.complete,
+        frameworkRetained: config.frameworkRetained,
+      })) return false;
       lastPublishedChoicesKey = nextKey;
       // describe() 每次都重跑 schema.toJSON() 并比对 raw（dsh-settings:421-435），
       // meta 一变 revision 就自增并 emit settings/document-updated；invalidate()
@@ -514,6 +650,10 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
         getAlwaysVisible,
         getInitialToolsEnabled,
         getRespectAlwaysVisible,
+        getGateOwnScopeTools,
+        getBudgets,
+        getTolerantLoadProtected,
+        getCategoryConfig,
         getPresetTools,
         getPresetToken,
         onRuntimeCreated,
@@ -595,17 +735,36 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
       };
 
       // ---- 4. 四个 typed definition ----
-      for (const definition of createEntryDefinitions({
-        defineTool: resolved.defineTool,
-        resolve: resolveRuntime,
-        commitAdmissions: (runtime, rows) => lifecycle.commitAdmissions(runtime, rows),
-        revokeAdmissions: (runtime, names) => lifecycle.revokeAdmissions(runtime, names),
-        trackOperation: operation => lifecycle.trackOperation(operation),
-        text,
-      })) {
-        own(ctx.tools.register(definition));
-        controlDefinitions.set(definition.name, definition);
-      }
+      /**
+       * 注册（或重建）四个入口 definition。
+       *
+       * 语言热改必须整组重建：description 在 createEntryDefinitions 内立即求值成字符串，
+       * 不是 getter。重建是同步的（先 dispose 旧的再 register 新的），窗口极短，且只在
+       * 配置热改时发生；宿主对同名重注册会抛错，所以顺序不能颠倒。
+       */
+      const entryDisposers = [];
+      const registerEntries = () => {
+        for (const dispose of entryDisposers.splice(0)) {
+          try { dispose(); } catch (error) {
+            log('entries:dispose-failed', { error: String(error?.message ?? error) });
+          }
+        }
+        controlDefinitions.clear();
+        for (const definition of createEntryDefinitions({
+          defineTool: resolved.defineTool,
+          resolve: resolveRuntime,
+          commitAdmissions: (runtime, rows) => lifecycle.commitAdmissions(runtime, rows),
+          revokeAdmissions: (runtime, names) => lifecycle.revokeAdmissions(runtime, names),
+          trackOperation: operation => lifecycle.trackOperation(operation),
+          text,
+        })) {
+          const dispose = ctx.tools.register(definition);
+          own(dispose);
+          entryDisposers.push(dispose);
+          controlDefinitions.set(definition.name, definition);
+        }
+      };
+      registerEntries();
 
       // ---- 6. guard（只增拒绝） ----
       own(createGuard({
@@ -614,6 +773,7 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
         tracker,
         frameworkRetained: config.frameworkRetained,
         respectAlwaysVisible: getRespectAlwaysVisible,
+        isPresetDisabled,
         controlDefinitions,
         locale,
         log,
@@ -656,6 +816,38 @@ export function createProgressiveDiscoveryAdapter(deps = {}) {
           lifecycle.reconcileMask(sessionId);
         }
         return next();
+      }));
+      // volatile 配置热改：Loader 的 `_commitVolatile()` 不重挂载插件（只原地更新
+      // volatile 引用），并向本 fiber 发 `loader/volatile-update`。
+      //
+      // 必须在这里同步掩码与常驻名单，不能只靠 agent/pre-step：宿主
+      // `ReactLoopAgent.preStep` 的顺序是 `tools.resolve()`（定型 toolSet）→
+      // `systemPrompt.assemble()`（冻结发给模型的声明）→ **最后**才 waterfall
+      // `agent/pre-step`。只在 pre-step 重算，会让该步的声明、toolSet 与 guard 按
+      // 三套不同状态判定——停用↔启用切换时模型会拿到"声明里有却报 unknown tool、
+      // 声明里没有又无法换取"的死锁面。这里在事件到达时（早于下一个步骤）就重算，
+      // 使下一步的 resolve / assemble / guard 读到同一状态。
+      own(ctx.on('loader/volatile-update', () => {
+        // locale 热改需要重做文案绑定并**重建四个入口**（description 是立即求值的字符串），
+        // 且探测 'auto' 时可能读宿主语言文件——所以这条路径是异步的。先比出目标 override，
+        // 再在完成后统一重算各会话与设置页目录。
+        const nextOverride = localeOverrideOf(liveConfig()?.locale ?? config.locale);
+        const relocalize = nextOverride !== appliedLocaleOverride;
+        void (async () => {
+          try {
+            lifecycle.assertActive();
+            if (relocalize) {
+              await applyLocale(nextOverride);
+              registerEntries();
+            }
+            lifecycle.reconcileAllSessions();
+            // 应用全局目录不受配置影响，但类别/语言类字段变化后设置面板需要重读。
+            refreshToolChoices();
+          } catch (error) {
+            // 卸载后到达的事件只记录，不把异常抛进宿主的 emit 调用栈。
+            log('volatile-update:skipped', { error: String(error?.message ?? error) });
+          }
+        })();
       }));
       // 工具集变了（MCP 接入/断开、插件热注册）→ 目录 + admission 对齐 + 重掩码。
       let registryRefreshQueued = false;

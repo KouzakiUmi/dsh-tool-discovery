@@ -405,31 +405,32 @@ test('C-U11: 可选功能默认值与 Config 一致，保存只修改指定字�
   const { exports: mod } = loadClient()
   const t = mod.__test
   const config = buildConfig(Schema)
-  assert.equal(config.dict.requireTrustedEpoch.meta.default, false)
   assert.equal(config.dict.initialToolsEnabled.meta.default, true)
   assert.equal(config.dict.alwaysAllowPresetTools.meta.default, true)
   assert.equal(config.dict.gateOwnScopeTools.meta.default, true)
-  assert.equal(config.dict.requireTrustedEpochForSubagents.meta.default, false)
-  assert.notEqual(config.dict.requireTrustedEpochForSubagents.meta.volatile, true)
   const states = Object.fromEntries(t.featureChoices({}).map(([key, _label, _help, checked]) => [key, checked]))
-  assert.equal(config.dict.ptcCompatibility.meta.default, false)
-  assert.equal(config.dict.compactBuiltinToolDescriptions.meta.default, false)
-  assert.deepEqual(states, { initialToolsEnabled: true, alwaysAllowPresetTools: true, gateOwnScopeTools: true, compactBuiltinToolDescriptions: false, ptcCompatibility: false, requireTrustedEpoch: false, requireTrustedEpochForSubagents: false, tolerantLoadProtected: true, respectAlwaysVisible: false })
-  const enabled = t.featureChoices({ requireTrustedEpoch: true, initialToolsEnabled: false })
-  assert.equal(enabled.find(row => row[0] === 'requireTrustedEpoch')[3], true)
+  assert.deepEqual(states, { initialToolsEnabled: true, alwaysAllowPresetTools: true, gateOwnScopeTools: true, tolerantLoadProtected: true, respectAlwaysVisible: false })
+  // 已删除的旧开关不得回到 Config（面板与 schema 同源）。
+  for (const key of ['ptcCompatibility', 'compactBuiltinToolDescriptions', 'compactBuiltinToolOverrides',
+    'requireTrustedEpoch', 'requireTrustedEpochForSubagents']) {
+    assert.equal(config.dict[key], undefined, `${key} 已删除，不应再出现在 Config 里`)
+  }
+  const enabled = t.featureChoices({ initialToolsEnabled: false })
   assert.equal(enabled.find(row => row[0] === 'initialToolsEnabled')[3], false)
   const calls = []
   const form = { mutate: async ops => { calls.push(JSON.parse(JSON.stringify(ops))); return true } }
-  assert.equal(await t.saveSetting(form, 'requireTrustedEpoch', true), true)
-  assert.deepEqual(calls, [[{ op: 'set', path: ['requireTrustedEpoch'], value: true }]])
+  assert.equal(await t.saveSetting(form, 'tolerantLoadProtected', false), true)
+  assert.deepEqual(calls, [[{ op: 'set', path: ['tolerantLoadProtected'], value: false }]])
   assert.equal(await t.saveSetting(form, 'frameworkRetained', []), false)
   assert.equal(calls.length, 1, '页面不得写可信框架字段')
   assert.equal(await t.saveSetting(form, 'alwaysAllowPresetTools', false), true)
   assert.deepEqual(calls[1], [{ op: 'set', path: ['alwaysAllowPresetTools'], value: false }])
-  assert.equal(await t.saveSetting(form, 'requireTrustedEpochForSubagents', true), true)
-  assert.deepEqual(calls[2], [{ op: 'set', path: ['requireTrustedEpochForSubagents'], value: true }])
+  // 已删除的旧键不再有保存通道：页面写不了，也不会被当成新字段。
+  assert.equal(await t.saveSetting(form, 'requireTrustedEpoch', true), false)
+  assert.equal(await t.saveSetting(form, 'compactBuiltinToolOverrides', { read: true }), false)
+  assert.equal(calls.length, 2, '已删除的键不得产生写入')
   assert.equal(await t.saveSetting({ mutate: async () => false }, 'initialToolsEnabled', false), false)
-  await assert.rejects(() => t.saveSetting({ mutate: async () => { throw new Error('write rejected') } }, 'requireTrustedEpoch', false), /write rejected/)
+  await assert.rejects(() => t.saveSetting({ mutate: async () => { throw new Error('write rejected') } }, 'tolerantLoadProtected', false), /write rejected/)
 })
 
 test('C-U06: getSnapshot 身份稳定 —— 同输入必须返回同一引用（否则 useSyncExternalStore 无限重渲染）', () => {
@@ -517,9 +518,10 @@ test('C-U13: all editable Config fields have a save path; trusted framework stay
   const t = mod.__test
   const calls = []
   const form = { mutate: async ops => { calls.push(ops); return true } }
-  const values = { alwaysVisible: [], initialToolsEnabled: false, alwaysAllowPresetTools: false, gateOwnScopeTools: false, compactBuiltinToolDescriptions: true, compactBuiltinToolOverrides: { skill: true }, ptcCompatibility: true,
-    requireTrustedEpoch: false, requireTrustedEpochForSubagents: false, tolerantLoadProtected: false,
-    respectAlwaysVisible: true, locale: 'zh', budgets: { maxActiveTools: 3 }, categoryConfig: {} }
+  const values = { alwaysVisible: [], initialToolsEnabled: false, alwaysAllowPresetTools: false, gateOwnScopeTools: false,
+    tolerantLoadProtected: false,
+    respectAlwaysVisible: true, locale: 'zh', budgets: { maxActiveTools: 3 }, categoryConfig: {},
+    disabledPresets: ['minimal'] }
   const schema = buildConfig(Schema)
   assert.deepEqual(Object.keys(schema.dict).sort(), [...Object.keys(values), 'frameworkRetained'].sort())
   for (const [key, value] of Object.entries(values)) {
@@ -544,6 +546,18 @@ test('C-U15: omitted alwaysVisible renders real schema default, not an empty lis
   assert.equal(snapshot.metaAvailable, true)
 })
 
+test('C-U15b: omitted disabledPresets renders the schema default, not an empty list', () => {
+  const { exports: mod } = loadClient()
+  const t = mod.__test
+  const { ctx } = fakeCtx(realSchemaEnvelope(['read']), undefined, async () => true)
+  const snapshot = mod.__test.createSnapshotSource(ctx).getSnapshot()
+  // 空数组有明确语义（所有 preset 恢复发现），不能当"未设置"：显式写成 [] 才显示 []。
+  assert.deepEqual([...snapshot.value.disabledPresets], ['minimal'], '未设置时显示 Config 默认值')
+  assert.deepEqual([...snapshot.disabledPresetsDefault], ['minimal'])
+  assert.deepEqual([...t.schemaDefaultOf(t.rehydratedDict({ schema: realSchemaEnvelope([]) }, { rehydrate }), 'disabledPresets')], ['minimal'])
+  assert.deepEqual([...t.schemaDefaultOf(undefined, 'disabledPresets')], [], '拿不到 schema 时不猜默认值')
+})
+
 test('C-U16: advanced validation follows real host metadata and blocks invalid activation config', () => {
   const { exports: mod } = loadClient()
   const t = mod.__test
@@ -556,6 +570,9 @@ test('C-U16: advanced validation follows real host metadata and blocks invalid a
   for (const value of [{ bad: { title: 'Bad', capabilitySummary: 'Bad' } }, { files: { title: 'Files' } }, null]) assert.equal(t.validAdvancedSetting('categoryConfig', value, constraints), false)
   assert.equal(t.validAdvancedSetting('locale', 'zh', constraints), true)
   assert.equal(t.validAdvancedSetting('locale', 'invalid', constraints), false)
+  // disabledPresets：只校验"非空字符串数组"，不猜宿主有哪些 preset。
+  for (const value of [[], ['minimal'], ['minimal', 'ptc']]) assert.equal(t.validAdvancedSetting('disabledPresets', value, constraints), true)
+  for (const value of [[''], ['  '], [1], 'minimal', {}, null]) assert.equal(t.validAdvancedSetting('disabledPresets', value, constraints), false)
 })
 
 test('C-U17: active badge uses separate foreground and background tokens', () => {
@@ -575,12 +592,20 @@ test('C-U19: effect badges cover every feature switch with a real effect kind', 
     assert.ok(t.FEATURE_EFFECT[key] !== undefined, `${key} missing from FEATURE_EFFECT`)
     assert.ok(['reload', 'session', 'turn'].includes(t.FEATURE_EFFECT[key]), `${key} has unknown effect kind`)
   }
-  // 非 volatile（保存即重载）字段必须是 reload；volatile 的 session/turn 区分要有数据支撑：
-  // requireTrustedEpoch 家族与 tolerantLoadProtected/respectAlwaysVisible 非 volatile。
-  for (const key of ['requireTrustedEpoch', 'requireTrustedEpochForSubagents', 'tolerantLoadProtected', 'respectAlwaysVisible']) {
-    assert.equal(t.FEATURE_EFFECT[key], 'reload', `${key} is non-volatile and must be 'reload'`)
+  // 所有可编辑字段都已 volatile 化（运行中生效，服务端监听 loader/volatile-update 后
+  // 立即重算）：不应再有"保存即重载"的可编辑开关。唯一非 volatile 的 frameworkRetained
+  // 是只读项，不经过保存通道。
+  for (const key of featureKeys) {
+    assert.notEqual(t.FEATURE_EFFECT[key], 'reload', `${key} 已 volatile 化，不应再声明为重载生效`)
   }
-  assert.equal(t.FEATURE_EFFECT.ptcCompatibility, 'turn')
+  for (const key of ['tolerantLoadProtected', 'respectAlwaysVisible']) {
+    assert.equal(t.FEATURE_EFFECT[key], 'turn', `${key} 现在对运行中的会话生效`)
+  }
+  // 已删除的旧开关不得回到面板或生效类别表里。
+  for (const key of ['ptcCompatibility', 'compactBuiltinToolDescriptions', 'compactBuiltinToolOverrides',
+    'requireTrustedEpoch', 'requireTrustedEpochForSubagents']) {
+    assert.equal(t.FEATURE_EFFECT[key], undefined, `${key} 已删除，不应再有生效类别`)
+  }
   // 徽标文案键（fxReload/fxSession/fxTurn + *Title）在两个语言表里都要齐。
   for (const kind of ['Reload', 'Session', 'Turn']) {
     assert.equal(typeof t.zh[`fx${kind}`], 'string')

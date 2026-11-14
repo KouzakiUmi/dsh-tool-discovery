@@ -23,6 +23,81 @@ Nothing in this file is a product-acceptance statement. For the authoritative pe
 what is verified, what is unverified, and what this version refuses to support — see
 [`plugin/docs/05-current-status.md`](plugin/docs/05-current-status.md).
 
+## [0.7.0] — 2026-11-14
+
+### Publishing note
+
+- Source, GitHub Release asset and npm are separate milestones. The versioned Release and the
+  npm publication are both produced by CI on the `v0.7.0` tag; neither existed before that push.
+- The release pipeline does not execute the composition suites (they are `workflow_dispatch`
+  only, and a hosted runner has no DSH Core) and `portable-unit` deliberately excludes
+  `client.test.mjs` / `settings.test.mjs`. The fixes below are covered by **local** runs:
+  unit 495 pass / 0 fail (4 host-bound skips) and composition 92 pass / 0 fail. See
+  [`plugin/docs/05-current-status.md §0.3`](plugin/docs/05-current-status.md).
+- The independent read-only cross-review required before a behaviour-change push did not
+  complete: two reviewer subagents failed before returning a conclusion. Recorded as unverified;
+  the deterministic suites above are not a substitute for it.
+
+### Added
+
+- **Per-preset effect boundary (`disabledPresets`, default `["minimal"]`).** Sessions bound to a
+  listed preset stay inert: the mask becomes `restrict({ deny: four entries })` — only the four
+  discovery entries leave the visible surface, nothing else is masked — and the guard refuses only
+  those entries, adding no admission decision for any other tool. The entries are application-level
+  registrations that cannot be unregistered per preset, so this is how "not in effect" is expressed.
+  The bound preset is read from `agentPresets.composedPreset(agent.ctx)`; an unidentified preset
+  keeps the normal discovery flow instead of silently disabling the plugin. Volatile: reconciles on
+  the next request, including a preset switch during a blank session. `[]` re-enables discovery in
+  every preset. The settings page exposes the field as a JSON list.
+
+### Fixed
+
+- **Volatile config changes tore the step apart.** The host Loader's volatile write does not
+  remount the plugin; it updates the reference in place and emits `loader/volatile-update`. The
+  plugin only reconciled masks from `agent/pre-step` — which the host runs *after*
+  `tools.resolve()` (freezes the step's toolSet) and `systemPrompt.assemble()` (freezes the
+  declarations). For one request, the declarations, toolSet and guard then disagreed: a disabled↔enabled
+  `disabledPresets` flip produced a deadlocked turn where the entry in the declarations answered
+  `unknown tool` while the tool that was visible could not be admitted either. The adapter now
+  reconciles on `loader/volatile-update`, so the **next** request resolves, assembles and guards
+  from one state.
+- **`gateOwnScopeTools` never took effect.** It was declared volatile (so the settings page saved it
+  successfully and the badge promised "new session") but `lifecycle` read the flattened apply-time
+  boolean. Turning the gate *on* therefore left own-scope tools executing without admission
+  (fail-open). New runtimes now read the live value.
+- **The guard failed open when a session had no runtime.** The comment promised fail-closed; the code
+  returned "allow" for every name. A malformed third-party definition could push a session into
+  "mask installed, runtime missing", where own-scope tools — the one surface
+  `gateOwnScopeTools` exists to protect — executed without a load. Now such names are refused.
+- **One malformed binding poisoned the whole catalog.** The host's `register()` accepts a
+  `parameters` array; the domain rejects it. That threw inside `buildCatalog`, so *every* new
+  session failed to be announced and `tools/change` refresh chains aborted. Malformed bindings are
+  now skipped at the registry boundary (logged once) and each session's refresh is isolated.
+- **The settings page's advanced section could neither read nor write its six fields.** The host's
+  `describe()` publishes only the volatile projection of the schema, and `write()` rejects
+  non-volatile paths, so `locale`, `budgets`, `categoryConfig`, `tolerantLoadProtected`,
+  `respectAlwaysVisible` showed defaults instead of the configured values and every save failed with
+  "rejected — retry" (a retry could never succeed). All editable fields are now genuinely volatile
+  and hot-applied (`budgets`/`categoryConfig`/`tolerantLoadProtected` reach the running engine,
+  `locale` rebuilds the entry definitions); the read-only `frameworkRetained` is published through
+  the volatile node's meta channel.
+- **Smaller correctness fixes:** `category` now follows the same "blank is not a value" rule as
+  `cursor`/`query`/`names`/`ref` (it previously fell through to `CATEGORY_UNAVAILABLE`);
+  stem forms from the `s`/`es`/`ies` branches can no longer smuggle stopwords back in
+  (`notes` → `not`); an out-of-range cursor offset is clamped instead of being reported as
+  `BUDGET_EXCEEDED`; and blank `disabledPresets` entries are normalised on both the hot-reload and
+  activation paths (previously a hot write succeeded while the next reload refused to activate).
+
+### Removed
+
+- **Inert config keys.** `ptcCompatibility`, `compactBuiltinToolDescriptions`,
+  `compactBuiltinToolOverrides`, `requireTrustedEpoch`, `requireTrustedEpochForSubagents` and
+  `allowMissingSessionQuery` are gone from the Config schema, `validateConfig` and the settings
+  page — together with their switches, the dead per-tool description section, and
+  `settingConstraints.builtinDescriptionTools`. The host's non-strict schemastery object
+  resolution keeps same-name keys from older profiles (no error, no effect), so no migration step
+  is required. Tests now pin that the keys cannot come back into the schema or the save path.
+
 ## [0.6.0] — 2026-11-08 — rc.1+ admission rewrite (breaking)
 
 The plugin is re-designed for DSH Core `0.2.2-rc.1+` only. The entire legacy

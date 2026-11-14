@@ -3,8 +3,12 @@
 // 出现在那个返回值里；漏掉一个就等于"这个配置项静默不存在"。
 //
 // 这条门禁由一次真实事故催生：`tolerantLoadProtected`、`locale`、`respectAlwaysVisible`
-// 三个键曾在同一个返回值里一起缺席。rc.1 重设计后 compactBuiltinTool* / ptcCompatibility /
-// requireTrustedEpoch* 只是兼容字段（无效果），显式列在 DEPRECATED 中，不要求透传。
+// 三个键曾在同一个返回值里一起缺席。
+//
+// 已移除的旧键（compactBuiltinTool* / ptcCompatibility / requireTrustedEpoch* /
+// allowMissingSessionQuery）不再出现在 schema 与 effective config 中：它们没有效果，
+// 留着只会让人以为"配置了就会生效"。宿主 schemastery 的 object 解析是非严格合并，
+// 旧 profile 里的同名键被原样带过、既不报错也不生效，所以删除不需要迁移步骤。
 // 纯可移植：只读 config.mjs 的源码文本 + 调用纯函数，不依赖宿主 SDK。
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -13,14 +17,15 @@ import { validateConfig } from '../../adapters/dsh/index.mjs'
 
 const CONFIG_SOURCE = new URL('../../adapters/dsh/config.mjs', import.meta.url)
 
-/** rc.1 上保留但不再生效的兼容键：Config 里仍有，validateConfig 不校验也不透传。 */
-const DEPRECATED = new Set([
+/** 已移除、不得重新出现在 schema 或 effective config 里的旧键。 */
+const REMOVED = [
   'compactBuiltinToolDescriptions',
   'compactBuiltinToolOverrides',
   'ptcCompatibility',
   'requireTrustedEpoch',
   'requireTrustedEpochForSubagents',
-])
+  'allowMissingSessionQuery',
+]
 
 /** 扫 `buildConfig` 里 `Schema.object({ ... })` 字面量的键名（含简写属性）。 */
 function declaredFields() {
@@ -33,10 +38,10 @@ function declaredFields() {
 test('CP1: config.mjs 中每个仍生效的配置字段都必须出现在 validateConfig 的返回里', () => {
   const fields = declaredFields()
   // 棘轮：只许增不许减；扫描器漏字段时先在这里失败。
-  assert.ok(fields.length >= 14, `前置：字段扫描必须扫到全部字段，实际只扫到 ${fields.length} 个`)
+  assert.ok(fields.length >= 9, `前置：字段扫描必须扫到全部字段，实际只扫到 ${fields.length} 个`)
 
   const returned = validateConfig({})
-  const missing = fields.filter((field) => !DEPRECATED.has(field) && !Object.hasOwn(returned, field))
+  const missing = fields.filter((field) => !Object.hasOwn(returned, field))
   assert.deepEqual(missing, [],
     `这些仍生效的配置字段没有出现在 validateConfig 的返回值里，因此会静默失效：${missing.join(', ')}`)
 })
@@ -54,18 +59,18 @@ test('CP2: 曾经漏掉的键与新增的 own-scope 开关都能透传（正控�
   assert.equal(returned.gateOwnScopeTools, false, 'gateOwnScopeTools 必须到达 apply')
 })
 
-test('CP3: 已废弃的兼容键不进入 effective config（避免"看起来配置了"）', () => {
+test('CP3: 已移除的旧键既不在 schema 里，也不进入 effective config', () => {
   const returned = validateConfig({
     compactBuiltinToolDescriptions: true,
     compactBuiltinToolOverrides: { skill: true },
     ptcCompatibility: true,
     requireTrustedEpoch: true,
     requireTrustedEpochForSubagents: true,
+    allowMissingSessionQuery: true,
   })
-  for (const key of DEPRECATED) {
-    assert.equal(Object.hasOwn(returned, key), false, `${key} 不得出现在 effective config 中`)
-  }
-  // 兼容字段在 schema 层仍然存在（不吞用户配置）。
   const fields = declaredFields()
-  for (const key of DEPRECATED) assert.ok(fields.includes(key), `Config 仍应保留兼容字段 ${key}`)
+  for (const key of REMOVED) {
+    assert.equal(Object.hasOwn(returned, key), false, `${key} 不得出现在 effective config 中`)
+    assert.equal(fields.includes(key), false, `${key} 不得重新出现在 Config schema 里`)
+  }
 })

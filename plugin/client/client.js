@@ -96,6 +96,9 @@ window.__ModuleLoader__.load({
         default: Array.isArray(node?.meta?.default) ? [...node.meta.default] : [],
         catalogComplete: node?.meta?.toolDirectory?.scope === 'application' && node.meta.toolDirectory.complete === true,
         constraints: node?.meta?.settingConstraints,
+        // frameworkRetained 是**非** volatile 字段（改了要重载插件），宿主不会把它放进
+        // 实时表单的 value；它由服务端搭 alwaysVisible 节点的 meta 通道下发，只读展示。
+        frameworkRetained: Array.isArray(node?.meta?.frameworkRetained) ? node.meta.frameworkRetained : [],
       };
     }
 
@@ -171,17 +174,6 @@ window.__ModuleLoader__.load({
       presetToolsHelp: 'On by default. Includes only the current bound preset’s registered tools, even when manual injection is off. Does not grant tools from other presets or bypass native permissions. Reconciles on the next request.',
       gateOwnScope: 'Gate agent’s own registrations',
       gateOwnScopeHelp: 'On by default. Tools a runtime registers into the agent’s own scope cannot be masked by the host, so admission is their only gate: on = they must also pass tool_load before executing. Off = own-scope tools outside the catalog execute freely.',
-      compactDescriptions: 'Concise DSH default tool descriptions (deprecated)',
-      compactDescriptionsHelp: 'Has no effect on DSH 0.2.2: provider-owned declarations cannot be rewritten. Kept for configuration compatibility.',
-      descriptionTools: 'Individual tool description switches (deprecated)',
-      descriptionToolsHelp: 'Has no effect on DSH 0.2.2 together with the master switch.',
-      descriptionMasterOff: 'Deprecated on this host version; the switches below are inert.',
-      ptcCompat: 'PTC compatibility (deprecated)',
-      ptcCompatHelp: 'Has no effect on DSH 0.2.2: discovery now runs uniformly in native and PTC sessions — the same masks apply to the SDK projection inside run_code.',
-      strictEpoch: 'Require trusted epoch records (removed)',
-      strictEpochHelp: 'Removed on DSH 0.2.2: the epoch/baseline subsystem no longer exists — admission is per session. This field is kept for configuration compatibility and has no effect.',
-      childEpoch: 'Also require trusted epochs for subagents (removed)',
-      childEpochHelp: 'Removed together with the trusted-epoch setting on DSH 0.2.2. Has no effect.',
       title: 'Manual initial tool list',
       intro: 'Lists application-wide registered tools, not session loading state. When manual injection is on, checked tools are advertised initially. Preset retention is controlled separately; registration does not guarantee permission in every session.',
       groupNote: 'Grouping: built-in = DSH default list, MCP = mcp__ prefix, everything else is plugin/third-party (the registry does not record the owning plugin).',
@@ -197,22 +189,24 @@ window.__ModuleLoader__.load({
       missing: 'not registered in the application catalog — uncheck to remove',
       unknown: 'global registration status not confirmed',
       fixed: 'Always present',
-      fixedNote: 'The four discovery entries are always advertised and cannot be removed.',
+      fixedNote: 'The four discovery entries are always advertised and cannot be removed — except in presets listed under disabledPresets, where they hide along with the rest of the plugin.',
       pending: 'The list reconciles on the next request. Existing on-demand admissions remain until unloaded.',
       saved: 'Saved.',
       failed: 'Not saved — the host rejected the write. Retry.',
       tolerantLoad: 'Allow idempotent loading of initial tools',
-      tolerantLoadHelp: 'On by default. Off rejects repeated loads of baseline tools. Changing this reloads the plugin.',
+      tolerantLoadHelp: 'On by default. Off rejects repeated loads of baseline tools. Applied to running sessions without a reload.',
       exactList: 'Use an exact initial tool list (including DSH core tools)',
-      exactListHelp: 'Off by default: when initial injection is enabled, registered core tools are also included. Turn on to require tool_load for unlisted core tools. Changing this reloads the plugin.',
+      exactListHelp: 'Off by default: when initial injection is enabled, registered core tools are also included. Turn on to require tool_load for unlisted core tools. Applied to running sessions without a reload.',
+      disabledPresets: 'Presets where discovery stays off (JSON)',
+      disabledPresetsHelp: 'Preset ids in which this plugin stays inert: the four discovery entries are hidden, nothing else is masked, and no admission gate applies — native tools behave exactly as without this plugin. Default ["minimal"], the built-in minimal preset. [] turns discovery back on everywhere. Reconciles on the next request.',
       advanced: 'Advanced configuration',
-      reload: 'These fields reload the plugin when saved; in-memory state may reset.',
+      reload: 'These fields apply to running sessions without a reload; the read-only entry below comes from the deployment config.',
       locale: 'Model-facing language', auto: 'Follow interface', en: 'English', zh: 'Chinese',
       budgets: 'Budget overrides (JSON)',
-      budgetsHelp: 'null disables overrides. Use an object of budget keys and positive integers or null for individual hard limits. Small limits can block normal tasks or add model round-trips; they do not guarantee lower token costs.',
+      budgetsHelp: 'null disables overrides. Use an object of budget keys and positive integers or null for individual hard limits. Applied to running sessions without a reload (the two TTL keys still need one). Small limits can block normal tasks or add model round-trips; they do not guarantee lower token costs.',
       categoryConfig: 'Category navigation copy (JSON)',
-      categoryConfigHelp: 'Use an object keyed by category, with title and capabilitySummary. An empty object uses localized defaults. Categories do not grant permissions.',
-      framework: 'Trusted framework entries (read-only)',
+      categoryConfigHelp: 'Use an object keyed by category, with title and capabilitySummary. An empty object uses localized defaults. Applied to running sessions without a reload. Categories do not grant permissions.',
+      framework: 'Trusted framework entries (read-only, from the deployment config)',
       apply: 'Save',
       invalidValue: 'Invalid configuration: check known keys, positive integer limits, or category title/capabilitySummary fields.',
       loading: 'Configuration is loading or unavailable.', readOnly: 'This configuration is read-only.', saving: 'Saving…',
@@ -255,17 +249,6 @@ window.__ModuleLoader__.load({
       presetToolsHelp: '默认开启。保留当前会话实际绑定 preset 登记的工具，即使关闭手动初始注入；不会放行其它 preset 的工具或绕过原生权限。在下一请求对齐。',
       gateOwnScope: '对 agent 自身注册的工具同样要求准入',
       gateOwnScopeHelp: '默认开启。注册到 agent 自身 scope 的工具宿主无法遮蔽，准入是它唯一的闸门：开启 = 也要先 tool_load 才能执行；关闭 = 目录之外的自身注册工具直接放行。',
-      compactDescriptions: 'DSH 默认工具提示词精简（已废弃）',
-      compactDescriptionsHelp: '在 DSH 0.2.2 上无效：provider 持有的声明无法改写。仅为配置兼容保留。',
-      descriptionTools: '逐工具描述精简开关（已废弃）',
-      descriptionToolsHelp: '在 DSH 0.2.2 上随总开关一并无效。',
-      descriptionMasterOff: '此宿主版本已废弃：以下开关不再生效。',
-      ptcCompat: 'PTC 模式兼容（已废弃）',
-      ptcCompatHelp: '在 DSH 0.2.2 上无效：发现现在统一在 native 与 PTC 会话中工作——run_code 内的 SDK 投影遵守同一套掩码。',
-      strictEpoch: '强制可信周期校验（已移除）',
-      strictEpochHelp: '在 DSH 0.2.2 上已移除：周期/基线子系统不复存在——准入按会话管理。仅为配置兼容保留，无效果。',
-      childEpoch: '对子代理强制可信周期校验（已移除）',
-      childEpochHelp: '在 DSH 0.2.2 上随可信周期设置一并移除。无效果。',
       title: '手动初始工具名单',
       intro: '以下是应用全局登记目录，不是会话加载状态。开启手动初始注入后，勾选工具会直接披露；preset 保留由独立开关控制。全局已登记不代表每个会话都具有执行权限。',
       groupNote: '分组依据：内置 = DSH 默认名单，MCP = mcp__ 前缀命名，其余归为插件与第三方（注册表不记录工具归属的具体插件）。',
@@ -281,22 +264,24 @@ window.__ModuleLoader__.load({
       missing: '未在应用全局目录登记（取消勾选可移除）',
       unknown: '全局登记状态尚未确认',
       fixed: '始终存在',
-      fixedNote: '四个发现入口始终披露，不可删除。',
+      fixedNote: '四个发现入口始终披露，不可删除；`disabledPresets` 命中的 preset 里它们随插件一起隐藏。',
       pending: '名单在下一请求对齐；已有按需准入保持到显式卸载。',
       saved: '已保存。',
       failed: '未保存——宿主拒绝了这次写入，可重试。',
       tolerantLoad: '容忍重复加载初始工具',
-      tolerantLoadHelp: '默认开启，重复加载常驻工具保持幂等；关闭后拒绝此类重复加载。修改会重新加载插件。',
+      tolerantLoadHelp: '默认开启，重复加载常驻工具保持幂等；关闭后拒绝此类重复加载。对运行中的会话立即生效，不需要重载。',
       exactList: '使用精确初始名单（含 DSH 核心工具）',
-      exactListHelp: '默认关闭：初始注入开启时还会加入已登记的核心工具。开启后，名单外的核心工具也需 tool_load。修改会重新加载插件。',
+      exactListHelp: '默认关闭：初始注入开启时还会加入已登记的核心工具。开启后，名单外的核心工具也需 tool_load。对运行中的会话立即生效，不需要重载。',
+      disabledPresets: '不生效的预设名单（JSON）',
+      disabledPresetsHelp: '在这些 preset 里插件保持惰性：四个发现入口被隐藏、其它工具一律不遮罩、也不加准入门禁，原生工具与没装本插件时一致。默认 ["minimal"]，即宿主内置极简模式；填 [] 表示所有 preset 都恢复发现流程。在下一请求对齐。',
       advanced: '高级配置',
-      reload: '保存这些字段会重新加载插件，可能重置内存状态。',
+      reload: '这些字段对运行中的会话立即生效，不需要重载；下面一行只读项来自部署配置。',
       locale: '模型可见文案语言', auto: '跟随界面', en: '英语', zh: '中文',
       budgets: '预算覆盖（JSON）',
-      budgetsHelp: 'null 表示不覆盖。对象可填写预算键与正整数，单项硬限额可用 null 关闭。较小上限可能阻断正常任务或增加模型往返，不保证降低 token 成本。',
+      budgetsHelp: 'null 表示不覆盖。对象可填写预算键与正整数，单项硬限额可用 null 关闭。对运行中的会话立即生效（两个 TTL 键仍需重载）。较小上限可能阻断正常任务或增加模型往返，不保证降低 token 成本。',
       categoryConfig: '类别导航文案（JSON）',
-      categoryConfigHelp: '以类别为键，填写 title 与 capabilitySummary；空对象使用本地化默认值。类别不授予权限。',
-      framework: '可信框架保留项（只读）',
+      categoryConfigHelp: '以类别为键，填写 title 与 capabilitySummary；空对象使用本地化默认值。对运行中的会话立即生效。类别不授予权限。',
+      framework: '可信框架保留项（只读，来自部署配置）',
       apply: '保存',
       invalidValue: '配置无效：请检查支持的键、正整数上限、或类别的 title/capabilitySummary 字段。',
       loading: '配置正在加载或暂不可用。', readOnly: '当前配置为只读。', saving: '正在保存…',
@@ -324,13 +309,27 @@ window.__ModuleLoader__.load({
      * :421-435、:444），活目录（meta.initialToolChoices）与 DSH 默认名单
      * （meta.default）都在这棵树上 —— 不必另开 RPC、广播或只读配置字段。
      */
-    function alwaysVisibleNode (view, schemaService) {
+    function rehydratedDict (view, schemaService) {
       if (view === undefined || typeof schemaService?.rehydrate !== 'function') return undefined;
       try {
-        return schemaService.rehydrate(view.schema)?.dict?.alwaysVisible;
+        return schemaService.rehydrate(view.schema)?.dict;
       } catch {
         return undefined;
       }
+    }
+
+    function alwaysVisibleNode (view, schemaService) {
+      return rehydratedDict(view, schemaService)?.alwaysVisible;
+    }
+
+    /**
+     * 字段在 schema 上的**真默认值**。用户没写过该字段时面板必须显示默认值，
+     * 而不是空表——否则 disabledPresets 这样的字段会被看成"没有停用任何 preset"，
+     * 一次保存就把默认行为改掉。schemastery 的 toJSON 把 `.default()` 放在 `meta.default`。
+     */
+    function schemaDefaultOf (dict, name) {
+      const value = dict?.[name]?.meta?.default;
+      return Array.isArray(value) ? [...value] : [];
     }
 
     /** mutate 抛错时的记录：呈现给用户，绝不吞成未处理拒绝。 */
@@ -347,12 +346,10 @@ window.__ModuleLoader__.load({
       initialToolsEnabled: 'turn',
       alwaysAllowPresetTools: 'turn',
       gateOwnScopeTools: 'session',
-      compactBuiltinToolDescriptions: 'session',
-      ptcCompatibility: 'turn',
-      requireTrustedEpoch: 'reload',
-      requireTrustedEpochForSubagents: 'reload',
-      tolerantLoadProtected: 'reload',
-      respectAlwaysVisible: 'reload',
+      // 二者已随 volatile 化改为运行中生效（服务端监听 loader/volatile-update 后立即重算
+      // 掩码/常驻名单与 engine 配置），不再需要重挂载插件。
+      tolerantLoadProtected: 'turn',
+      respectAlwaysVisible: 'turn',
     };
 
     function featureChoices(value) {
@@ -360,40 +357,23 @@ window.__ModuleLoader__.load({
         ['initialToolsEnabled', 'initialTools', 'initialToolsHelp', value?.initialToolsEnabled !== false],
         ['alwaysAllowPresetTools', 'presetTools', 'presetToolsHelp', value?.alwaysAllowPresetTools !== false],
         ['gateOwnScopeTools', 'gateOwnScope', 'gateOwnScopeHelp', value?.gateOwnScopeTools !== false],
-        ['compactBuiltinToolDescriptions', 'compactDescriptions', 'compactDescriptionsHelp', value?.compactBuiltinToolDescriptions === true],
-        ['ptcCompatibility', 'ptcCompat', 'ptcCompatHelp', value?.ptcCompatibility === true],
-        ['requireTrustedEpoch', 'strictEpoch', 'strictEpochHelp', value?.requireTrustedEpoch === true],
-        ['requireTrustedEpochForSubagents', 'childEpoch', 'childEpochHelp', value?.requireTrustedEpochForSubagents === true],
         ['tolerantLoadProtected', 'tolerantLoad', 'tolerantLoadHelp', value?.tolerantLoadProtected !== false],
         ['respectAlwaysVisible', 'exactList', 'exactListHelp', value?.respectAlwaysVisible === true],
       ];
     }
 
-    function descriptionToolRows(value, constraints) {
-      const tools = constraints?.builtinDescriptionTools;
-      if (!Array.isArray(tools)) return [];
-      return tools.filter(tool => typeof tool?.name === 'string').map(tool => ({
-        name: tool.name,
-        checked: typeof value?.compactBuiltinToolOverrides?.[tool.name] === 'boolean'
-          ? value.compactBuiltinToolOverrides[tool.name] : tool.defaultEnabled === true,
-      }));
-    }
-
-    function saveDescriptionTool(form, constraints, name, enabled) {
-      if (typeof enabled !== 'boolean' || !Array.isArray(constraints?.builtinDescriptionTools)
-        || !constraints.builtinDescriptionTools.some(tool => tool.name === name)) return Promise.resolve(false);
-      // Write only the touched leaf; never replace sibling switches with a stale map.
-      return form.mutate([{ op: 'set', path: ['compactBuiltinToolOverrides', name], value: enabled }]);
-    }
-
     const BOOLEAN_SETTINGS = featureChoices({}).map(([key]) => key);
     function saveSetting(form, key, value) {
-      if (![...BOOLEAN_SETTINGS, 'alwaysVisible', 'locale', 'budgets', 'categoryConfig', 'compactBuiltinToolOverrides'].includes(key)) return Promise.resolve(false);
+      if (![...BOOLEAN_SETTINGS, 'alwaysVisible', 'locale', 'budgets', 'categoryConfig', 'disabledPresets'].includes(key)) return Promise.resolve(false);
       return form.mutate([{ op: 'set', path: [key], value }]);
     }
 
     function validAdvancedSetting(key, value, constraints) {
       if (key === 'locale') return typeof value === 'string' && ['auto', 'en', 'zh'].includes(value);
+      // preset id 是宿主任意字符串：只校验形状（非空字符串数组），不去猜有哪些 preset。
+      if (key === 'disabledPresets') {
+        return Array.isArray(value) && value.every((presetId) => typeof presetId === 'string' && presetId.trim().length > 0);
+      }
       if (key === 'budgets' && value === null) return true;
       if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
       if (key === 'budgets') {
@@ -576,16 +556,22 @@ window.__ModuleLoader__.load({
       }, h('span', { 'aria-hidden': 'true', style: S.switchThumb(checked) }));
     }
 
-    function JsonSetting ({ t, name, value, disabled, keys, onSave, draftStore }) {
+    function JsonSetting ({ t, name, value, disabled, keys, shape = 'object', onSave, draftStore }) {
       const [draft, setDraft] = useState(() => draftStore.read(name, value));
       // 实时校验：输入即解析（不等人点保存才报错）。
-      // 语法错**与形状错**（类别/预算必须是对象：null 与 [] 一律非法）都禁用保存，
-      // 并显示 jsonInvalidNow；budgets=null 合法（关闭覆盖），故只有 categoryConfig 拒绝 null。
+      // 语法错**与形状错**都禁用保存，并显示 jsonInvalidNow。
+      //   * shape='object'（budgets / categoryConfig）：必须是对象；budgets 额外接受 null（关闭覆盖）。
+      //   * shape='string-array'（disabledPresets）：必须是非空字符串数组，逐项去空白后非空。
       // 形状错与语法错同归为 undefined（JSON.parse 不会产出 undefined，二者不冲突）。
       const parseDraft = (text) => {
         try {
           const parsed = JSON.parse(text);
-          if ((parsed === null && name !== 'budgets') || (parsed !== null && (typeof parsed !== 'object' || Array.isArray(parsed)))) return undefined;
+          if (Array.isArray(parsed)) {
+            if (shape !== 'string-array') return undefined;
+            return parsed.every((item) => typeof item === 'string' && item.trim().length > 0) ? parsed : undefined;
+          }
+          if (shape === 'string-array') return undefined;
+          if ((parsed === null && name !== 'budgets') || (parsed !== null && typeof parsed !== 'object')) return undefined;
           return parsed;
         } catch {
           return undefined;
@@ -600,7 +586,7 @@ window.__ModuleLoader__.load({
       return h('section', { style: S.jsonSection },
         h('label', { htmlFor: `tool-discovery-${name}`, style: S.featLabel }, t(name)),
         h('p', { style: S.featHelp }, t(`${name}Help`)),
-        h('code', { style: S.jsonKeys }, (keys ?? []).join(', ')),
+        Array.isArray(keys) && keys.length > 0 ? h('code', { style: S.jsonKeys }, keys.join(', ')) : null,
         h('textarea', { id: `tool-discovery-${name}`, rows: 6, value: draft, disabled,
           'aria-invalid': parsedNow === undefined ? 'true' : undefined,
           style: parsedNow === undefined ? { ...S.textarea, borderColor: DANGER } : S.textarea,
@@ -616,7 +602,7 @@ window.__ModuleLoader__.load({
     }
 
     /** 叶子组件：只收 props，不读 ctx。 */
-    function SettingsPanel ({ t, snapshot, error, notice, busy, onToggle, onBulk, onRestore, onFeature, onDescriptionTool, onSetting, draftStore }) {
+    function SettingsPanel ({ t, snapshot, error, notice, busy, onToggle, onBulk, onRestore, onFeature, onSetting, draftStore }) {
       const [query, setQuery] = useState('');
       // 分组折叠状态：默认全部展开；搜索时强制展开（受控渲染，不用 details 避免 open 属性脱同步）。
       const [collapsed, setCollapsed] = useState({});
@@ -702,25 +688,7 @@ window.__ModuleLoader__.load({
           h('h3', { style: S.cardTitle }, t('features')),
           featureRow('initialToolsEnabled', false),
           featureRow('alwaysAllowPresetTools', true),
-          featureRow('gateOwnScopeTools', true),
-          featureRow('compactBuiltinToolDescriptions', true),
-          featureRow('ptcCompatibility', true)),
-
-        h('details', { style: S.card },
-          h('summary', { style: S.aboutSummary }, t('descriptionTools')),
-          h('p', { id: 'description-tools-help', style: S.cardDesc }, t('descriptionToolsHelp')),
-          snapshot?.value?.compactBuiltinToolDescriptions !== true
-            ? h('p', { style: S.note }, t('descriptionMasterOff')) : null,
-          !snapshot?.meta?.constraints?.builtinDescriptionTools
-            ? h('p', { role: 'status', style: S.note }, t('loading')) : null,
-          ...descriptionToolRows(snapshot?.value, snapshot?.meta?.constraints).map((tool, index) => {
-            const id = `concise-tool-${tool.name}`;
-            return h('div', { key: tool.name, style: S.featRow(index > 0) },
-              h('label', { id: `${id}-label`, htmlFor: id, style: S.featLabel }, h('code', null, tool.name)),
-              h(Switch, { id, checked: tool.checked, disabled,
-                labelledBy: `${id}-label`, describedBy: 'description-tools-help',
-                onChange: enabled => onDescriptionTool(tool.name, enabled) }));
-          })),
+          featureRow('gateOwnScopeTools', true)),
 
         h('section', { style: S.card },
           h('h3', { style: S.cardTitle }, t('title')),
@@ -802,8 +770,17 @@ window.__ModuleLoader__.load({
             h('select', { id: 'tool-discovery-locale', value: locale, disabled, style: S.select,
               onChange: event => onSetting('locale', event.target.value) },
               ...[...new Set(['auto', 'en', 'zh', locale])].map(value => h('option', { key: value, value }, ['auto', 'en', 'zh'].includes(value) ? t(value) : value)))),
-          featureRow('requireTrustedEpoch', true),
-          featureRow('requireTrustedEpochForSubagents', true),
+          h(JsonSetting, {
+            key: `disabledPresets:${JSON.stringify(snapshot?.value?.disabledPresets)}`,
+            t, name: 'disabledPresets', shape: 'string-array', draftStore,
+            value: Array.isArray(snapshot?.value?.disabledPresets) ? snapshot.value.disabledPresets : [],
+            // 元数据未就绪时读不到 schema 默认值（schemaDefaultOf 只能给 []），而 [] 是
+            // 明确语义——"所有 preset 都恢复发现流程"，不是"未设置"。此时必须禁用保存：
+            // 否则用户看到 [] 点一下保存，就把默认的 ["minimal"] 改写成 []，静默关掉了
+            // 极简模式的停用。
+            disabled: disabled || snapshot?.metaAvailable === false,
+            onSave: onSetting,
+          }),
           featureRow('tolerantLoadProtected', true),
           featureRow('respectAlwaysVisible', true),
           ...['budgets', 'categoryConfig'].map(name => h(JsonSetting, {
@@ -812,7 +789,7 @@ window.__ModuleLoader__.load({
             disabled: disabled || !snapshot?.meta?.constraints,
             keys: snapshot?.meta?.constraints?.[name === 'budgets' ? 'budgetKeys' : 'categoryKeys'], onSave: onSetting,
           })),
-          h('p', { style: S.note }, `${t('framework')}: ${(snapshot?.value?.frameworkRetained ?? []).join(', ') || '—'}`)))
+          h('p', { style: S.note }, `${t('framework')}: ${(snapshot?.meta?.frameworkRetained ?? []).join(', ') || '—'}`)))
     }
 
     /**
@@ -835,7 +812,8 @@ window.__ModuleLoader__.load({
           && cachedSources.form === formSnapshot) {
           return cachedSnapshot;
         }
-        const node = alwaysVisibleNode(ownView(mirrorSnapshot), schemaService);
+        const dict = rehydratedDict(ownView(mirrorSnapshot), schemaService);
+        const node = dict?.alwaysVisible;
         const meta = readMeta(node);
         cachedSources = { mirror: mirrorSnapshot, form: formSnapshot };
         cachedSnapshot = {
@@ -845,9 +823,15 @@ window.__ModuleLoader__.load({
           // 之间猜宿主键名。
           choices: meta.choices,
           defaults: meta.default,
+          disabledPresetsDefault: schemaDefaultOf(dict, 'disabledPresets'),
           metaAvailable: node !== undefined,
-          value: { ...formSnapshot.value, alwaysVisible: Array.isArray(formSnapshot.value?.alwaysVisible)
-            ? formSnapshot.value.alwaysVisible : [...meta.default] },
+          value: { ...formSnapshot.value,
+            alwaysVisible: Array.isArray(formSnapshot.value?.alwaysVisible)
+              ? formSnapshot.value.alwaysVisible : [...meta.default],
+            // 缺省（老配置里还没有这个键）显示 schema 默认 ['minimal']，不显示空数组：
+            // 空数组有明确语义（所有 preset 都恢复发现），不能拿来当"未设置"。
+            disabledPresets: Array.isArray(formSnapshot.value?.disabledPresets)
+              ? formSnapshot.value.disabledPresets : schemaDefaultOf(dict, 'disabledPresets') },
           revision: formSnapshot.revision,
           status: formSnapshot.status,
           writable: formSnapshot.writable,
@@ -894,7 +878,7 @@ window.__ModuleLoader__.load({
         const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
         /** 一次写入：false 或抛错都是"没被宿主接受"，必须显式呈现。 */
-        const write = useCallback(async (value, key = 'alwaysVisible', toolName) => {
+        const write = useCallback(async (value, key = 'alwaysVisible') => {
           const current = getSnapshot();
           if (!mounted.current) return false; // 已卸载：不再发起写入
           if (writing.current || current.status !== 'ready' || current.writable === false) return false;
@@ -905,8 +889,7 @@ window.__ModuleLoader__.load({
           clearNoticeTimer();
           let ok = false;
           try {
-            ok = toolName === undefined ? await saveSetting(form, key, value)
-              : await saveDescriptionTool(form, current.meta.constraints, toolName, value);
+            ok = await saveSetting(form, key, value);
           } catch (reason) {
             logSaveFailure(reason);
           } finally {
@@ -957,7 +940,6 @@ window.__ModuleLoader__.load({
           if (!BOOLEAN_SETTINGS.includes(key) || typeof enabled !== 'boolean') return false;
           return write(enabled, key);
         }, []);
-        const onDescriptionTool = useCallback((name, enabled) => write(enabled, 'compactBuiltinToolOverrides', name), []);
         const onSetting = useCallback((key, value) => {
           if (!validAdvancedSetting(key, value, getSnapshot().meta.constraints)) {
             setNotice(null);
@@ -966,7 +948,7 @@ window.__ModuleLoader__.load({
           }
           return write(value, key);
         }, []);
-        return h(SettingsPanel, { t, snapshot, error, notice, busy, onToggle, onBulk, onRestore, onFeature, onDescriptionTool, onSetting, draftStore });
+        return h(SettingsPanel, { t, snapshot, error, notice, busy, onToggle, onBulk, onRestore, onFeature, onSetting, draftStore });
       };
     }
 
@@ -994,8 +976,7 @@ window.__ModuleLoader__.load({
     // 供 vm 内测试取用（不参与渲染）：纯逻辑 + 接缝 + 装配点。
     exports.__test = {
       buildRows, filterRows, toggleName, isDefaultSelection, setMembership, groupRows, featureChoices, saveSetting, validAdvancedSetting,
-      descriptionToolRows, saveDescriptionTool,
-      ownView, alwaysVisibleNode, readMeta, createTabRoot, createSnapshotSource, SettingsPanel,
+      ownView, alwaysVisibleNode, rehydratedDict, schemaDefaultOf, readMeta, createTabRoot, createSnapshotSource, SettingsPanel,
       FIXED_ENTRIES, NS, PLUGIN_TAB_ID, SECTION_ID, SLOT, createDraftStore, S, zh, en,
       FEATURE_EFFECT, ensurePanelStyles, PANEL_CSS,
     };

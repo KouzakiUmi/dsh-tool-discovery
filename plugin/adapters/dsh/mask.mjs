@@ -16,9 +16,12 @@
 //     不再区分展示模式（旧实现为旧宿主绕路而设的 PTC lift 分支删除）。
 //   * 自反馈环：自己换掩码触发的 tools/change 由 mutating 计数识别，
 //     reconcile 调用方跳过全量重算（registry-change 指纹另有职责）。
+//   * 停用场景（绑定 preset 在 disabledPresets 里）：不用 allow 白名单，而是
+//     `deny` 四个入口——不能按 preset 注销应用级注册，所以"不生效"只能是
+//     "只把发现入口从可见面移除，其它一律不遮"，新注册的全局工具也不需要重算。
 import { ENTRY_TOOL_NAMES } from '../../domain/index.mjs';
 
-export function createMaskController({ ctx, frameworkRetained = [], getAlwaysVisible, log = () => {} }) {
+export function createMaskController({ ctx, frameworkRetained = [], getAlwaysVisible, isPresetDisabled = () => false, log = () => {} }) {
   /**
    * agent → state：
    *   disposer/active —— 当前生效的 restriction 及其 filter；
@@ -32,18 +35,29 @@ export function createMaskController({ ctx, frameworkRetained = [], getAlwaysVis
   let mutating = 0;
 
   /**
-   * 目标 allow 名单：入口 + framework 保留 + 常驻（alwaysVisible）+ admitted，
-   * 按当前 restrictable 过滤。常驻名单必须进 allow：否则初始工具被遮住，
-   * 出现"模型看不见但门禁放行"的矛盾面。
+   * 本 agent 的目标过滤器与缓存键：
+   *   * 停用场景 → `{ deny: [四个入口] }`：只把发现入口移出可见面，其余工具（含之后
+   *     注册的全局工具）一律保持原样，不需要每次重建 allow 全集；入口不在可遮面
+   *     （同名 scope 覆盖等边角）时连掩码都不装（`filter:null`）。
+   *   * 正常场景 → `{ allow: 入口 + framework 保留 + 常驻（alwaysVisible）+ admitted }`，
+   *     按当前 restrictable 过滤。常驻名单必须进 allow：否则初始工具被遮住，
+   *     出现"模型看不见但门禁放行"的矛盾面。
    * @param {any} agent
    * @param {Set<string>} admittedNames
+   * @returns {{key:string, filter:{allow:string[]}|{deny:string[]}|null}}
    */
   function desired(agent, admittedNames) {
     const restrictable = ctx.tools.view(agent).restrictableNames;
+    if (isPresetDisabled(agent)) {
+      const deny = ENTRY_TOOL_NAMES.filter((name) => restrictable.has(name));
+      if (deny.length === 0) return { key: 'disabled:none', filter: null };
+      return { key: JSON.stringify({ deny }), filter: { deny } };
+    }
     const names = new Set([...ENTRY_TOOL_NAMES, ...alwaysVisibleNames]);
     for (const name of alwaysNamesFor(agent) ?? []) names.add(name);
     for (const name of admittedNames ?? []) names.add(name);
-    return [...names].filter((name) => restrictable.has(name)).sort();
+    const allow = [...names].filter((name) => restrictable.has(name)).sort();
+    return { key: JSON.stringify({ allow }), filter: { allow } };
   }
 
   /** 当前仍留在该 agent 宿主层里的 restriction filter（回收判断的唯一依据）。 */
@@ -90,21 +104,41 @@ export function createMaskController({ ctx, frameworkRetained = [], getAlwaysVis
       states.set(agent, state);
     }
     const names = admittedNames instanceof Map ? new Set(admittedNames.keys()) : admittedNames;
-    const allow = desired(agent, names);
-    const key = JSON.stringify(allow);
+    const plan = desired(agent, names);
+    const key = plan.key;
     // 每次 reconcile 都重试此前释放失败的旧掩码：不换集合也要能自愈。
     if (state.pending.length > 0) {
       mutating++;
       try { retryPending(agent, state); } finally { mutating--; }
     }
-    if (state.key === key && state.disposer) { state.error = null; return; }
+    if (state.key === key && (state.disposer !== null || plan.filter === null)) { state.error = null; return; }
+    if (plan.filter === null) {
+      // 停用且没有可遮入口：撤掉自有掩码，并且**不**安装新的——
+      // "不装掩码"本身就是本插件对这个会话不生效。
+      const old = state.disposer;
+      const oldFilters = state.active;
+      state.disposer = null;
+      state.active = [];
+      state.key = key;
+      state.error = null;
+      if (old !== null) {
+        mutating++;
+        try {
+          const entry = { disposer: old, filters: oldFilters };
+          if (!releaseOwned(agent, state, entry)) state.pending.push(entry);
+        } finally {
+          mutating--;
+        }
+      }
+      return;
+    }
     const before = liveFilters(agent);
     let disposer;
     let installed = false;
     mutating++;
     try {
       // Add first, then release: temporary intersection never broadens access.
-      disposer = agent.ctx.tools.restrict({ allow });
+      disposer = agent.ctx.tools.restrict(plan.filter);
       const added = [...liveFilters(agent)].filter((item) => !before.has(item));
       if (added.length !== 1) throw new Error('Unable to identify the discovery restriction');
       state.filters.add(added[0]);

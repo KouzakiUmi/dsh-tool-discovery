@@ -1,6 +1,6 @@
 # DSH Tool Discovery — development guide
 
-Source manifest: `0.6.0`. Start with the [current contract](<docs/00-current-contract.md>),
+Source manifest: `0.7.0`. Start with the [current contract](<docs/00-current-contract.md>),
 [architecture](<docs/01-requirements-and-architecture.md>) and [verification status](<docs/05-current-status.md>).
 The numbered historical documents retain their original evidence; they are not the current defaults.
 

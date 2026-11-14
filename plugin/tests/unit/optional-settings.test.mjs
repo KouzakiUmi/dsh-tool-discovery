@@ -1,8 +1,9 @@
 // 可选配置面的类型校验（rc.1 重设计）。
 //
-// 旧版 requireTrustedEpoch / requireTrustedEpochForSubagents / ptcCompatibility 在
-// rc.1 上已移除：Config 仍保留字段只为不吞旧配置，validateConfig 不再校验也不再透传。
-// 新路径的可选布尔项是 initialToolsEnabled / alwaysAllowPresetTools / gateOwnScopeTools。
+// 旧版 requireTrustedEpoch / requireTrustedEpochForSubagents / ptcCompatibility 等键
+// 已从 Config 与 validateConfig 中删除（无效果，留着只会误导）。旧 profile 里的同名键
+// 由宿主 schemastery 的非严格合并原样带过，不报错也不生效，因此无需迁移。
+// 可选布尔项是 initialToolsEnabled / alwaysAllowPresetTools / gateOwnScopeTools。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateConfig } from '../../adapters/dsh/index.mjs';
@@ -32,10 +33,12 @@ test('optional values: invalid types do not silently enable or disable checks', 
 });
 
 test('removed rc.1 keys are ignored, not re-enabled or passed through', () => {
-  for (const key of ['requireTrustedEpoch', 'requireTrustedEpochForSubagents', 'ptcCompatibility']) {
+  const REMOVED = ['requireTrustedEpoch', 'requireTrustedEpochForSubagents', 'ptcCompatibility',
+    'compactBuiltinToolDescriptions', 'compactBuiltinToolOverrides', 'allowMissingSessionQuery'];
+  for (const key of REMOVED) {
     const raw = validateConfig({ [key]: true });
     assert.equal(Object.hasOwn(raw, key), false, `${key} 不得出现在 effective config 视图里`);
   }
-  // 旧键仍然兼容（不抛错），只是没有效果。
-  assert.doesNotThrow(() => validateConfig({ requireTrustedEpoch: true, ptcCompatibility: true }));
+  // 旧 profile 仍能激活（不抛错），只是没有效果。
+  assert.doesNotThrow(() => validateConfig(Object.fromEntries(REMOVED.map((key) => [key, true]))));
 });

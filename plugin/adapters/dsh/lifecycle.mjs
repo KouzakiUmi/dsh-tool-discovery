@@ -74,6 +74,22 @@ export function createLifecycle(deps) {
     return (typeof raw?.get === 'function' ? raw.get() : raw) !== false;
   }
 
+  /**
+   * 读 `gateOwnScopeTools` 的**活值**。
+   *
+   * 该字段在 Config 里是 volatile（设置页可热改），但 `validateConfig` 已把 volatile
+   * 引用拍平成 apply 期布尔——只读 `config.gateOwnScopeTools` 的话，设置页"保存成功"
+   * 永远不会生效。方向是双向危害：apply 期 `false` 时把它打开，own-scope 未准入工具
+   * 会继续执行（开闸失败）；apply 期 `true` 时关掉它也同样无效。这里与
+   * `currentInitialToolsEnabled` / `getRespectAlwaysVisible` 同一读法，
+   * 新 runtime 采用当前值（"按新 runtime 采用"的语义不变）。
+   */
+  function currentGateOwnScope() {
+    const raw = typeof deps.getGateOwnScopeTools === 'function'
+      ? deps.getGateOwnScopeTools() : config.gateOwnScopeTools;
+    return (typeof raw?.get === 'function' ? raw.get() : raw) !== false;
+  }
+
   /** 忽略本插件掩码的可见面：目录必须是"资格事实"，不是"当前披露事实"。 */
   function catalogViewFor(agentScope) {
     const filters = mask.filtersFor(agentScope);
@@ -202,10 +218,7 @@ export function createLifecycle(deps) {
       scope: { sessionId, actorId: String(scope.id) },
       engine,
       alwaysNameSet: new Set(alwaysNames),
-      gateOwnScope: (() => {
-        const raw = config.gateOwnScopeTools;
-        return (typeof raw?.get === 'function' ? raw.get() : raw) !== false;
-      })(),
+      gateOwnScope: currentGateOwnScope(),
       disposedSignal: new AbortController(),
     };
     sessions.set(sessionId, runtime);
@@ -259,33 +272,108 @@ export function createLifecycle(deps) {
     mask.update(runtime.agentScope, admittedNamesOf(sessionId));
   }
 
+  /**
+   * 把 volatile 配置的当前值推给该会话的 engine。
+   *
+   * `budgets` / `tolerantLoadProtected` / `categoryConfig` 在 Config 里是 volatile
+   * （设置页保存不重挂载插件），但 engine 侧原本只有构造期快照——不推的话"保存成功"
+   * 永远不生效。单个字段热改失败（例如预算形状非法）只记日志并保留旧值，
+   * 不影响其余字段。
+   */
+  function applyLiveConfig(runtime) {
+    const push = (field, fn) => {
+      try { fn(); } catch (error) {
+        log('lifecycle:live-config-rejected', {
+          sessionId: runtime.scope.sessionId,
+          field,
+          error: String(error?.message ?? error),
+        });
+      }
+    };
+    const engine = runtime.engine;
+    if (typeof deps.getBudgets === 'function' && typeof engine.setBudgets === 'function') {
+      push('budgets', () => engine.setBudgets(deps.getBudgets()));
+    }
+    if (typeof deps.getTolerantLoadProtected === 'function' && typeof engine.setTolerantLoadProtected === 'function') {
+      push('tolerantLoadProtected', () => engine.setTolerantLoadProtected(deps.getTolerantLoadProtected()));
+    }
+    if (typeof deps.getCategoryConfig === 'function' && typeof engine.setCategoryConfig === 'function') {
+      push('categoryConfig', () => engine.setCategoryConfig(deps.getCategoryConfig()));
+    }
+  }
+
+  /** 单个会话的目录重算子过程（供 onRegistryChange 逐会话隔离调用）。 */
+  function refreshRuntime(runtime) {
+    registry.bumpGeneration(runtime.agentScope);
+    const view = registry.bindingsFor(runtime.agentScope, catalogViewFor(runtime.agentScope));
+    const diff = registry.diffAgainst(runtime.agentScope, view.bindings);
+    registry.remember(view.scopeKey, view.bindings);
+    const outcome = runtime.engine.refreshCatalog(view.bindings);
+    const names = [...outcome.invalidatedNames];
+    for (const toolId of diff.removed) {
+      names.push(...runtime.engine.invalidate(toolId, 'tool-removed'));
+    }
+    if (names.length > 0) {
+      revokeAdmissions(runtime, [...new Set(names)]);
+    } else {
+      // 目录没变但 admitted/常驻名字集可能因 store 读回或配置热改不同步：
+      // 重掩码幂等且便宜。
+      syncAlwaysNames(runtime);
+      mask.update(runtime.agentScope, admittedNamesOf(runtime.scope.sessionId));
+    }
+    log('lifecycle:registry-refreshed', {
+      sessionId: runtime.scope.sessionId,
+      eligibilityGeneration: outcome.eligibilityGeneration,
+      added: diff.added.length,
+      removed: diff.removed.length,
+    });
+  }
+
   /** tools/change：逐会话重算资格、同步作废 admission、重掩码。 */
   function onRegistryChange() {
     alwaysCache.clear();
     for (const runtime of sessions.values()) {
-      registry.bumpGeneration(runtime.agentScope);
-      const view = registry.bindingsFor(runtime.agentScope, catalogViewFor(runtime.agentScope));
-      const diff = registry.diffAgainst(runtime.agentScope, view.bindings);
-      registry.remember(view.scopeKey, view.bindings);
-      const outcome = runtime.engine.refreshCatalog(view.bindings);
-      const names = [...outcome.invalidatedNames];
-      for (const toolId of diff.removed) {
-        names.push(...runtime.engine.invalidate(toolId, 'tool-removed'));
+      // 逐会话隔离：单个会话的目录重算失败（例如第三方注册了 parameters 形状非法的
+      // 定义）不得中断其余会话的刷新，更不能把异常穿透宿主 emit 抛回注册方。
+      // 失败只记日志，该会话保留旧目录，下一次 tools/change 会自然重试。
+      try {
+        refreshRuntime(runtime);
+      } catch (error) {
+        log('lifecycle:registry-refresh-failed', {
+          sessionId: runtime.scope.sessionId,
+          error: String(error?.message ?? error),
+        });
       }
-      if (names.length > 0) {
-        revokeAdmissions(runtime, [...new Set(names)]);
-      } else {
-        // 目录没变但 admitted/常驻名字集可能因 store 读回或配置热改不同步：
-        // 重掩码幂等且便宜。
+    }
+  }
+
+  /**
+   * volatile 配置热改后的同步点。
+   *
+   * 宿主 Loader 在 volatile 写入时走 `_commitVolatile()`：**不重挂载**插件，只原地
+   * 更新 volatile 引用并向本 fiber 发 `loader/volatile-update`。这个时机早于下一个
+   * 模型步骤，而 `agent/pre-step` 太晚——宿主 `ReactLoopAgent.preStep` 的顺序是
+   * `tools.resolve()`（定型 toolSet 快照）→ `systemPrompt.assemble()`（冻结发给模型的
+   * 声明）→ **最后**才 waterfall `agent/pre-step`。若只在 pre-step 重算掩码，该步的
+   * 声明、toolSet 与 guard 会按三套不同状态判定：模型会看到"声明里有、调用报
+   * unknown tool"或"声明里没有、却又无法换取"的死锁面。
+   *
+   * 因此这里在收到事件时立刻对所有会话重算常驻名单与掩码，使**下一个**步骤的
+   * resolve/assemble/guard 全部读到同一状态。
+   */
+  function reconcileAllSessions() {
+    alwaysCache.clear();
+    for (const runtime of sessions.values()) {
+      try {
         syncAlwaysNames(runtime);
+        applyLiveConfig(runtime);
         mask.update(runtime.agentScope, admittedNamesOf(runtime.scope.sessionId));
+      } catch (error) {
+        log('lifecycle:volatile-reconcile-failed', {
+          sessionId: runtime.scope.sessionId,
+          error: String(error?.message ?? error),
+        });
       }
-      log('lifecycle:registry-refreshed', {
-        sessionId: runtime.scope.sessionId,
-        eligibilityGeneration: outcome.eligibilityGeneration,
-        added: diff.added.length,
-        removed: diff.removed.length,
-      });
     }
   }
 
@@ -329,6 +417,7 @@ export function createLifecycle(deps) {
     settleOperations() { return Promise.allSettled([...operations]); },
 
     onRegistryChange,
+    reconcileAllSessions,
     disposeSession,
 
     runtimeFor(session, scope) {

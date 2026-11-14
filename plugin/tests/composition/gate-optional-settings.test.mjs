@@ -1,5 +1,6 @@
 // rc.1 admission + mask：真实 Loader/agent/provider，存储只写测试私有目录。
-// 旧 OS1 严格可信基线开关/缺记录 blocked 没有等价目标：子系统已删除；改测旧键不阻断请求。
+// OS1 旧严格基线/描述精简/PTC 兼容键已从 Config 删除：这里验证旧 profile 里残留的同名键
+// 仍能激活、不阻断请求，也不授权隐藏工具（宿主 schemastery 非严格合并原样带过）。
 // OS2 保留无存储的会话内 load/use，并覆盖第四入口 unload；OS3 保留 volatile 和新会话采用配置。
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -24,7 +25,7 @@ function call(boot, handle, name, callId, args = {}) {
   return executeToolCall(boot.ctx, { agent: handle.agent, name, callId, arguments: args, signal: new AbortController().signal });
 }
 
-for (const requireTrustedEpoch of [false, true]) test(`OS1: 旧严格配置 ${requireTrustedEpoch} 不要求历史凭证、不阻断请求或授予隐藏工具`, async () => {
+for (const requireTrustedEpoch of [false, true]) test(`OS1: 已移除的旧键 ${requireTrustedEpoch} 不阻断激活与请求、也不授予隐藏工具`, async () => {
   store.reset();
   const boot = await bootAdapterComposition({ fixtures: FIXTURES, adapterSchema: true,
     adapter: { alwaysVisible: [], requireTrustedEpoch, requireTrustedEpochForSubagents: true } });

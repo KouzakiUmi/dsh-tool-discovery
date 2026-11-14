@@ -1,6 +1,6 @@
 # 00 · 当前实现契约
 
-> 更新日期：2026-11-07。依据 manifest `0.6.0` 的工作树源码：本版起**只支持 DSH Core 0.2.2-rc.1+**，旧宿主投影路径（逐字冻结 wire、canonical 回执、缓存周期、可信周期记录、PTC 兼容开关、内置描述精简）整体移除。
+> 更新日期：2026-11-14。依据 manifest `0.7.0` 的工作树源码：本版起**只支持 DSH Core 0.2.2-rc.1+**，旧宿主投影路径（逐字冻结 wire、canonical 回执、缓存周期、可信周期记录、PTC 兼容开关、内置描述精简）整体移除。
 > 本文是现行行为入口，不是发布、安装或完整产品验收声明。
 > 重设计规格见 [14-rc1-redesign](<14-rc1-redesign.md>)；[02 历史冻结协议](<02-protocol-and-data-model.md>)保留了早期设计和历次 delta，其中旧默认值、展示模式、冻结承诺不能直接当作当前行为。
 
@@ -18,7 +18,7 @@
 
 | 来源 | 默认与边界 |
 |---|---|
-| 四个发现入口 | 始终保留，不由 `alwaysVisible` 删除；被同名覆盖时该名执行拒绝 |
+| 四个发现入口 | 正常 preset 里始终保留，不由 `alwaysVisible` 删除；被同名覆盖时该名执行拒绝。停用场景见下方「生效边界」 |
 | 手动名单 | `alwaysVisible` 缺省取手工维护的 `CORE_TOOL_NAMES`；显式数组是替换，不是追加；由 `initialToolsEnabled` 控制 |
 | 当前 preset | `alwaysAllowPresetTools=true` 独立保留实际绑定修订自己登记、且原生 scope 仍可见的工具；不等于所有 preset 或整个应用目录 |
 | 核心同名自证 | `respectAlwaysVisible=false` 且初始注入未关闭时，guard 可吸收当前 scope 实际提供的核心名单工具；手动空名单不是默认模式下的最终授权上限 |
@@ -26,9 +26,13 @@
 
 设置页的全局登记目录只是编辑辅助，不是会话的可调用集合。partial 目录未列出的项是 `unknown`，不能据此宣称未注册。
 
+**生效边界（`disabledPresets`）。** 默认 `["minimal"]`（宿主内置极简模式的 preset id），替换语义：`[]` 表示不停止任何 preset。绑定的 preset id 命中名单的会话里，插件保持惰性——`restrict({deny: 四个入口})` 只把发现入口移出可见面，其它工具一律不遮罩，执行链不增加任何准入拒绝。四个入口是应用级注册、不能按 preset 注销，所以"不生效"只能实现成"只遮入口、别的什么都不做"。判定读 `ctx.get('agentPresets').composedPreset(agent.ctx)`；拿不到 id（更老宿主或无 preset 服务）时按正常流程处理，不猜、也不静默停用整个插件。字段是 volatile。宿主 Loader 的 volatile 写入**不重挂载**插件，只原地更新引用并发 `loader/volatile-update`；adapter 监听该事件，在**下一个模型步骤的 toolSet/声明定型之前**重算掩码与常驻名单，所以下一个请求即采用新值。这一点必须如此：宿主的 `ReactLoopAgent.preStep` 顺序是 `tools.resolve()` → `systemPrompt.assemble()` → **最后**才 waterfall `agent/pre-step`，只在 pre-step 重算会让该步的声明、toolSet 与 guard 按三套状态判定，出现「声明里有却 unknown tool、声明里没有又无法换取」的撕裂面。
+
 ## 2. 掩码与披露
 
 - 掩码 allow-list = 四个入口 + `frameworkRetained` + alwaysVisible（手动/preset/自证合并）+ admitted 名，再经 `restrictableNames` 过滤。更换掩码先安装新限制再解除旧限制。
+- 停用场景改用 `deny`：`restrict({ deny: 四个入口 })` 只移除入口，不枚举 allow，因此之后注册的全局工具不会被误遮；入口不在可遮面（同为 scope 覆盖等边角）时不装掩码。
+- **`loader/volatile-update` 是 volatile 配置的同步点**：`alwaysVisible`、`initialToolsEnabled`、`alwaysAllowPresetTools`、`gateOwnScopeTools`、`disabledPresets`、`tolerantLoadProtected`、`respectAlwaysVisible`、`budgets`、`locale`、`categoryConfig` 都可运行中热改（`locale` 还会重建四个入口 definition，因为它们的 description 是立即求值的字符串）。`frameworkRetained` 保持非 volatile（改了要重载），面板经 volatile 节点的 meta 通道只读展示。
 - `restrictableNames` 只含 global 与父 scope 注册；**agent 当前 scope 自己注册的工具遮不住**，可能直接披露——其执行由 `gateOwnScopeTools`（默认 true）门禁兜底：目录内仍要 admission，目录外名字放行（宿主语义兜底）。
 - 本插件掩码切换引起的 `tools/change` 按注册表指纹跳过，不触发全量重算；第三方注册在同一 microtask 内对齐。
 - 目录从忽略本插件掩码的可见面构建：被遮的工具必须能被 `tool_list`/`tool_search` 发现，preset 名单也不被自己的掩码吃掉。
@@ -89,6 +93,7 @@
 | 目录内名字未 admitted | 拒绝 not-admitted |
 | admitted 但当前目录条目 name/schemaDigest 已变 | 拒绝 definition-changed，须重新 load |
 | 目录外且 non-restrictable（own-scope）名字 | `gateOwnScopeTools=true` 且名字在目录/可遮时要求 admission；否则放行 |
+| 停用场景（绑定 preset 在 `disabledPresets` 里） | 四个入口一律拒绝；其余名字不做任何准入判定（插件在该会话等于不存在） |
 
 披露不是执行许可：每次调用仍走宿主原生的审批、沙箱与权限链。
 
@@ -103,5 +108,5 @@
 
 ## 6. 配置兼容
 
-- 仍有效：`alwaysVisible`、`initialToolsEnabled`、`alwaysAllowPresetTools`、`respectAlwaysVisible`、`tolerantLoadProtected`、`gateOwnScopeTools`、`frameworkRetained`、`budgets`、`locale`、`categoryConfig`。`alwaysVisible`、`initialToolsEnabled`、`alwaysAllowPresetTools` 在后续请求 reconcile 时同步到 engine/mask/guard；已有按需 admission 不因常驻配置变更而隐式撤销。`gateOwnScopeTools` 在 runtime 建立时采用。
-- 已废弃但保留字段（不读、不校验、无效果）：`ptcCompatibility`、`compactBuiltinToolDescriptions`、`compactBuiltinToolOverrides`、`requireTrustedEpoch`、`requireTrustedEpochForSubagents`、`allowMissingSessionQuery`。
+- 仍有效：`alwaysVisible`、`initialToolsEnabled`、`alwaysAllowPresetTools`、`respectAlwaysVisible`、`tolerantLoadProtected`、`gateOwnScopeTools`、`disabledPresets`、`frameworkRetained`、`budgets`、`locale`、`categoryConfig`。除 `frameworkRetained` 外全部是 volatile（运行中热改，见 §2）；`validateConfig` 必须解包它们的 `{get()}` 引用——宿主在 apply 前已按 schema 解析过配置。`alwaysVisible`、`initialToolsEnabled`、`alwaysAllowPresetTools`、`disabledPresets` 在后续请求 reconcile 时同步到 engine/mask/guard；已有按需 admission 不因常驻配置变更而隐式撤销。`gateOwnScopeTools` 在 runtime 建立时采用。
+- 已移除（不再出现在 Config schema、validateConfig 返回值或设置页）：`ptcCompatibility`、`compactBuiltinToolDescriptions`、`compactBuiltinToolOverrides`、`requireTrustedEpoch`、`requireTrustedEpochForSubagents`、`allowMissingSessionQuery`。旧 profile 里的同名键由宿主 schemastery 的非严格合并原样带过，不报错也不生效，无需迁移。

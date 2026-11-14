@@ -1,6 +1,6 @@
 # 05 · 当前状态
 
-更新日期：**2026-11-07**（Asia/Hong_Kong）。对应源码 manifest `0.6.0`：宿主支持收敛为 **DSH Core `0.2.2-rc.1`+**，整套实现按准入设计重写（规格见 [14](<14-rc1-redesign.md>)），旧投影/epoch/journal/PTC/描述精简子系统整体移除。npm 发布状态以 registry 为准。
+更新日期：**2026-11-14**（Asia/Hong_Kong）。对应源码 manifest `0.7.0`：宿主支持收敛为 **DSH Core `0.2.2-rc.1`+**，整套实现按准入设计重写（规格见 [14](<14-rc1-redesign.md>)），旧投影/epoch/journal/PTC/描述精简子系统整体移除。npm 发布状态以 registry 为准。
 现行行为见 [00 当前实现契约](<00-current-contract.md>)，验收判据见 [03](<03-implementation-and-acceptance.md>)。
 本文不登记未经重新核验的远端最新发布、STORE 收录或在线安装状态。
 
@@ -10,17 +10,34 @@
 旧文件中的“本轮”“当前宿主”“未发布”“待合并”仅在其取证时点成立，不自动滚动到今天。
 历史记录保留在 [04](<04-runtime-evidence.md>)、[06](<06-rewrite-changelog.md>)、[07](<07-lifecycle-recovery-coverage.md>)、[08](<08-trusted-epoch-baselines.md>)、[10](<10-store-compatibility.md>)、[11](<11-code-review-findings.md>) 与私有证据中。
 
-**版本坐标**：本源码 manifest 为 `0.6.0`、协议版本 `3`。npm 发布与 provenance 以 registry 为准；GitHub Release/tarball 不能替代 npm 发布证明。
+**版本坐标**：本源码 manifest 为 `0.7.0`、协议版本 `3`（仍是 3，协议未变）。npm 发布与 provenance 以 registry 为准；GitHub Release/tarball 不能替代 npm 发布证明。
 
 ### 0.1 版本与兼容
 
-- 包版本：`0.6.0`；协议版本：`3`（不再与 0.5.x 的 `2` 兼容，调用处须显式传 3 或依赖默认）。不要把包版本当 Core 版本。
+- 包版本：`0.7.0`；协议版本：`3`（不再与 0.5.x 的 `2` 兼容，调用处须显式传 3 或依赖默认）。不要把包版本当 Core 版本。
 - 安装准入由 `engines.dsh` = `>=0.2.2-rc.1` 声明（0.2.2-rc.1 的 app-boot 有它时只按它判定，不再逐个比对含 optional 在内的 dsh peer）；Core peer 范围同为 `>=0.2.2-rc.1`。`@deepseek-ai/dsh-llm` 与 `@deepseek-ai/dsh-tool-executor-ptc` peer 已随 0.6.0 移除。
 - `dshReleases`：`0.2.2-rc.1` 为 `compatible`，`0.2.1-alpha.1`/`0.2.1-alpha.2`/`0.2.0-rc.2` 为 `incompatible`；0.2.2 更晚版本未逐一验收。
 - `schemastery` peer 为 `>=3.18.5-alpha.1 <4`（0.2.2-rc.1 自带 `3.19.0`）。
 - 组合测试锚点为 `.probe/install-root-rc1`（从 DSH NEXT `2.0.22-next` 桌面壳 `app.asar` 解包；Core / dsh-tools / executor 均为 `0.2.2-rc.1`，Cordis `4.1.0`）。这不是逐版本兼容声明。
 
-### 0.2 当前优化验证（2026-11-07，0.6.0 工作区）
+### 0.3 本轮运行证据（2026-11-14，0.7.0 工作区）
+
+Node **v24.13.0**（单测）与锚点捆绑 Node（组合）；`DSH_INSTALL_ROOT` 指向 `.probe/install-root-rc1`。未安装、未重启、未访问在线 GUI、未跑真实 provider。
+
+| 本次实际执行 | 结果 |
+|---|---|
+| `npm test`（单测，含 client/settings 宿主绑定用例） | 499 tests / **495 pass / 0 fail / 4 skip**（skip 为锚点缺 `react-reconciler` 的渲染用例） |
+| `npm run test:composition` | **92 pass / 0 fail / 0 skip**，含本轮新增 `gate-disabled-presets`（5）与 `gate-volatile-live-config`（7） |
+| `npm run check` | 通过（identity + 258 条相对链接） |
+| `npm run check:quality` | 1/21 未通过（H037/H044 类别期望误标），输出与改动前逐字相同，冻结标签未改 |
+
+**覆盖缺口（必须与本轮结果一起读）：**
+
+- CI 的 `portable-unit` 显式排除 `client.test.mjs` 与 `settings.test.mjs`（需真实 DSH 安装），`composition` 与 `quality` 只在 `workflow_dispatch` 下运行且托管 runner 无 DSH Core 会跳过。因此**本轮最重的修复（volatile 撕裂、guard fail-open、畸形绑定隔离、设置页热改）不在 tag/push 发布链的自动覆盖内**，上表本地结果是它们的唯一证据。
+- 发布前要求的独立只读交叉核验**未完成**：两次子代理在完成前失败（未返回结论）。记录为未核验，不以实现者自验替代。
+- 未覆盖：真实 provider wire、token/TTFT 净收益、浏览器 GUI 实际操作、Profile 安装、0.2.2-rc.1 之外的版本。
+
+### 0.2.5 历史优化验证（2026-11-07，0.6.0 工作区）
 
 目标锚点为 `.probe/install-root-rc1`，真实公共服务 + mock provider + 测试私有存储。单测使用 Node v24.13.0，组合使用捆绑 Node v24.21.0；未安装、重启或访问在线 GUI。
 
@@ -142,13 +159,13 @@ Node **v24.21.0**（DSH NEXT 运行时自带）。`DSH_INSTALL_ROOT` 指向从 D
 | 四入口、目录、分类、词法搜索、版本与预算 | 已实现，有单测与组合回归；检索指标尚未达成可发布评分 |
 | native 披露、guard、admission 恢复 | 真实 Loader/mock provider 组合通过，范围见 0.2 |
 | 状态一致性 | 混批卸载原子性、晚 seed 撤销墓碑、关闭排空、同 id 恢复与步骤快照有回归 |
-| 旧 epoch/journal/projection | 已移除；兼容配置无效果 |
+| 旧 epoch/journal/projection | 已移除；对应配置键也已从 Config 与设置页删除（不再是保留的兼容字段） |
 | 设置页 | VM/配置面通过；四项渲染用例缺依赖跳过，当前 GUI 未验收 |
 | PTC | SDK 掩码同源测试通过；真实 worker/transport 未覆盖 |
 | 性能、真实 wire、自然语言搜索指标 | 本轮仅有掩码事件/引用计数；无 token、TTFT 或搜索评分 |
 | npm / GitHub Release / STORE / Profile | 相互独立，需核对各自实际状态；不从源码版本推断 |
 
-## 2. 已有回归保护的关键链路（0.6.0）
+## 2. 已有回归保护的关键链路（0.7.0）
 
 - 单元覆盖 domain/client 与 adapter 接缝；新增 [存储耐久性](<../tests/unit/admission-durability.test.mjs>)、[卸载原子性](<../tests/unit/unload-atomicity.test.mjs>) 与 [掩码回收](<../tests/unit/mask.test.mjs>)。
 - 组合使用真实 Loader + mock provider + 测试自有临时存储，含 settings、lifecycle、resume、isolation、PTC SDK、in-history 及 [rc.1 优化边界](<../tests/composition/gate-rc1-optimization.test.mjs>)。

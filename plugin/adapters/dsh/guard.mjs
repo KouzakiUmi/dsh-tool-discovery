@@ -12,12 +12,15 @@
 //     我们不声称能管理自己看不见定义的工具，但遮不住的名下若 catalog
 //     有记录仍按 digest 判定。
 //   * 调用面不区分存在性：对外文案只由 reason 决定，细节只进宿主日志。
+//   * 停用场景（绑定 preset 在 disabledPresets 里）：本插件不增加任何准入拒绝，
+//     只拦四个入口——它们已被掩码移出可见面，猜名调用同样不可派发。
 import { ENTRY_TOOL_NAMES, CORE_TOOL_NAMES } from '../../domain/index.mjs';
 
 /**
  * @param {{ctx:any, lifecycle:any, tracker:any,
  *          frameworkRetained?:readonly string[],
  *          respectAlwaysVisible?:()=>boolean,
+ *          isPresetDisabled?:(agent:any)=>boolean,
  *          controlDefinitions?:Map<string,any>,
  *          locale?:string, log?:Function}} deps
  */
@@ -26,6 +29,9 @@ export function createGuard(deps) {
   const frameworkRetained = new Set([...(deps.frameworkRetained ?? [])]);
   const respectAlwaysVisible = typeof deps.respectAlwaysVisible === 'function'
     ? deps.respectAlwaysVisible
+    : () => false;
+  const isPresetDisabled = typeof deps.isPresetDisabled === 'function'
+    ? deps.isPresetDisabled
     : () => false;
   const entryNames = new Set(ENTRY_TOOL_NAMES);
   const coreNames = new Set(CORE_TOOL_NAMES);
@@ -54,6 +60,7 @@ export function createGuard(deps) {
     definitionChanged: (name) => `tool "${name}" changed after admission: load it again with tool_load`,
     shadowedEntry: (name) => `tool "${name}" is shadowed by another registration and cannot be dispatched`,
     unavailable: (name) => `tool "${name}" is not admitted: tool catalog unavailable`,
+    discoveryDisabled: (name) => `tool "${name}" is unavailable: tool discovery is disabled in this preset`,
   };
 
   const guard = (exec) => {
@@ -62,6 +69,14 @@ export function createGuard(deps) {
     const name = exec?.name;
     if (typeof name !== 'string' || name.length === 0) return undefined;
     const sessionId = agent.session.id;
+
+    // 停用场景：四个入口一律不可派发（它们已被掩码移出可见面），其余名字不做任何
+    // 准入判断——插件在这个 preset 下等于不存在。
+    if (isPresetDisabled(agent)) {
+      if (!entryNames.has(name)) return undefined;
+      log('guard:discovery-disabled', { sessionId, name });
+      return denyReasons.discoveryDisabled(name);
+    }
 
     // 入口三件套：被同名覆盖时按宿主语义执行的是别人的定义——拒绝，
     // 不让模型在不知情下调用到一个影子实现。
@@ -78,11 +93,19 @@ export function createGuard(deps) {
 
     const runtime = lifecycle.sessions.get(sessionId);
     if (runtime === undefined) {
-      // 会话 runtime 未建立：首个被调用的若是隐藏池工具，照样拦——
-      // 但此时目录都没建，连"它是不是受控的"都无法判，保守放行非受控名字
-      // 只对 runtime 建立后的调用生效；首个调用若是受控工具，说明模型在猜名，
-      // 目录不可用就按不可准入拒（fail closed 方向）。
-      return undefined;
+      // 会话 runtime 未建立是**异常状态**（正常路径下 agent/created 内已同步建好；
+      // 走到这里通常是 warmup 因畸形第三方定义失败）。
+      //
+      // 此时没有目录，判不出"是否受控"，但 own-scope 名字宿主**遮不住**、会被直接
+      // 披露，准入是它们唯一的闸门——对这些名字必须 fail-closed，否则该会话的全部
+      // own-scope 工具都能不经 tool_load 执行（实测可达，见审查复现 P2/P5）。
+      // 可遮（global/父 scope）名字交给宿主可见性与掩码：未准入的名字不在可见面，
+      // 猜名也解析不到定义。
+      let restrictable = null;
+      try { restrictable = ctx.tools.view(agent)?.restrictableNames ?? null; } catch { restrictable = null; }
+      if (restrictable?.has?.(name) === true) return undefined;
+      log('guard:runtime-missing', { sessionId, name });
+      return denyReasons.unavailable(name);
     }
     if (runtime.alwaysNameSet?.has(name) === true) return undefined;
     if (respectAlwaysVisible() !== true

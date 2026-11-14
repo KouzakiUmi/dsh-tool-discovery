@@ -1,6 +1,6 @@
 # 03 · 实施、验收与发布门槛
 
-> 更新日期：2026-11-06。本文按 manifest `0.6.0`、协议版本 `3` 描述验收口径；现行行为以 [00](<00-current-contract.md>) 为准，实际执行与未覆盖项见 [05](<05-current-status.md>)。矩阵是待核验标准，不代表本次已执行或产品已验收。
+> 更新日期：2026-11-14。本文按 manifest `0.7.0`、协议版本 `3` 描述验收口径；现行行为以 [00](<00-current-contract.md>) 为准，实际执行与未覆盖项见 [05](<05-current-status.md>)。矩阵是待核验标准，不代表本次已执行或产品已验收。
 
 ## 1. 实施原则
 
@@ -39,6 +39,9 @@
 | 掩码集合 | allow 为四入口 ∪ `frameworkRetained` ∪ alwaysVisible（手动/preset/自证）∪ admitted，经 `restrictableNames` 过滤 |
 | 掩码切换 | 先安装新限制再解除旧限制；本插件变更不形成无限反馈，第三方注册可对齐 |
 | own-scope | 宿主不能遮住当前 agent 自己注册的工具，可能披露；默认门禁对目录内未准入工具拒绝执行 |
+| 停用 preset（`disabledPresets`，默认 `minimal`） | 四个入口不在会话声明里且猜名调用被拒；其它工具不遮罩、不要求 admission；`[]` 恢复全部 preset 的发现流程；空白会话换 preset 在下一请求对齐 |
+| volatile 配置热改 | 设置页写入**不重挂载**插件；`disabledPresets`/`alwaysVisible` 等热改后**下一个请求**的声明、toolSet 与 guard 即同源一致（不得出现「声明可见却 unknown tool」的撕裂面）；`gateOwnScopeTools` 由新建 runtime 采用活值；`budgets`/`categoryConfig`/`tolerantLoadProtected` 进入运行中的 engine；`locale` 重建入口文案后仍可派发 |
+| 畸形第三方定义 | `parameters` 非普通对象的定义在目录边界被跳过并记一次日志；不得阻止新会话创建、不得中断 tools/change 刷新链；runtime 缺失时不可遮的 own-scope 名字 fail-closed |
 
 ## 6. 验收矩阵：门禁与安全
 

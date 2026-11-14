@@ -24,6 +24,8 @@ allow = 四入口 + frameworkRetained + 常驻集合 + admitted，过滤到 rest
 
 目录与 preset 从忽略**本插件** restriction 的视图构造，其它插件限制仍有效。适配层镜像 rc.1 view 算法，激活前检查所需内部结构。
 
+生效边界（`disabledPresets`，默认 `["minimal"]`）：命中的 preset 里插件惰性——掩码换成 `restrict({ deny: 四个入口 })`（只移除入口，不枚举 allow，之后注册的全局工具不会被误遮），guard 只拒这些入口、其余名字不做准入判定。判定读 `agentPresets.composedPreset(agent.ctx)`，读不到按正常流程处理；字段 volatile，在下一请求对齐（含空白会话换 preset）。
+
 更换先装新后解除旧，瞬时交集不扩大权限。仅跟踪仍在宿主层中的自有 filter；释放失败的旧 disposer 保留并在后续 reconcile 重试。指纹忽略自有 filters，纯掩码变动不刷新所有会话；掩码事件内的第三方重入注册经 microtask 对齐。
 
 ## 执行门禁与步骤语义
@@ -49,7 +51,7 @@ allow = 四入口 + frameworkRetained + 常驻集合 + admitted，过滤到 rest
 
 常驻名单、初始注入和 preset 保留在后续请求 reconcile 同步到 engine/mask/guard；现有按需 admission 不因常驻变更而隐式删除。own-scope 门禁开关按新 runtime 采用。非 volatile 配置保存仍由宿主重载。
 
-旧 `ptcCompatibility`、`compactBuiltinTool*`、`requireTrustedEpoch*` 等兼容键无效果。PTC SDK 从同一宿主掩码视图投影，不维护独立 SDK 披露路径或展示模式分支。
+旧 `ptcCompatibility`、`compactBuiltinTool*`、`requireTrustedEpoch*`、`allowMissingSessionQuery` 已从 Config 与设置页删除（宿主非严格合并会保留旧 profile 里的同名键，既不报错也不生效）。PTC SDK 从同一宿主掩码视图投影，不维护独立 SDK 披露路径或展示模式分支。
 
 ## 验收
 

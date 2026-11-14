@@ -25,7 +25,7 @@
 //   得到与首次激活相同的 revision，历史回执的 revision 判据仍可对上。
 //   scope 目录代次（generationFor/bumpGeneration）保持原样推进 —— 旧 ref/cursor
 //   的失效由 domain 的 eligibilityGeneration 承担，不受本改动影响。
-import { ENTRY_TOOL_NAMES, digestOf } from '../../domain/index.mjs';
+import { ENTRY_TOOL_NAMES, digestOf, isPlainObject } from '../../domain/index.mjs';
 
 /** 宿主 schema 投影 → domain wire（有效 wire 字段：name/description/parameters）。 */
 export function wireOfSchema(schema) {
@@ -122,6 +122,8 @@ export function createRegistryAdapter(deps) {
    * definition/digest 同时为 undefined = 该绑定当前不在视图里（缺席）。
    */
   const bindingState = new Map();
+  /** 已报告过的畸形绑定名：同类只记一次日志，不随每次 tools/change 刷屏。 */
+  const reportedInvalidBindings = new Set();
 
   const bindingKey = (scopeKey, toolId) => `${scopeKey}\u0000${toolId}`;
 
@@ -226,27 +228,47 @@ export function createRegistryAdapter(deps) {
     for (const [name, definition] of view.visible) {
       if (entryNames.has(name)) continue;
       if (frameworkRetained.has(name)) continue;
-      const globalDefinition = globalView.visible.get(name);
-      const shadowsGlobal = globalDefinition !== undefined && globalDefinition !== definition;
-      const toolId = shadowsGlobal
-        ? `${scopeKey}::${name}`
-        : `global::${name}`;
-      const wire = wireOfDefinition(definition);
-      const bindingGeneration = bindingGenerationFor(scopeKey, toolId, definition, wire);
-      present.add(bindingKey(scopeKey, toolId));
-      bindings.push({
-        toolId,
-        name,
-        description: typeof definition.description === 'string' ? definition.description : '',
-        wire,
-        // 宿主未公开：不得猜测
-        providerNamespace: null,
-        bindingGeneration,
-        shadowOf: shadowsGlobal ? `global::${name}` : null,
-        trustedCategoryOverride: null,
-        skill: null,
-      });
-      if (!toolIdsByName.has(name)) toolIdsByName.set(name, toolId);
+      // 逐个绑定隔离：宿主 `register()` 只校验 output/timeoutMs/name，**接受**
+      // `parameters` 为数组等畸形形状，而 domain 的 `validateBinding` 会拒绝。
+      // 若把这种定义放进目录，`buildCatalog` 会在建 runtime 时抛错——后果不是一个
+      // 工具不可用，而是：新会话创建被宿主 announce 拒绝（全体会话都建不起来）、
+      // tools/change 刷新链中断、warmup 静默失败后留下"掩码在、runtime 无"的
+      // fail-open 状态。所以在这里就地跳过坏绑定并记一次日志，让它只影响自己。
+      try {
+        const globalDefinition = globalView.visible.get(name);
+        const shadowsGlobal = globalDefinition !== undefined && globalDefinition !== definition;
+        const toolId = shadowsGlobal
+          ? `${scopeKey}::${name}`
+          : `global::${name}`;
+        const wire = wireOfDefinition(definition);
+        if ('parameters' in wire && !isPlainObject(wire.parameters)) {
+          throw new Error('wire.parameters is not a plain object');
+        }
+        const bindingGeneration = bindingGenerationFor(scopeKey, toolId, definition, wire);
+        present.add(bindingKey(scopeKey, toolId));
+        bindings.push({
+          toolId,
+          name,
+          description: typeof definition.description === 'string' ? definition.description : '',
+          wire,
+          // 宿主未公开：不得猜测
+          providerNamespace: null,
+          bindingGeneration,
+          shadowOf: shadowsGlobal ? `global::${name}` : null,
+          trustedCategoryOverride: null,
+          skill: null,
+        });
+        if (!toolIdsByName.has(name)) toolIdsByName.set(name, toolId);
+      } catch (error) {
+        // 同名定义只报告一次，避免每次 tools/change 刷屏。
+        if (!reportedInvalidBindings.has(name)) {
+          reportedInvalidBindings.add(name);
+          log('registry:invalid-binding-skipped', {
+            name,
+            reason: String(error?.message ?? error),
+          });
+        }
+      }
     }
 
     bindings.sort((a, b) => (a.toolId < b.toolId ? -1 : a.toolId > b.toolId ? 1 : 0));

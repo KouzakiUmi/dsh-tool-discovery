@@ -29,8 +29,11 @@ test('S-U01: Config.alwaysVisible 是 volatile 的 string[]，默认值是 DSH �
 test('S-U02: budgets 默认 null 且显式 null 合法（关闭覆盖）', () => {
   const config = buildConfig(Schema)
   assert.equal(config.dict.budgets.meta.default, null)
-  assert.equal(config({ budgets: null }).budgets, null)
-  assert.deepEqual(config({ budgets: { maxActiveTools: 3 } }).budgets, { maxActiveTools: 3 })
+  // budgets 现在是 volatile（设置页热改不重挂载插件）：解析后是 `{get()}` 引用而不是普通值，
+  // .get() 拿到当前值。validateConfig 负责解包，见 CP/PS 系列与真实宿主路径探针。
+  assert.equal(config.dict.budgets.meta.volatile, true)
+  assert.equal(config({ budgets: null }).budgets.get(), null)
+  assert.deepEqual(config({ budgets: { maxActiveTools: 3 } }).budgets.get(), { maxActiveTools: 3 })
 })
 
 test('S-U03: 既有的 categoryConfig / frameworkRetained 仍在 Config 里，不会被吞掉', () => {
@@ -38,8 +41,10 @@ test('S-U03: 既有的 categoryConfig / frameworkRetained 仍在 Config 里，�
   for (const key of ['alwaysVisible', 'frameworkRetained', 'budgets', 'categoryConfig']) {
     assert.ok(config.dict[key] !== undefined, `Config 缺少 ${key}`)
   }
+  // categoryConfig 同样是 volatile：解析后按引用取值。
+  assert.equal(config.dict.categoryConfig.meta.volatile, true)
   const resolved = config({ categoryConfig: { files: { title: 'F' } } })
-  assert.equal(resolved.categoryConfig.files.title, 'F')
+  assert.equal(resolved.categoryConfig.get().files.title, 'F')
 })
 
 test('S-U04: 三个发现入口不在 alwaysVisible 字段里（配置改不动它们）', () => {
@@ -133,7 +138,7 @@ test('S-U13: model.buildRows 目录 + 选择合成面板行，固定入口不进
 })
 
 // 已删除：S-U00 针对 compactBuiltinToolOverrides（内置描述精简）——rc.1 上该功能
-// 不再实现，只保留兼容键；其 volatile/choices 断言由 config.mjs 的兼容字段测试取代。
+// 不再实现，兼容键也在本轮从 Config 中移除；"旧键不得复活"由 CP3 与 client C-U19 钉住。
 
 // --- budgets 的 null 语义：校验层与 resolveBudgets 必须同源 -------------------------
 //

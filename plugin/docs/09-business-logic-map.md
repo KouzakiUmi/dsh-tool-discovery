@@ -1,6 +1,6 @@
 # 09 · 当前业务逻辑地图
 
-更新日期：2026-11-06。依据 manifest `0.6.0` 的工作区源码（DSH Core `0.2.2-rc.1+` 的准入设计，规格见 [14](<14-rc1-redesign.md>)）。
+更新日期：2026-11-14。依据 manifest `0.7.0` 的工作区源码（DSH Core `0.2.2-rc.1+` 的准入设计，规格见 [14](<14-rc1-redesign.md>)）。
 这是**源码导读**，不是一次新安全审查或产品验收；精确行为见 [00](<00-current-contract.md>)，实测状态见 [05](<05-current-status.md>)。
 旧投影/epoch/journal/PTC 路径已整体移除，历史版本见 git 记录，不再混作当前待办。
 
@@ -62,7 +62,7 @@ tool_unload：撤销 admitted + 清 selected ──► 下一 request 消失且�
 
 - `gateOwnScopeTools`（volatile，默认 `true`）：own-scope 注册在 catalog 内且未 admitted → 拒绝；catalog 外 → 放行（宿主语义兜底）。关闭时目录外 own-scope 名直接放行。
 - `alwaysVisible`/`initialToolsEnabled`/`alwaysAllowPresetTools`/`respectAlwaysVisible`/`tolerantLoadProtected`/`frameworkRetained`/`budgets`/`categoryConfig`/`locale` 见 [00](<00-current-contract.md>)。
-- 已移除（schema 保留、inert）：`ptcCompatibility`、`compactBuiltinToolDescriptions`/`Overrides`、`requireTrustedEpoch(+ForSubagents)`、`allowMissingSessionQuery`；`apply.inject` 不再需要 `sessionQuery`。
+- 已移除（schema 与 validateConfig 都不再声明）：`ptcCompatibility`、`compactBuiltinToolDescriptions`/`Overrides`、`requireTrustedEpoch(+ForSubagents)`、`allowMissingSessionQuery`；`apply.inject` 不再需要 `sessionQuery`。旧 profile 里的同名键被宿主原样带过，不报错也不生效。
 - `engines.dsh >=0.2.2-rc.1`；peer 移除 `dsh-llm` 与 `dsh-tool-executor-ptc`。
 
 ## 7. 测试与证据面

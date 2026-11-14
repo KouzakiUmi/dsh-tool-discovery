@@ -6,6 +6,7 @@
 
 
 > **0.6.0 之后**：本文引用的 epoch/journal/projection/trusted-epoch/PTC/描述精简子系统及其测试文件已随旧投影路径整体移除；文中以 `代码` 形式出现的路径即被移除文件，仅作历史引用。
+> **后续清理**：`compactBuiltinToolDescriptions` / `compactBuiltinToolOverrides` 两个"无效果"开关也已从 Config 与设置页删除（不再保留兼容字段），本文只保留其历史设计。
 
 ## 1. 总开关与逐工具开关
 

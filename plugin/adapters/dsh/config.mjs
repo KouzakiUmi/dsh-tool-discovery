@@ -33,6 +33,40 @@ export const FIXED_ENTRY_NAMES = Object.freeze([...ENTRY_TOOL_NAMES]);
 export const DEFAULT_ALWAYS_VISIBLE = Object.freeze([...CORE_TOOL_NAMES]);
 
 /**
+ * 默认"不生效"的 preset 名单：宿主官方极简模式（`@deepseek-ai/dsh-web-app/presets/minimal.patch.yml`
+ * 的 `id: minimal`）。极简模式的设计前提是工具面极小，四入口会改写这个前提，所以默认让插件在
+ * 这些 preset 上保持惰性。
+ * @type {readonly string[]}
+ */
+export const DEFAULT_DISABLED_PRESETS = Object.freeze(['minimal']);
+
+/**
+ * 归一 `disabledPresets`：去空白、去空串、去重，保持给出顺序。
+ *
+ * 语义与 `alwaysVisible` 一致——**替换不是追加**：`undefined` / `null` 取默认值
+ * `['minimal']`，显式 `[]` 表示"没有 preset 被停用"（所有 preset 都回到正常发现流程）。
+ * volatile 引用（设置面板写入）先解包再归一。
+ * @param {any} value `config.disabledPresets`
+ * @returns {readonly string[]}
+ */
+export function resolveDisabledPresets(value) {
+  let raw = value;
+  if (raw !== null && typeof raw === 'object' && typeof raw.get === 'function') raw = raw.get();
+  if (raw === undefined || raw === null) return DEFAULT_DISABLED_PRESETS;
+  if (!Array.isArray(raw)) return DEFAULT_DISABLED_PRESETS;
+  const out = [];
+  const seen = new Set();
+  for (const item of raw) {
+    if (typeof item !== 'string') continue;
+    const name = item.trim();
+    if (name.length === 0 || seen.has(name)) continue;
+    seen.add(name);
+    out.push(name);
+  }
+  return Object.freeze(out);
+}
+
+/**
  * 取当前生效的常驻名单。配了 schemastery `Config` 时 `alwaysVisible` 是 volatile
  * 引用（`{get()}`，设置面板改动即时可见），未配时是普通数组；两种都读。
  * 缺省回落 DSH 默认名单。
@@ -68,7 +102,6 @@ export function buildConfig(Schema) {
   alwaysVisible.meta = { ...alwaysVisible.meta, settingConstraints: {
     budgetKeys: Object.keys(DEFAULT_BUDGETS), optionalLimitKeys: [...OPTIONAL_LIMIT_KEYS],
     categoryKeys: [...CONTROLLED_CATEGORIES],
-    builtinDescriptionTools: [],
   } };
   return Schema.object({
     alwaysVisible,
@@ -84,38 +117,27 @@ export function buildConfig(Schema) {
       .default(true)
       .volatile()
       .description('On (default): tools registered into the agent\'s own scope must also pass tool_load before they can execute — own-scope registrations cannot be masked by design, so admission is their only gate. Off: own-scope tools outside the catalog execute freely.'),
-    compactBuiltinToolDescriptions: Schema.boolean()
-      .default(false)
+    disabledPresets: Schema.array(Schema.string())
+      .default(['minimal'])
       .volatile()
-      .description('Deprecated on DSH 0.2.2: provider-owned declarations cannot be rewritten, so this setting has no effect. Kept for config compatibility.'),
-    compactBuiltinToolOverrides: Schema.dict(Schema.boolean(), Schema.string())
-      .default({})
-      .volatile()
-      .description('Deprecated on DSH 0.2.2: has no effect. Kept for config compatibility.'),
-    ptcCompatibility: Schema.boolean()
-      .default(false)
-      .volatile()
-      .description('Deprecated on DSH 0.2.2: discovery runs uniformly in native and PTC sessions now (SDK projections respect the same masks), so this switch has no effect. Kept for config compatibility.'),
-    requireTrustedEpoch: Schema.boolean()
-      .default(false)
-      .description('Removed on DSH 0.2.2 (the epoch/baseline subsystem no longer exists; admission is per-session). Kept for config compatibility, has no effect.'),
-    requireTrustedEpochForSubagents: Schema.boolean()
-      .default(false)
-      .description('Removed together with requireTrustedEpoch on DSH 0.2.2. Has no effect.'),
+      .description('Preset ids where tool discovery stays inert: the four discovery entries are hidden, nothing else is masked, and no admission gate is applied, so native tools behave exactly as without this plugin. Default ["minimal"] (the built-in minimal preset). An explicit [] disables discovery nowhere. Unknown ids simply never match. Reconciles on the next request.'),
     frameworkRetained: Schema.array(Schema.string())
       .default([])
       .description('Trusted framework-mandated tool names the projection must keep. Not user-editable here.'),
     tolerantLoadProtected: Schema.boolean()
       .default(true)
-      .description('Tolerate loading already-active baseline tools idempotently instead of throwing protectedNotLoadable. Resolves conflict deadlocks when models attempt to load system or preset tools.'),
+      .volatile()
+      .description('Tolerate loading already-active baseline tools idempotently instead of throwing protectedNotLoadable. Resolves conflict deadlocks when models attempt to load system or preset tools. Changes apply to running sessions without a reload.'),
     // 「alwaysVisible 是下限还是精确集合」的开关。默认关闭 = 现状：当前 scope 真实提供的
     // DSH 核心工具会被自动并入常驻名单，并且不经 load 即可执行——这避免了 TOOL_NOT_LOADED
     // 往返，也让上游新增的核心工具不必等本插件更新名单。打开后 alwaysVisible（与 preset
     // 保留项）就是**精确集合**：没列出的核心工具必须像别的工具一样先 tool_load。
-    // 非 volatile：注入行为在周期开始时确定，改了要重载插件（与 requireTrustedEpoch 同类）。
+    // volatile：常驻名单与掩码在配置热改时立即重算（adapter 监听 loader/volatile-update），
+    // 已有会话在下一个模型步骤就采用新值，不需要重挂载插件。
     respectAlwaysVisible: Schema.boolean()
       .default(false)
-      .description('Make alwaysVisible an exact set, DSH core tools included. Off by default: core tools the current scope actually offers are auto-enrolled and admitted without a load (fewer round-trips, new upstream core tools keep working). Turn it on when your list should be the ceiling — a core tool you left out then has to be loaded like any other tool. Changing this reloads the plugin.'),
+      .volatile()
+      .description('Make alwaysVisible an exact set, DSH core tools included. Off by default: core tools the current scope actually offers are auto-enrolled and admitted without a load (fewer round-trips, new upstream core tools keep working). Turn it on when your list should be the ceiling — a core tool you left out then has to be loaded like any other tool. Changes apply to running sessions without a reload.'),
     // budgets 默认 null = 完全不覆盖，走 domain 的冻结默认值（budgets.mjs 对
     // undefined/null 都回落 DEFAULT_BUDGETS）。必须显式允许 null：用户把
     // "关闭覆盖"写成 null 不该被 schema 拒掉。schemastery 没有 `Schema.null`，
@@ -123,19 +145,23 @@ export function buildConfig(Schema) {
     // 所以这里只是把默认值定为 null。
     budgets: Schema.dict(Schema.number())
       .default(null)
-      .description('Optional overrides for the frozen budget defaults. null means no overrides.'),
+      .volatile()
+      .description('Optional overrides for the frozen budget defaults. null means no overrides. Applied to running sessions without a reload (the two cursor/candidate TTL keys still need one).'),
     // 界面语言：'auto'（默认）跟随桌面界面语言，读不到就回落 en；其它值把语言钉死，
     // 不再去读宿主文件。取值经 domain 的 normalizeLocale 归一，未知语言名回落 en。
-    // 非 volatile：语言在 apply 时一次性写进域层的文案表，改了要重载插件才生效。
+    // volatile：语言可以在运行中改（adapter 监听 loader/volatile-update，重做文案绑定
+    // 并重建四个入口 definition），不需要重挂载插件。
     locale: Schema.string()
       .default('auto')
-      .description('Model-visible copy language: "auto" follows the desktop interface language when it can be read, otherwise falls back to en. Any other value pins the locale; unknown names fall back to en.'),
+      .volatile()
+      .description('Model-visible copy language: "auto" follows the desktop interface language when it can be read, otherwise falls back to en. Any other value pins the locale; unknown names fall back to en. Applied to running sessions without a reload.'),
     // 既有部署已在用的字段：保留在 Config 里，免得新 Config 把它当成未知键吞掉。
     // 形状校验仍由 validateConfig 做（逐类检查 title/capabilitySummary），这里只
     // 保证不拦。
     categoryConfig: Schema.dict(Schema.any())
       .default({})
-      .description('Per-category model-visible navigation copy. Falls back to the interface-language table for any category left unset.'),
+      .volatile()
+      .description('Per-category model-visible navigation copy. Falls back to the interface-language table for any category left unset. Applied to running sessions without a reload.'),
   });
 }
 
@@ -161,7 +187,7 @@ export function nativeToolNamesOf(view) {
  * @param {any} config buildConfig 的产物
  * @param {readonly string[]} names
  */
-export function publishToolChoices(config, names, { complete = false } = {}) {
+export function publishToolChoices(config, names, { complete = false, frameworkRetained = [] } = {}) {
   const node = config?.dict?.alwaysVisible;
   if (node === undefined) return false;
   const seen = new Set();
@@ -172,7 +198,11 @@ export function publishToolChoices(config, names, { complete = false } = {}) {
     choices.push({ name, available: true });
   }
   node.meta = { ...node.meta, [INITIAL_TOOL_CHOICES]: choices,
-    toolDirectory: { scope: 'application', complete: complete === true } };
+    toolDirectory: { scope: 'application', complete: complete === true },
+    // 只读展示用：frameworkRetained 必须保持非 volatile（改了要重载插件），因此宿主
+    // 不会把它放进实时表单的 value。它搭 volatile 节点的 meta 通道下发，面板据此显示
+    // 真实值而不是空表。
+    frameworkRetained: [...frameworkRetained] };
   return true;
 }
 

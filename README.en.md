@@ -16,7 +16,7 @@
 
 ---
 
-> This README describes the working tree with manifest `0.6.0`: from this version **only DSH Core 0.2.2-rc.1+ is supported** — the legacy projection path (frozen wire, cache epochs, trusted records, the PTC toggle, description compaction) is removed entirely. The [current contract](plugin/docs/00-current-contract.md) consolidates current parameters, state and boundaries.
+> This README describes the working tree with manifest `0.7.0`: from this version **only DSH Core 0.2.2-rc.1+ is supported** — the legacy projection path (frozen wire, cache epochs, trusted records, the PTC toggle, description compaction) is removed entirely. The [current contract](plugin/docs/00-current-contract.md) consolidates current parameters, state and boundaries.
 
 ## Feature preview
 
@@ -201,6 +201,7 @@ surface:
   "initialToolsEnabled": true,  // optional manual initial injection; preserves the configured list
   "alwaysAllowPresetTools": true, // retain tools declared by the current bound preset
   "gateOwnScopeTools": true,    // own-scope registrations must also be admitted before executing
+  "disabledPresets": ["minimal"], // presets where the plugin stays inert (default: the built-in minimal preset only)
   "frameworkRetained": [],  // trusted framework-mandated names the mask must keep
   "categoryConfig": {},     // localised category cards
   "tolerantLoadProtected": true, // tolerate loading an already-resident tool (idempotent)
@@ -218,13 +219,23 @@ To start with only the four discovery entries, set `alwaysAllowPresetTools: fals
 The four entries cannot be removed. Names that are not native-visible in the current agent are
 not granted merely because the settings catalog contains them.
 
-### Deprecated configuration keys
+`disabledPresets` is the **per-preset effect boundary** (replacement semantics, default
+`["minimal"]`): in a session bound to a listed preset the plugin stays inert — the host
+`restrict({deny})` call removes the four discovery entries from the visible surface, nothing else is
+masked, and the execution chain gains no admission refusal, so native tools behave exactly as
+without the plugin. The entries are application-level registrations that cannot be unregistered per
+preset, so "inert" is implemented as "hide only the entries, do nothing else". `[]` turns discovery
+back on everywhere; when the bound preset cannot be identified (older host, no preset service) the
+session keeps the normal discovery flow — a missing identity never silently disables the plugin.
+
+### Removed configuration keys (no migration needed)
 
 `ptcCompatibility`, `compactBuiltinToolDescriptions`, `compactBuiltinToolOverrides`,
-`requireTrustedEpoch`, `requireTrustedEpochForSubagents` and `allowMissingSessionQuery` have
-**no effect** on 0.2.2-rc.1+: their subsystems were removed with the legacy projection path. The
-fields stay in the config schema so existing files are not rejected; the settings page labels them
-deprecated/removed.
+`requireTrustedEpoch`, `requireTrustedEpochForSubagents` and `allowMissingSessionQuery` are gone
+from the config schema, the validation layer and the settings page: their subsystems left with the
+legacy projection path, and keeping the switches only suggested they did something. Same-name keys
+left in an older profile are passed through by the host's non-strict schemastery resolution — no
+error, no effect, and nothing to clean up.
 
 ### Settings page: the Tool discovery home
 
@@ -245,17 +256,20 @@ is laid out as an at-a-glance home rather than a bare form:
   application catalog**, never as an execution failure. If the installed SDK cannot supply a
   complete registry, absent names are **unconfirmed**. Global registration does not promise
   execution permission in every session.
-- **Advanced** — interface language, JSON editors for `budgets` and `categoryConfig`, and
-  `frameworkRetained` shown read-only.
+- **Advanced** — interface language, JSON editors for `disabledPresets`, `budgets` and
+  `categoryConfig`, and `frameworkRetained` shown read-only (its real value is published by the
+  server through the volatile node's meta channel). Saving any editable field does not remount the
+  plugin; running sessions pick the change up on the next request.
 
 Every switch and field:
 
 - **Inject initial tools** (`initialToolsEnabled`, default `true`): disabling preserves the configured list but stops automatic initial injection; `tool_load` still works. This switch and the list reconcile on the **next request**; existing on-demand admissions remain until unloaded.
 - **Always allow tools specified by the preset** (`alwaysAllowPresetTools`, default `true`): retain only tools registered by the exact preset revision the current agent joined, intersected with its native-visible capabilities. Other presets and later agent-only tools do not become trusted. Independent of manual injection; reconciles on the next request. It preserves the initial set, not arbitrary execution or native permission bypass.
 - **Gate the agent's own registrations** (`gateOwnScopeTools`, default `true`): tools registered into the agent's own scope cannot be masked and may be disclosed; when on, own-scope names in the catalog also need `tool_load` admission before executing; when off, own-scope names outside the catalog execute freely.
-- **Interface language** (`locale`, default `auto`): `auto` reads the host's own `locale.preference` from the active profile patch, and otherwise falls back to the desktop language file — any failure (missing, bad JSON, unsupported language) falls back to `en` and is always logged, never silent. `zh`/`en` pins the model-visible copy language and **skips those reads entirely**. Not a volatile field: a change takes effect when the plugin reloads.
+- **Presets where discovery stays off** (`disabledPresets`, JSON, default `["minimal"]`): listed presets get no masking, no admission gate, and no discovery entries; `[]` turns discovery back on everywhere. Matching is an exact comparison against the preset id the host reports, never a guess from a display name; a change reconciles on the **next request** without a reload.
+- **Interface language** (`locale`, default `auto`): `auto` reads the host's own `locale.preference` from the active profile patch, and otherwise falls back to the desktop language file — any failure (missing, bad JSON, unsupported language) falls back to `en` and is always logged, never silent. `zh`/`en` pins the model-visible copy language and **skips those reads entirely**. Volatile: saving does not remount the plugin — the four entry definitions are rebuilt with the new language and the next request uses it.
 - **Make the initial list an exact set** (`respectAlwaysVisible`, default `false`): **off with initial injection enabled**, DSH core tools that the current scope actually offers are auto-enrolled and can be called without a load — fewer round-trips. This only recognizes names in the maintained core list; an unknown upstream addition still needs a [baseline review](plugin/docs/12-core-tools-maintenance.md). **On**, your `alwaysVisible` (plus preset retention) is the *ceiling*: a core tool you left out has to be loaded like any other tool. Refusing it is not a deadlock — an omitted core tool is simply **not in the protected baseline**, so one ordinary `tool_load` admits it on the next request (`tolerantLoadProtected` is about something else: re-loading a tool that is *already* resident stays idempotent).
-- Eligibility, protocol receipts and the admission gate remain enforced. The four discovery entries cannot be disabled.
+- Eligibility, protocol receipts and the admission gate remain enforced. The four discovery entries cannot be disabled; the presets listed in `disabledPresets` hide them together with the rest of the plugin.
 
 The page also exposes **idempotent baseline loading** (`tolerantLoadProtected`) and **exact initial
 list** (`respectAlwaysVisible`) switches. The advanced JSON editors list supported keys and reject
@@ -263,7 +277,7 @@ malformed JSON, unknown keys, invalid limits and incomplete category copy before
 budget limits may block tasks or add round-trips. `frameworkRetained` is displayed read-only, not
 editable here.
 
-An omitted `alwaysVisible` displays the actual schema defaults. All mutation controls are disabled during loading, read-only state or an in-flight save to prevent concurrent overwrites. Restore-default is disabled without metadata and avoids unchanged writes. Rejected writes show an error, not a success notice. Non-volatile fields reload the plugin when saved; the page warns about this. This is the native config surface, with no legacy wrapper/UI compatibility promise. The standalone real-DOM probe uses a controlled persistence channel, not the active user's configuration, and does not imply online installation or deployment.
+An omitted `alwaysVisible` displays the actual schema defaults. All mutation controls are disabled during loading, read-only state or an in-flight save to prevent concurrent overwrites. Restore-default is disabled without metadata and avoids unchanged writes. Rejected writes show an error, not a success notice. Every editable field on this page is volatile: saving does not remount the plugin and the next request picks up the new value. The one exception is the read-only `frameworkRetained`, which comes from the deployment config (profile patch). This is the native config surface, with no legacy wrapper/UI compatibility promise. The standalone real-DOM probe uses a controlled persistence channel, not the active user's configuration, and does not imply online installation or deployment.
 
 ### Budgets: hard caps are off by default
 
@@ -387,7 +401,7 @@ stands.
 
 ## Get the source
 
-The source version on this branch is **`0.6.0`**. npm publication and provenance must be checked in
+The source version on this branch is **`0.7.0`**. npm publication and provenance must be checked in
 [the registry](https://www.npmjs.com/package/dsh-tool-discovery); a GitHub build release alone does
 not establish npm availability. Which version a download carries is decided by its tarball manifest,
 not by assuming that `main`, the release name and this document always agree.

@@ -16,7 +16,7 @@
 
 ---
 
-> 本文对应 manifest `0.6.0` 的工作树源码：本版起**只支持 DSH Core 0.2.2-rc.1+**，旧投影宿主路径（冻结 wire、缓存周期、可信记录、PTC 开关、描述精简）整体移除。现行参数、状态与边界集中在[当前实现契约](plugin/docs/00-current-contract.md)。
+> 本文对应 manifest `0.7.0` 的工作树源码：本版起**只支持 DSH Core 0.2.2-rc.1+**，旧投影宿主路径（冻结 wire、缓存周期、可信记录、PTC 开关、描述精简）整体移除。现行参数、状态与边界集中在[当前实现契约](plugin/docs/00-current-contract.md)。
 
 ## 功能预览
 
@@ -172,6 +172,7 @@ Node 项目可通过 `npm install dsh-tool-discovery` 从 npm 安装。本节上
   "initialToolsEnabled": true,  // 可关闭手动初始注入，不删除已配置名单
   "alwaysAllowPresetTools": true, // 保留当前实际绑定的 preset 所登记工具
   "gateOwnScopeTools": true,    // agent 自己 scope 注册的工具也要先准入才能执行
+  "disabledPresets": ["minimal"], // 在这些 preset 里插件完全不生效（默认只含宿主内置极简模式）
   "frameworkRetained": [],  // 掩码必须保留的可信框架工具名
   "categoryConfig": {},     // 本地化类别卡
   "tolerantLoadProtected": true, // 容忍重复加载已在册的工具（幂等）
@@ -187,12 +188,19 @@ preset 保留是独立来源：`alwaysAllowPresetTools` 开启时，当前实际
 `initialToolsEnabled: false`，或同时设 `alwaysVisible: []` 与 `respectAlwaysVisible: true`（显式框架保留仍可能贡献工具）。四个入口不可删除。
 设置页全局目录中存在某工具，不意味着它会被授予所有会话。
 
-### 已废弃的配置键
+`disabledPresets` 是**按 preset 的生效边界**（替换语义，默认 `["minimal"]`）：命中该名单的会话里，
+插件保持惰性——四个发现入口被宿主 `restrict({deny})` 移出可见面、其余工具一律不遮罩、执行链不增加
+任何准入拒绝，原生工具与没装本插件时一致。入口是应用级注册、无法按 preset 注销，所以"不生效"的
+实现是"只把入口遮掉，别的什么都不做"。写 `[]` 表示所有 preset 都恢复发现流程；识别不到会话绑定的
+preset（更老宿主或没有 preset 服务）时按正常流程处理，不会因为读不到身份就悄悄停用整个插件。
+
+### 已移除的配置键（无需迁移）
 
 `ptcCompatibility`、`compactBuiltinToolDescriptions`、`compactBuiltinToolOverrides`、
-`requireTrustedEpoch`、`requireTrustedEpochForSubagents`、`allowMissingSessionQuery` 在
-0.2.2-rc.1+ 上**无效果**：对应子系统已随旧投影路径移除。字段保留在配置 schema 中只为不吞掉
-既有配置；设置页以"已废弃/已移除"标注。
+`requireTrustedEpoch`、`requireTrustedEpochForSubagents`、`allowMissingSessionQuery` 已从
+配置 schema、校验层与设置页删除：它们对应的子系统已随旧投影路径移出，留着只会让人以为
+"配置了就会生效"。旧 profile 里的同名键由宿主 schemastery 的非严格合并原样带过，
+不报错、不生效，也不需要手工清理。
 
 ### 设置页：工具发现主页
 
@@ -208,20 +216,21 @@ preset 保留是独立来源：`alwaysAllowPresetTools` 开启时，当前实际
   勾选切换与**恢复 DSH 默认**，勾选只写根级 `alwaysVisible`。完整目录中缺少名字时标注为**未在
   应用全局目录登记**，不断言调用失败；宿主 SDK 无法提供完整目录时，未列出的名字标注为**全局登记
   状态尚未确认**。全局已登记不保证每个会话都具备执行权限。
-- **高级**——界面语言、`budgets` 与 `categoryConfig` 的 JSON 编辑器，`frameworkRetained` 只读展示。
+- **高级**——界面语言、`disabledPresets`、`budgets` 与 `categoryConfig` 的 JSON 编辑器，`frameworkRetained` 只读展示（其真实值由服务端经 volatile 节点的 meta 通道下发）。这些可编辑字段保存后**不重挂载插件**，对运行中的会话在下一个请求生效。
 
 每个开关与字段：
 
 - **自动注入初始工具**（`initialToolsEnabled`，默认 `true`）：关闭不删除勾选名单，不自动注入这些工具，仍可用 `tool_load` 加载。开关和名单改动在**下一请求对齐**，已有按需准入保持到显式卸载。
 - **永远放行 preset 规定的工具**（`alwaysAllowPresetTools`，默认 `true`）：只读取当前 agent 实际绑定的 preset 修订自身登记、且该 agent 原生目录仍允许的工具。不根据会话 header 中的 preset 名或设置页全局目录授信；其它 preset、后装 agent-only 工具不会被自动放行。与手动注入独立，在下一请求对齐；保留初始集合，不绕过原生权限和执行校验。
 - **对 agent 自身注册的工具同样要求准入**（`gateOwnScopeTools`，默认 `true`）：注册到 agent 自己 scope 的工具宿主遮不住、可能直接披露；开启时目录内的 own-scope 名字也要 `tool_load` 准入才能执行，关闭时目录之外的 own-scope 名字放行。
-- **界面语言**（`locale`，默认 `auto`）：`auto` 先读当前 profile patch 里宿主自己的 `locale.preference`，没有再回落到桌面语言文件；任何失败（文件缺失、JSON 损坏、语言不受支持）都回落 `en`，且回落**一定会留日志**、不静默。写 `zh`/`en` 会钉住模型可见文案的语言，并**完全跳过这两次读取**。非 volatile 字段：改动在插件重载后生效。
+- **不生效的预设名单**（`disabledPresets`，JSON，默认 `["minimal"]`）：命中的 preset 里插件不遮罩、不设门禁、四个入口也被隐藏；`[]` 表示所有 preset 都正常发现。只按宿主上报的 preset id 精确匹配，不猜 preset 名；在**下一请求对齐**（热改无需重载）。
+- **界面语言**（`locale`，默认 `auto`）：`auto` 先读当前 profile patch 里宿主自己的 `locale.preference`，没有再回落到桌面语言文件；任何失败（文件缺失、JSON 损坏、语言不受支持）都回落 `en`，且回落**一定会留日志**、不静默。写 `zh`/`en` 会钉住模型可见文案的语言，并**完全跳过这两次读取**。该字段是 volatile：保存后插件不会重挂载，四个发现入口的 definition 会用新语言重建，下一个请求即生效。
 - **让初始名单成为精确集合**（`respectAlwaysVisible`，默认 `false`）：**关闭**且初始注入开启时，当前 scope 真实提供的 DSH 核心工具会被自动并入常驻名单，且不经 load 即可调用——省一次往返。这里只识别插件维护表中的核心名称；上游新增且未入表的名字仍需[跟版核验](plugin/docs/12-core-tools-maintenance.md)。**打开**后，你的 `alwaysVisible`（加 preset 保留项）就是**上限**：没列出的核心工具必须像别的工具一样先 load。被拒不会死锁——被排除的核心工具**不在受保护的基线里**，一次普通 `tool_load` 就能在下一轮把它放行（`tolerantLoadProtected` 管的是另一件事：**已在名单里**的工具重复 load 保持幂等）。
-- 工具资格、协议回执与准入门禁始终有效，不提供关闭这些保护的开关。四个发现入口始终保留。
+- 工具资格、协议回执与准入门禁始终有效，不提供关闭这些保护的开关。四个发现入口在正常 preset 里始终保留；`disabledPresets` 命中的 preset 里连这四个入口一起隐藏。
 
 主页还提供**容忍重复加载初始工具**（`tolerantLoadProtected`）、**精确初始名单**（`respectAlwaysVisible`）开关；高级配置中可选择语言，并编辑 `budgets` 与 `categoryConfig` JSON。JSON 编辑器显示支持的键，在保存前拒绝语法错误、未知键、非法限额和不完整的类别文案；较小预算可能增加往返或阻断任务。`frameworkRetained` 仅只读展示，不可由此页面修改。
 
-省略 `alwaysVisible` 时展示宿主 schema 的实际默认名单。加载中、只读或保存进行中禁用所有修改控件，防止并发写覆盖；元数据缺失时不可恢复默认，名单已经默认时不重复写。保存失败会显示错误，不宣称生效。非 volatile 字段保存会重载插件，页面提供提示。该主页即原生配置面；不承诺旧包装配置或旧版设置 UI 的兼容性。独立浏览器 DOM 探针使用真实渲染器及受控保存通道，不代表在线配置持久化或当前 GUI 已部署新代码。
+省略 `alwaysVisible` 时展示宿主 schema 的实际默认名单。加载中、只读或保存进行中禁用所有修改控件，防止并发写覆盖；元数据缺失时不可恢复默认，名单已经默认时不重复写。保存失败会显示错误，不宣称生效。本页可编辑的字段全部是 volatile：保存不重挂载插件，下一个请求即采用新值；唯一的例外是只读展示的 `frameworkRetained`，它由部署配置（profile patch）给出。该主页即原生配置面；不承诺旧包装配置或旧版设置 UI 的兼容性。独立浏览器 DOM 探针使用真实渲染器及受控保存通道，不代表在线配置持久化或当前 GUI 已部署新代码。
 
 ### 预算：硬上限默认关闭
 
@@ -327,7 +336,7 @@ DSH profile；但会在被 Git 忽略的 `plugin/fixtures/tmp/` 下创建临时�
 
 ## 获取源码
 
-本分支的源码版本为 **`0.6.0`**。npm 是否已发布及其 provenance 应以
+本分支的源码版本为 **`0.7.0`**。npm 是否已发布及其 provenance 应以
 [registry](https://www.npmjs.com/package/dsh-tool-discovery) 为准，GitHub 构建版存在本身不证明 npm 已发布。
 某次下载究竟带哪个版本，以 tarball 内清单为准，不假设 `main`、Release 名与本文始终一致。
 

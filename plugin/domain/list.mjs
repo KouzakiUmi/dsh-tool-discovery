@@ -104,7 +104,11 @@ function paginateItems(args) {
 
   // 与 createCursorStore 的 p_ + 16 字节 hex 同形；确认页大小后才真正铸游标。
   const placeholder = `p_${'0'.repeat(32)}`;
-  const count = Math.min(limit, items.length - offset);
+  // offset 可能越界（游标本身有效但列表已变短）。必须夹紧到 0：否则负的 count 会流进
+  // fitPrefixLength，在 maxListResultBytes 关闭（默认）时被原样返回，于是 `keep < 0`
+  // 把它报成 BUDGET_EXCEEDED「单个工具名超出结果字节预算」——与事实完全无关的错误码，
+  // 模型只会去改分批策略。夹紧后越界游标得到空页，语义正确且不新增错误路径。
+  const count = Math.max(0, Math.min(limit, items.length - offset));
   const pageAt = (n, pageItems = items.slice(offset, offset + n)) => ({ pageItems,
     nextCursor: n > 0 && offset + n < items.length ? placeholder : null,
     truncated: offset + n < items.length });

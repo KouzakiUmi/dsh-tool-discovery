@@ -83,10 +83,25 @@ function stemForms(token) {
   // 不用 else-if,避免 'es' 分支吞掉 's' 分支。
   if (token.length > 4 && token.endsWith('ing')) pushWithUnwrap(forms, token.slice(0, -3));
   if (token.length > 4 && token.endsWith('ed')) pushWithUnwrap(forms, token.slice(0, -2));
-  if (token.length > 3 && token.endsWith('ies')) forms.push(`${token.slice(0, -3)}y`);
-  if (token.length > 3 && token.endsWith('es')) forms.push(token.slice(0, -2));
-  if (token.length > 3 && token.endsWith('s') && !token.endsWith('ss')) forms.push(token.slice(0, -1));
+  if (token.length > 3 && token.endsWith('ies')) pushStemForm(forms, `${token.slice(0, -3)}y`);
+  if (token.length > 3 && token.endsWith('es')) pushStemForm(forms, token.slice(0, -2));
+  if (token.length > 3 && token.endsWith('s') && !token.endsWith('ss')) pushStemForm(forms, token.slice(0, -1));
   return forms;
+}
+
+/**
+ * 收录一个后缀剥离形态，但**拒绝**落在停用词表上的结果。
+ *
+ * 停用词只在基元层整词丢弃；从词干后门把它们放回来会击穿"自然无关查询零命中"：
+ * `notes` 会产出 `not`，于是含 " not " 的条目被召回（`others`→`other` 这类正常
+ * 剥离不受影响）。ing/ed 路径的同类守卫见 pushWithUnwrap——此前只有那条路径有守卫，
+ * 三个 s/es/ies 分支是直通，同一不变量被绕开。
+ * @param {string[]} forms
+ * @param {string} form
+ */
+function pushStemForm(forms, form) {
+  if (QUERY_STOPWORDS.has(form)) return;
+  forms.push(form);
 }
 
 /**

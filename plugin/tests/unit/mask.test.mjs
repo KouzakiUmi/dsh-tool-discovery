@@ -22,9 +22,12 @@ function maskHost({ restrictable = [...ENTRY_TOOL_NAMES, 'read_file', 'alpha', '
     id: 'agent_mask',
     ctx: {
       tools: {
-        restrict: ({ allow }) => {
+        restrict: ({ allow, deny }) => {
           if (controls.failInstall) throw controls.failInstall;
-          const filter = { allow: new Set(allow) };
+          const filter = {
+            ...(allow === undefined ? {} : { allow: new Set(allow) }),
+            ...(deny === undefined ? {} : { deny: new Set(deny) }),
+          };
           const key = Symbol('restriction');
           restrictions.set(key, filter);
           const disposer = () => {
@@ -193,4 +196,45 @@ test('M6 同一 allow 的 reconcile 也重试待释放的旧掩码，且重试�
   assert.equal(host.restrictions.has(first.key), false, '同一 allow 的 reconcile 也解除旧掩码');
   assert.equal(mask.ownedFilters().length, 1);
   assert.deepEqual(mutatingDuringRelease, [true], '重试释放时 mutating 计数必须已经生效');
+});
+
+test('M7 停用场景只用 deny 遮四入口：不装 allow 白名单，admitted 变化不换掩码', () => {
+  const host = maskHost();
+  let disabled = true;
+  const mask = createMaskController({ ctx: host.ctx, isPresetDisabled: () => disabled });
+  mask.update(host.agent, new Set(['alpha']));
+  const filter = host.installs.at(-1).filter;
+  assert.equal(filter.allow, undefined, '停用场景不得装 allow 白名单（那会连新注册的工具一起遮住）');
+  assert.deepEqual([...filter.deny].sort(), [...ENTRY_TOOL_NAMES].sort(), '只 deny 四个发现入口');
+  assert.equal(host.restrictions.size, 1);
+  assert.equal(host.installs.length, 1);
+
+  // admitted 变化在停用场景不影响可见面：不重复安装掩码。
+  mask.update(host.agent, new Set(['alpha', 'beta']));
+  assert.equal(host.installs.length, 1, '停用期间 admitted 变化不换掩码');
+
+  // 回到正常流程：换成 allow 白名单，旧 deny 回收。
+  disabled = false;
+  mask.update(host.agent, new Set(['alpha']));
+  const next = host.installs.at(-1).filter;
+  assert.deepEqual([...next.allow].sort(), [...ENTRY_TOOL_NAMES, 'alpha'].sort());
+  assert.equal(next.deny, undefined);
+  assert.equal(host.restrictions.size, 1, '换回 allow 时旧 deny 已解除');
+  assert.equal(mask.ownedFilters().length, 1);
+});
+
+test('M8 停用但入口不在可遮面：不装掩码，并回收此前自有掩码', () => {
+  const host = maskHost();
+  let disabled = true;
+  const mask = createMaskController({ ctx: host.ctx, isPresetDisabled: () => disabled });
+  // 先按正常流程装一个 allow 掩码，再切到"停用且无入口可遮"——必须撤掉，不是留着。
+  disabled = false;
+  mask.update(host.agent, new Set(['alpha']));
+  assert.equal(host.restrictions.size, 1);
+  disabled = true;
+  host.ctx.tools.view = () => ({ restrictableNames: new Set(['read_file']) });
+  mask.update(host.agent, new Set(['alpha']));
+  assert.equal(host.installs.length, 1, '不再安装新掩码');
+  assert.equal(host.restrictions.size, 0, '旧自有掩码必须解除（等价插件对该会话不存在）');
+  assert.equal(mask.ownedFilters().length, 0);
 });

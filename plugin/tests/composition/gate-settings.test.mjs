@@ -121,12 +121,13 @@ function compactionServices(auto) {
     } },
   ];
 }
-for (const requireTrustedEpoch of [false, true]) test(`SG6: 旧 strict=${requireTrustedEpoch} 时真实自动压缩不撤 admission、不要求重试`, async t => {
+test('SG6: 旧 epoch 键不参与压缩；真实自动压缩不撤 admission、不要求重试', async t => {
   store.reset();
-  const comp = await boot(t, { alwaysVisible: [], requireTrustedEpoch }, {
+  // 旧 profile 里残留的已移除键：宿主非严格合并带过，插件忽略，压缩行为不受影响。
+  const comp = await boot(t, { alwaysVisible: [], requireTrustedEpoch: true, requireTrustedEpochForSubagents: true }, {
     fixtures: ['mock-provider', 'inherited-tools'], extraServices: compactionServices(true),
   });
-  const { handle } = await runtimeFor(t, comp, `sg-auto-${requireTrustedEpoch}`);
+  const { handle } = await runtimeFor(t, comp, 'sg-auto');
   queueResponse({ toolCalls: [{ id: 'sg-auto-load', name: 'tool_load', arguments: { names: [HIDDEN] } }] });
   queueResponse({ text: 'Earlier inspection. '.repeat(1000), usage: { inputTokens: 1000, outputTokens: 10000 } });
   await turn(handle, 'Inspect the earlier context. '.repeat(100));
@@ -179,7 +180,11 @@ test('SG7: 真实手动压缩不回写已发送数组；admission 继续可用',
 async function budgetsOf(t, adapter, id) {
   const comp = await boot(t, adapter);
   const { runtime } = await runtimeFor(t, comp, id);
-  return { resolved: liveConfigOf(entryOf(comp)).budgets, budgets: runtime.engine.getBudgets() };
+  // budgets 已成 volatile（设置页可热改）：活配置上是 `{get()}` 引用，缺省时 .get() 仍是
+  // undefined、显式 null 仍是 null。先解包再断言。
+  const raw = liveConfigOf(entryOf(comp)).budgets;
+  const resolved = raw !== null && typeof raw === 'object' && typeof raw.get === 'function' ? raw.get() : raw;
+  return { resolved, budgets: runtime.engine.getBudgets() };
 }
 test('SG8: 缺省和显式 budgets:null 均激活，硬限额默认关闭', async t => {
   const a = await budgetsOf(t, {}, 'sg-budget-omitted');

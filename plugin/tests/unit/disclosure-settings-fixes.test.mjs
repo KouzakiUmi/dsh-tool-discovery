@@ -142,11 +142,19 @@ test('DF10 目录外且不可 restrict 的 own-scope 名字：放行，由宿主
   assert.equal(run('host_private_tool'), undefined);
 });
 
-test('DF11 runtime 尚未建立时：入口仍受覆盖检查，其它名字保守放行', () => {
+test('DF11 runtime 尚未建立时：入口仍受覆盖检查，可遮名字交宿主兜底，own-scope 名字 fail-closed', () => {
   const control = new Map([['tool_list', definition('tool_list')]]);
-  const run = harness({ runtimeMissing: true, control });
-  assert.equal(run('tool_list'), undefined);
-  assert.equal(run('ordinary_tool'), undefined);
+  // 可遮（global/父 scope）名字：未准入的本就不在可见面，猜名也解析不到定义，
+  // 宿主可见性已经兜底，这里放行不会放宽任何东西。
+  const permissive = harness({ runtimeMissing: true, control, restrictable: ['ordinary_tool'] });
+  assert.equal(permissive('tool_list'), undefined);
+  assert.equal(permissive('ordinary_tool'), undefined);
+  // 不可遮（own-scope）名字：宿主遮不住、会被直接披露，准入是它们唯一的闸门。
+  // 目录不可用时无从判断资格 → 必须 fail-closed：放行等于该会话全部 own-scope
+  // 工具都能不经 tool_load 执行（审查中以真实组合复现过该 fail-open）。
+  const strict = harness({ runtimeMissing: true, control });
+  assert.equal(strict('tool_list'), undefined);
+  assert.match(strict('ordinary_tool'), /not admitted: tool catalog unavailable/);
 });
 
 test('DF12 拒绝文案不泄漏内部错误或路径', () => {

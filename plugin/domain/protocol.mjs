@@ -119,7 +119,12 @@ export function validateListRequest(raw, budgets = DEFAULT_BUDGETS) {
   assertOnlyKeys(o, ['view', 'category', 'cursor', 'limit']);
   const category = o.category;
   if (category === undefined) throw new DomainError('INVALID_ARGS', t(['detail', 'listNeedsCategory']));
-  if (!isNonEmptyString(category)) throw new DomainError('INVALID_ARGS', t(['detail', 'categoryNotString']));
+  if (typeof category !== 'string') throw new DomainError('INVALID_ARGS', t(['detail', 'categoryNotString']));
+  // 纯空白与空串同义——本文件对 cursor/query/names/ref 已是同一口径，category 之前是
+  // 唯一的例外：`{category:'   '}` 能过校验，到下游 resolveCategory 才报
+  // CATEGORY_UNAVAILABLE，把"这次请求的字段畸形"说成"该类别不存在或当前不可见"，
+  // recovery 还会把模型引去列类别。空串同样归到"没给类别"，而不是"类型不对"。
+  if (category.trim().length === 0) throw new DomainError('INVALID_ARGS', t(['detail', 'listNeedsCategory']));
   return { view, category, cursor, limit };
 }
 
@@ -133,7 +138,10 @@ export function validateSearchRequest(raw, budgets = DEFAULT_BUDGETS) {
   const o = requireObjectRoot(raw);
   assertOnlyKeys(o, ['category', 'query', 'limit']);
   const category = o.category;
-  if (!isNonEmptyString(category)) throw new DomainError('INVALID_ARGS', t(['detail', 'categoryRequired']));
+  // 与 list 同一口径：纯空白不算给出值，否则它会落到下游报"类别不存在/不可见"。
+  if (!isNonEmptyString(category) || category.trim().length === 0) {
+    throw new DomainError('INVALID_ARGS', t(['detail', 'categoryRequired']));
+  }
   // 纯空白不是一次真正的检索：与空串同义，必须报 queryRequired。放行会让 search 以
   // ok:true 返回空候选，模型看到的是"没找到工具"而不是"query 无效"，于是去换类别
   // 或放弃工具，而不是重写 query。
